@@ -59,14 +59,12 @@ export class EngagementsService {
     const summaries = rows.map((c) => this.summary(c))
     const count = summaries.reduce((t, c) => t + c.documents.length, 0)
     if (count > 0)
-      await this.log
-        .log(caller, {
-          workspaceId: rows[0]!.workspaceId,
-          resource: 'document',
-          action: 'list',
-          detail: `${count} engagement records across ${rows.length} engagements`,
-        })
-        .catch(() => undefined)
+      await this.log.log(caller, {
+        workspaceId: rows[0]!.workspaceId,
+        resource: 'document',
+        action: 'list',
+        detail: `${count} engagement records across ${rows.length} engagements`,
+      })
     return summaries
   }
 
@@ -84,23 +82,19 @@ export class EngagementsService {
     })
     if (!c) throw new NotFoundException()
     if (c.documents.length > 0)
-      await this.log
-        .log(caller, {
-          workspaceId: c.workspaceId,
-          resource: 'document',
-          action: 'list',
-          detail: `${c.documents.length} records of ${c.name}`,
-        })
-        .catch(() => undefined)
+      await this.log.log(caller, {
+        workspaceId: c.workspaceId,
+        resource: 'document',
+        action: 'list',
+        detail: `${c.documents.length} records of ${c.name}`,
+      })
     if (c.participants.length > 0)
-      await this.log
-        .log(caller, {
-          workspaceId: c.workspaceId,
-          resource: 'participant',
-          action: 'list',
-          detail: `${c.participants.length} participants of ${c.name}`,
-        })
-        .catch(() => undefined)
+      await this.log.log(caller, {
+        workspaceId: c.workspaceId,
+        resource: 'participant',
+        action: 'list',
+        detail: `${c.participants.length} participants of ${c.name}`,
+      })
     return {
       ...this.summary(c),
       funderContact: c.funderContact,

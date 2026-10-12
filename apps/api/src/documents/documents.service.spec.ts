@@ -131,6 +131,16 @@ describe('DocumentsService', () => {
     )
   })
 
+  it('hands over no list when the access log cannot be written, and keeps file names out of the log', async () => {
+    const { service: s, log } = service()
+    log.log.mockRejectedValueOnce(new Error('log down'))
+    await expect(s.list(member('bookkeeper'), W)).rejects.toThrow('log down')
+    await s.url(member('owner'), 'd-age')
+    const detail = log.log.mock.calls.at(-1)![1].detail as string
+    expect(detail).toBe('eligibility-record (personal)')
+    expect(detail).not.toContain('d-age.pdf')
+  })
+
   it('does not open a personal record to the bookkeeper who may attach it', async () => {
     const { service: s, log, storage } = service()
     await expect(s.url(member('bookkeeper'), 'd-age')).rejects.toThrow(ForbiddenException)

@@ -125,7 +125,7 @@ export class DocumentsService {
       resource: 'document',
       subjectId: doc.id,
       action: 'create',
-      detail: `${doc.kind} ${doc.fileName}`,
+      detail: doc.kind,
     })
     return documentDto(doc)
   }
@@ -137,14 +137,12 @@ export class DocumentsService {
       orderBy: { uploadedAt: 'desc' },
       take: 300,
     })
-    await this.log
-      .log(caller, {
-        workspaceId,
-        resource: 'document',
-        action: 'list',
-        detail: `${docs.length} documents`,
-      })
-      .catch(() => undefined)
+    await this.log.log(caller, {
+      workspaceId,
+      resource: 'document',
+      action: 'list',
+      detail: `${docs.length} documents`,
+    })
     return docs.map(documentDto)
   }
 
@@ -172,7 +170,7 @@ export class DocumentsService {
       resource: 'document',
       subjectId: doc.id,
       action: 'delete',
-      detail: `${doc.kind} ${doc.fileName}`,
+      detail: doc.kind,
     })
   }
 
@@ -198,7 +196,7 @@ export class DocumentsService {
       resource: 'document',
       subjectId: doc.id,
       action: 'read',
-      detail: `${doc.kind}${personal ? ' (personal)' : ''} ${doc.fileName}`,
+      detail: `${doc.kind}${personal ? ' (personal)' : ''}`,
     })
     return { url, expiresInSeconds }
   }
