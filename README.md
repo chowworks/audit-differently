@@ -1,57 +1,102 @@
 # Audit Differently
 
-Grant financial reporting and compliance for workforce pass-through agencies and the providers they fund.
+**Be audit-ready on day one, not on audit day.**
 
-**Status: working demo on the dev environment** (phase 0 of the brief). A bookkeeper walks an engagement through
-eight steps, records a month's expenses with their proof, sees what the rules flag, submits, and downloads the
-audit package. Tenant isolation is in the database from the first migration. No real data anywhere. Start with
-[docs/product-brief.md](docs/product-brief.md), then [docs/dev-api.md](docs/dev-api.md) and
-[docs/dev-api.md](docs/dev-api.md) to run it.
+Audit Differently is for the people who account for grant and contract money: the bookkeeper at a training
+provider, a youth program, a nonprofit. You win an award. Every month you report how you spent it, with the
+proof. A year later an auditor asks for all of it, and you rebuild twelve months from email attachments and a
+shared drive.
 
-## The problem
+This tool keeps the proof as you go, so the audit package is already built when the auditor asks.
 
-A provider that wins a workforce grant reports its spending to the agency every month on a signed spreadsheet,
-then emails it with the proof: receipts, invoices, allocation worksheets, payroll registers, timesheets, bank
-and card statements. When the agency audits the contract, the provider rebuilds the whole year as a folder tree
-of PDFs with a cover letter. Everything moves by email, including payroll and bank records. Nobody knows what is
-missing until the auditor says so.
+---
 
-## What it does
+## The problem it removes
 
-- A provider records each month's expenses against the approved budget lines and attaches the proof to each one.
-- The monthly financial report the agency already uses is computed from those lines and exported in the agency's own format.
-- Rules check every report before it is submitted: missing proof, allocation math, budget overruns, dates, duplicates.
-  AI review of the documents themselves comes after the rules (phase 2 in the brief).
-- Agency staff review, approve or deny in the tool, and generate the audit package for any month or the whole contract.
-- Participant eligibility files sit beside the payroll proof, in a stricter tier, so the auditor's request is answered in full.
-- Documents never travel by email again.
+- The monthly report is a spreadsheet, the proof is forty PDFs in an email thread, and nobody can say what is
+  missing until the funder does.
+- Payroll registers, timesheets and bank statements travel by email.
+- Participant eligibility files (the cards, certificates and letters a monitor will ask for) live in a drawer,
+  a folder, or someone's head.
+- At program end, someone spends a week turning all of it into a tidy folder tree for the auditor.
 
-## Architecture
+## What you do instead
 
-```
-Frontend (React + Vite + TypeScript)  →  Vercel        apps/web
-Backend API (NestJS + Prisma)         →  Railway       apps/api
-Postgres                              →  Railway
-Private document storage (R2)         →  Cloudflare
-Shared types                          →  packages/types
-```
+Every award walks the same eight steps, from the proposal to the final audit. You always know which step you are
+on and what the next thing to do is.
 
-Same shape as Interview Differently, by design, so the two projects share conventions (see `CLAUDE.md`),
-including database-level tenant isolation from the first migration ([docs/tenant-isolation.md](docs/tenant-isolation.md)).
-They share no code, database or sign-in.
+| #   | Step                             | What it holds                                                         |
+| --- | -------------------------------- | --------------------------------------------------------------------- |
+| 1   | **Proposal**                     | What you asked for, exactly as you sent it                            |
+| 2   | **Award letter**                 | What the funder actually awarded                                      |
+| 3   | **Budget narrative**             | The funder's form, one line per budget category                       |
+| 4   | **Contract and approved budget** | The signed agreement, its dates and the budget lines every month uses |
+| 5   | **Participants and eligibility** | Each person served, with the eligibility records the audit requires   |
+| 6   | **Monthly ledger and proof**     | Each month's spending, with the proof attached as you go              |
+| 7   | **Signed report, on time**       | The funder's form, signed, submitted, and the funder's decision       |
+| 8   | **Final audit package**          | Everything above, laid out for the auditor, in one download           |
 
-## Repository structure
+Start wherever you are today. A proposal you have not been awarded yet? Begin at step 1. A signed contract and
+three months in? Begin at step 4 and the rest follows. A record the funder never issued can be marked as a
+documented absence with the reason, and it counts as on file.
 
-```
-apps/api            NestJS API: auth (Clerk), row-level tenancy, storage, compliance rules, Prisma schema, migrations, seed
-apps/web            React app for providers and agency staff
-packages/types      Shared TypeScript types: report lines, budget categories, document kinds, check codes
-docs/product-brief  What it is, why standalone, the process it replaces, data model, checks, security, phases
-docs/tenant-isolation  How one agency and one provider are kept from another, and how to set a database up
-docs/release-notes  Plain-words changelog (open index.html in a browser)
-Financial Reporting/   Real reference documents. Gitignored. Never seed, test or screenshot from them.
-```
+## Checks that catch it before the funder does
 
-## Running it
+Before a month is submitted, the rules look for what an auditor would:
 
-See [DEVELOPMENT.md](DEVELOPMENT.md).
+- an invoice or proof of payment that is missing
+- an allocation without its worksheet, or one that adds up to more than the cost
+- payroll without its timesheet and register
+- spending over an approved budget line
+- dates outside the contract, or far from the month being reported
+- duplicate items
+- a report that is late
+
+Each finding says what is wrong and which record it belongs to, so you fix it while the month is still open.
+
+## Participants, handled with care
+
+Eligibility records are the most sensitive thing a program keeps. Here they sit beside the payroll proof they
+belong to, in a stricter tier of their own: only owners and auditors can open them, every open is recorded, and
+they download rather than preview. A bookkeeper can attach a record without being able to read it back.
+
+Nothing is guessed or read for you. Records are stored exactly as uploaded.
+
+## The audit package
+
+One zip, laid out the way funders lay out their own:
+
+- the signed report and the ledger for each month, with the proof beside each line
+- bank and card statements and payroll registers, filed once per month
+- a participant list and each participant's eligibility and payroll verification
+- an index of every file, with its amount, and the amount and date in each file's name
+
+When the auditor asks for the year, you download it.
+
+## Three roles, nothing more to learn
+
+| Role           | Does                                                                     |
+| -------------- | ------------------------------------------------------------------------ |
+| **Owner**      | Runs the workspace: who is in it, the lists it uses, signs the report    |
+| **Bookkeeper** | Records spending, attaches proof, submits, records the funder's decision |
+| **Auditor**    | Reads everything, personal records included, changes nothing             |
+
+The funder is a name on the engagement, not another login to manage. You record their decision from the email
+or the returned form.
+
+## Your records stay yours
+
+Files open through short-lived private links and never travel by email. Every read of a document or a
+participant record is logged and visible to owners and auditors. When an engagement is finished, an owner can
+delete it for good, after downloading a full export. Read how your data is protected on the in-app Privacy page.
+
+---
+
+## Follow along
+
+Every change, in plain words, is in the [release notes](docs/release-notes/index.html). The thinking behind the
+product is in the [product brief](docs/product-brief.md).
+
+**Building on it?** [DEVELOPMENT.md](DEVELOPMENT.md) has the setup and conventions.
+
+A product of Code Differently, alongside Interview Differently and Learn Differently.

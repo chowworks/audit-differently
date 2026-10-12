@@ -36,8 +36,9 @@ The owner asked whether to build this inside Learn Differently or on its own. Bo
 
 - **The Interview Differently repository is public.** Its own rules say fictional data only and keep funding and
   procurement details out of issues. This product's issues, docs and screenshots are nothing but funding and
-  procurement detail, and its database holds payroll registers and bank statements. A private repository is not
-  optional.
+  procurement detail, and its database holds payroll registers and bank statements. The rule that follows is
+  fictional data only, in every file, issue and screenshot. (Update 2026-10-12: the owner has made this
+  repository public, so that rule is now the only protection, not a second one.)
 - **It serves none of the five verbs.** Learn Differently's boundaries doc assigns every feature to Structure,
   Spark, Practice, Opportunity or Placement, on one learner record. The user here is a fiscal officer, an
   internal auditor and a provider's bookkeeper (often an outside accountant). The data is a contract's money,
@@ -53,7 +54,7 @@ The owner asked whether to build this inside Learn Differently or on its own. Bo
 - **The reuse is patterns, not code.** The domain code (budget lines, monthly report, documents, checks) is new
   either way; the auth, storage and tenancy patterns copy over in an hour, which is what this scaffold did.
 
-**Verdict: standalone, private repository, same conventions as Interview Differently.** The real cost is
+**Verdict: standalone, same conventions as Interview Differently.** The real cost is
 operating a second stack, and it is worth it. If an agency later wants spending and outcomes side by side,
 connect the two through single sign-on or an API, the way the boundaries doc already says products connect:
 through shared identity, never shared code.
@@ -203,7 +204,7 @@ AI review (phase 2), each returning a finding with a quote from the document, ne
 
 What the owner called "the main issue". Everything below is a requirement of phase 1, before any real document:
 
-- Private repository. Private bucket. Documents served only by signed URLs that expire in minutes, with a
+- Private bucket. Documents served only by signed URLs that expire in minutes, with a
   forced download name; never a public URL.
 - Row-level security from the first migration, at both the agency and the provider line, with the API
   connected as a restricted role in every environment (`docs/tenant-isolation.md`; same design as Interview
