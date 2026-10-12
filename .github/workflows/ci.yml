@@ -16,6 +16,8 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci
+      # The typecheck needs the generated database client; locally it already exists, here it does not.
+      - run: npx prisma generate --schema apps/api/prisma/schema.prisma
       # Shipped (non-dev) dependencies only; fails on high or critical. Dev-tool advisories and moderate
       # ones reach us as Dependabot pull requests instead of blocking the build.
       - run: npm audit --omit=dev --audit-level=high
