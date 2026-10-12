@@ -18,7 +18,7 @@ jobs:
     name: Lint, Typecheck, Build, Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -74,7 +74,7 @@ jobs:
     # A normal deploy takes a few minutes; `railway up` has been known to hang.
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: npm install -g @railway/cli@5.63.1
       # Uploads the checked-out tree; migrations and the seed run when the service starts. --ci waits for the build.
       - run: railway up --service "${{ vars.RAILWAY_API_SERVICE }}" --ci
@@ -88,7 +88,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
