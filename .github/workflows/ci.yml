@@ -15,7 +15,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install
+      - run: npm ci
+      # Shipped (non-dev) dependencies only; fails on high or critical. Dev-tool advisories and moderate
+      # ones reach us as Dependabot pull requests instead of blocking the build.
+      - run: npm audit --omit=dev --audit-level=high
       # The real reference documents must never be in the tree (CLAUDE.md, "Data rules").
       - run: '! git ls-files | grep -E "^(Financial Reporting|docs/private)/"'
       - run: npm run lint
