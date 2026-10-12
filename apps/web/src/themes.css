@@ -1,0 +1,51 @@
+/* Colour themes, picked from the account menu (theme.tsx). The default, "navy-band", is the :root block in
+   index.css: navy header band, green seal and slash, green buttons, bright green rules. Each block below
+   only states what differs from it. */
+
+/* Navy green: the same colours on a plain paper header, navy buttons and rules. The green stays on the
+   seal, the slash and hovers. */
+:root[data-theme='navy-green'] {
+  --primary: var(--navy);
+  --primary-hover: var(--brand-text);
+  --rule: var(--navy);
+  --header-bg: transparent;
+  --header-ink: var(--ink);
+  --mark-fill: var(--surface);
+}
+
+/* Evergreen: a green world. Deep green ink and buttons, a vivid seal, greener paper. */
+:root[data-theme='evergreen'] {
+  --ink: #0a2e1f;
+  --navy: #0f5132;
+  --muted: #3f6652;
+  --paper: #f0f6f1;
+  --surface-alt: #e2eee5;
+  --line: #cfe0d5;
+  --tint: #d9efe1;
+  --accent: #137a46;
+  --brand: #2ecc71;
+  --brand-text: #137a46;
+  --primary: #0f5132;
+  --primary-hover: #137a46;
+  --rule: #2ecc71;
+  --header-bg: transparent;
+  --header-ink: var(--ink);
+  --mark-fill: var(--surface);
+}
+
+/* Mint: navy ink on mint paper, a vivid seal and rules, navy buttons. */
+:root[data-theme='mint'] {
+  --paper: #e9f5ee;
+  --surface-alt: #dcefe3;
+  --line: #cfe3d7;
+  --tint: #cdebd9;
+  --accent: #137a46;
+  --brand: #19c37d;
+  --brand-text: #137a46;
+  --primary: var(--navy);
+  --primary-hover: #137a46;
+  --rule: #19c37d;
+  --header-bg: transparent;
+  --header-ink: var(--ink);
+  --mark-fill: var(--surface);
+}

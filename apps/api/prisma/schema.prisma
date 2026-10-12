@@ -1,0 +1,365 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // The owner connection for Prisma's CLI (migrate deploy), the seed and scripts. DATABASE_URL is the API's
+  // connection: the restricted role that row-level security binds (CLAUDE.md, "Tenant isolation").
+  directUrl = env("SCHEMA_DATABASE_URL")
+}
+
+// ── Tenancy ─────────────────────────────────────────────────────────────────
+// The workspace is the tenant: a team's container for the engagements (grants, contracts) it accounts for.
+// Postgres row-level security draws one line (docs/tenant-isolation.md): a person sees the rows of the
+// workspaces they belong to and nothing else. Every row of engagement, report, expense, document, participant
+// or check data carries `workspaceId`. Where a comment says "set by trigger" the column is optional here
+// (Prisma need not supply it) and NOT NULL in the database: the trigger copies it from the parent row and
+// refuses a row without one. The funder (a state agency, a board) is a name on the engagement, not an actor.
+
+model Workspace {
+  id             String       @id @default(uuid())
+  name           String
+  // The lists this workspace's owners keep: the "source of funds" boxes an engagement may tick.
+  fundingSources String[]     @default([])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  memberships    Membership[]
+  engagements    Engagement[]
+  documents      Document[]
+  suggestions    Suggestion[]
+}
+
+// Something a member asked for: today, an addition to one of the workspace's lists. Kept so the product can
+// learn what the funder forms need; later also sent on.
+model Suggestion {
+  id          String    @id @default(uuid())
+  workspaceId String
+  userId      String
+  kind        String // 'list'
+  text        String
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+}
+
+model User {
+  id          String       @id // Clerk userId, or `pending-<uuid>` for someone invited who has not signed in
+  email       String?      @unique
+  displayName String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+}
+
+// Who works in a workspace and as what. Roles: ROLES in packages/types (owner, bookkeeper, auditor). One
+// role per person per workspace.
+model Membership {
+  id          String    @id @default(uuid())
+  userId      String
+  workspaceId String
+  role        String
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+}
+
+// ── Engagements and budgets ─────────────────────────────────────────────────
+// One engagement is one thing a workspace accounts for to a funder: a grant, a contract, a cooperative
+// agreement. It may start at the proposal (nothing awarded yet) or at the award, so the award fields are
+// optional; the workflow (apps/web/src/lib/workflow.ts) reads what is on file.
+
+model Engagement {
+  id                     String          @id @default(uuid())
+  workspaceId            String
+  kind                   String          @default("grant") // ENGAGEMENT_KINDS in packages/types
+  name                   String // the program or project, as the team calls it
+  funder                 String? // who awards and audits it, e.g. a state workforce board
+  funderContact          String? // the funder's contact for this engagement, as written on the award letter
+  solicitation           String? // the request for proposals this answered, by name or number
+  requestedAmount        Decimal?        @db.Decimal(12, 2)
+  proposalSubmittedOn    DateTime?
+  awardedOn              DateTime? // the award letter's date
+  awardAmount            Decimal?        @db.Decimal(12, 2)
+  number                 String? // the funder's contract number, once the contract exists
+  periodStart            DateTime?
+  periodEnd              DateTime?
+  fundingSources         String[]        @default([]) // the "source of funds" boxes ticked, from the workspace list
+  // Day of the following month the monthly report is due (the form says the 12th); a month can override it.
+  reportDueDay           Int             @default(12)
+  // The contract's indirect-cost terms in words (rate, base, or "none"), so the indirect-as-direct check is a
+  // rule and not a guess.
+  indirectTerms          String?
+  // Reporting, as the funder's form names it: who the report is submitted to and how, and who signs it
+  // (prepared by, authorized by). The same people sign the letter to the auditors.
+  reportTo               String?
+  submissionMethod       String?
+  preparerName           String?
+  preparerOrganization   String?
+  authorizerName         String?
+  authorizerOrganization String?
+  // The items a participant's file must hold for this program ({ key, label, required }[]); empty means the
+  // defaults in packages/types (ELIGIBILITY_ITEMS).
+  eligibilityItems       Json            @default("[]")
+  status                 String          @default("proposed") // ENGAGEMENT_STATUSES in packages/types
+  // Records that do not exist for this engagement, with the reason, keyed by document kind (e.g. no award
+  // letter because the funder sent the contract directly). A documented absence is a record the audit accepts.
+  waivers                Json            @default("{}")
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  workspace              Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  budgetLines            BudgetLine[]
+  monthlyReports         MonthlyReport[]
+  expenses               Expense[]
+  participants           Participant[]
+  documents              Document[]
+
+  @@unique([workspaceId, number])
+  @@index([workspaceId])
+}
+
+// One approved budget amount per narrative category, with the monthly-report line it rolls into
+// (BUDGET_CATEGORY_TO_LINE in packages/types is the default crosswalk; the funder may override per line).
+model BudgetLine {
+  id           String     @id @default(uuid())
+  workspaceId  String? // set by trigger
+  engagementId String
+  category     String // BUDGET_CATEGORIES
+  reportLine   String // REPORT_LINES
+  amount       Decimal    @db.Decimal(12, 2)
+  narrative    String?
+  sortOrder    Int        @default(0)
+  engagement   Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+
+  @@unique([engagementId, category])
+  @@index([workspaceId])
+}
+
+// ── Monthly reports and expenses ────────────────────────────────────────────
+
+model MonthlyReport {
+  id               String       @id @default(uuid())
+  workspaceId      String? // set by trigger
+  engagementId     String
+  period           String // 'YYYY-MM', the month the expenses belong to
+  status           String       @default("draft") // REPORT_STATUSES
+  dueDate          DateTime
+  submittedAt      DateTime?
+  preparedByName   String?
+  authorizedByName String?
+  authorizedAt     DateTime?
+  comments         String?
+  // The funder's review section of the form as it came back: received date, the verification boxes, invoice
+  // number. The bookkeeper records it; the funder does not sign in.
+  review           Json?
+  reviewedById     String? // who recorded the funder's decision
+  reviewedAt       DateTime?
+  deniedReason     String?
+  isFinal          Boolean      @default(false)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  engagement       Engagement   @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  expenses         Expense[]
+  wexPayments      WexPayment[]
+  checks           Check[]
+
+  @@unique([engagementId, period])
+  @@index([workspaceId])
+  @@index([workspaceId, status, dueDate])
+}
+
+// One row per expense per report line. A shared cost split between two lines is two rows with one item number.
+model Expense {
+  id              String            @id @default(uuid())
+  workspaceId     String? // set by trigger
+  engagementId    String
+  monthlyReportId String
+  itemNumber      String // the team's own numbering, e.g. 'ISY-12'
+  date            DateTime
+  vendor          String
+  memo            String?
+  account         String? // the general-ledger account, as text
+  totalCost       Decimal           @db.Decimal(12, 2)
+  allocatedAmount Decimal           @db.Decimal(12, 2) // the program's share charged to this line
+  allocationType  String            @default("direct") // ALLOCATION_TYPES
+  allocationNote  String? // e.g. '32.84% of payroll hours in January'
+  reportLine      String // REPORT_LINES
+  createdById     String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  engagement      Engagement        @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  monthlyReport   MonthlyReport     @relation(fields: [monthlyReportId], references: [id], onDelete: Cascade)
+  documents       ExpenseDocument[]
+  checks          Check[]
+
+  @@unique([engagementId, itemNumber, reportLine])
+  @@index([workspaceId])
+  @@index([monthlyReportId])
+}
+
+// ── Documents ───────────────────────────────────────────────────────────────
+// Private objects. The row holds the key; a short-lived signed URL is made on demand and the read is logged.
+// `sensitivity` is 'financial' (invoices, statements, registers, allocation sheets) or 'personal' (eligibility
+// records, enrollment forms, pay stubs), which sets how it may be served (CLAUDE.md, "Data rules").
+
+model Document {
+  id           String                @id @default(uuid())
+  workspaceId  String
+  engagementId String?
+  kind         String // DOCUMENT_KINDS
+  sensitivity  String                @default("financial") // 'financial' | 'personal'
+  fileName     String
+  contentType  String
+  size         Int
+  sha256       String
+  storageKey   String                @unique
+  period       String? // 'YYYY-MM' when the document belongs to one month (a statement, a register)
+  uploadedById String
+  uploadedAt   DateTime              @default(now())
+  workspace    Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  engagement   Engagement?           @relation(fields: [engagementId], references: [id], onDelete: SetNull)
+  expenses     ExpenseDocument[]
+  participants ParticipantDocument[]
+  wexPayments  WexPaymentDocument[]
+
+  @@index([workspaceId, period])
+  @@index([engagementId])
+}
+
+model ExpenseDocument {
+  expenseId   String
+  documentId  String
+  purpose     String // DOCUMENT_PURPOSES
+  workspaceId String? // set by trigger
+  expense     Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@id([expenseId, documentId])
+  @@index([documentId])
+  @@index([workspaceId])
+}
+
+// ── Participants and work experience (WEX) ──────────────────────────────────
+// A participant's eligibility file is in scope (the monitoring review asks for it) and is the most sensitive
+// data here: its documents carry sensitivity 'personal'. ParticipantDocument.purpose names which item of the
+// funder's eligibility checklist the document satisfies (ELIGIBILITY_ITEMS in packages/types).
+
+model Participant {
+  id               String                @id @default(uuid())
+  workspaceId      String? // set by trigger
+  engagementId     String
+  participantId    String // the funder's participant id
+  displayName      String
+  enrollmentStatus String                @default("new") // 'new' | 'carryover'
+  currentStatus    String                @default("active") // 'active' | 'offboarded' | 'carry-over'
+  enrolledAt       DateTime?
+  exitedAt         DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  engagement       Engagement            @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  documents        ParticipantDocument[]
+  wexPayments      WexPayment[]
+
+  @@unique([engagementId, participantId])
+  @@index([workspaceId])
+}
+
+model ParticipantDocument {
+  participantId String
+  documentId    String
+  purpose       String // ELIGIBILITY_ITEMS
+  workspaceId   String? // set by trigger
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  document      Document    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@id([participantId, documentId])
+  @@index([documentId])
+  @@index([workspaceId])
+}
+
+model WexPayment {
+  id              String               @id @default(uuid())
+  workspaceId     String? // set by trigger
+  monthlyReportId String
+  participantId   String
+  payPeriodStart  DateTime
+  payPeriodEnd    DateTime
+  hours           Decimal?             @db.Decimal(8, 2)
+  grossAmount     Decimal              @db.Decimal(12, 2)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  monthlyReport   MonthlyReport        @relation(fields: [monthlyReportId], references: [id], onDelete: Cascade)
+  participant     Participant          @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  documents       WexPaymentDocument[]
+  checks          Check[]
+
+  @@index([workspaceId])
+  @@index([monthlyReportId])
+  @@index([participantId])
+}
+
+model WexPaymentDocument {
+  wexPaymentId String
+  documentId   String
+  purpose      String // 'timesheet' | 'register' | 'payment' (the paystub or deposit advice)
+  workspaceId  String? // set by trigger
+  wexPayment   WexPayment @relation(fields: [wexPaymentId], references: [id], onDelete: Cascade)
+  document     Document   @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@id([wexPaymentId, documentId])
+  @@index([documentId])
+  @@index([workspaceId])
+}
+
+// ── Checks ──────────────────────────────────────────────────────────────────
+// A finding on a report, an expense or a WEX payment. Rules write them on every save; AI review (phase 2)
+// writes them with source 'ai'. A blocker stops submission until resolved.
+
+model Check {
+  id              String        @id @default(uuid())
+  workspaceId     String? // set by trigger
+  monthlyReportId String
+  expenseId       String?
+  wexPaymentId    String?
+  participantId   String? // a finding about a participant's file; not a relation, the participant may go
+  code            String // CHECK_CODES
+  severity        String // 'blocker' | 'attention' | 'info'
+  source          String        @default("rule") // 'rule' | 'ai'
+  message         String
+  status          String        @default("open") // 'open' | 'resolved' | 'waived'
+  resolvedById    String?
+  resolvedAt      DateTime?
+  resolution      String?
+  createdAt       DateTime      @default(now())
+  monthlyReport   MonthlyReport @relation(fields: [monthlyReportId], references: [id], onDelete: Cascade)
+  expense         Expense?      @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  wexPayment      WexPayment?   @relation(fields: [wexPaymentId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([monthlyReportId, status])
+  @@index([expenseId])
+}
+
+// ── Access log ──────────────────────────────────────────────────────────────
+// Every read, list, download and export of a document or participant row, and every write to a report. Written
+// by the API in the caller's own context; readable inside the workspace; never updated or deleted by the API.
+
+model DataAccessLog {
+  id          String   @id @default(uuid())
+  workspaceId String
+  actorId     String
+  actorName   String
+  resource    String // 'engagement' | 'document' | 'expense' | 'report' | 'participant' | 'export'
+  subjectId   String?
+  action      String // 'read' | 'list' | 'download' | 'create' | 'update' | 'delete' | 'export'
+  detail      String? // short, non-sensitive context, e.g. 'audit package, 3 months, 41 files'
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([actorId, createdAt])
+}

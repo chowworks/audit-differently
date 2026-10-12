@@ -1,0 +1,33 @@
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { join, relative } from 'node:path'
+
+/**
+ * Every place the API acts as trusted work (runAsSystem: every workspace, no person, the app.system mark that
+ * the User/Membership/Workspace policies admit). A new call site is a review item: add it here on purpose.
+ */
+const TRUSTED_CALL_SITES = [
+  'documents/documents.controller.ts', // the local-disk file behind a signed token (404 whenever R2 is set)
+  'me/me.controller.ts', // first sign-in: the User row and the takeover of an invitation's placeholder
+  'workspaces/workspaces.service.ts', // a new workspace with its creator as owner; an invitation's placeholder
+]
+
+function files(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name)
+    return statSync(path).isDirectory() ? files(path) : [path]
+  })
+}
+
+describe('trusted work', () => {
+  it('runs only from the call sites written down here', () => {
+    const root = join(__dirname, '..')
+    const callers = files(root)
+      .filter(
+        (f) => f.endsWith('.ts') && !f.endsWith('.spec.ts') && !f.endsWith('tenant-context.ts')
+      )
+      .filter((f) => /\brunAsSystem\(/.test(readFileSync(f, 'utf8')))
+      .map((f) => relative(root, f))
+      .sort()
+    expect(callers).toEqual([...TRUSTED_CALL_SITES].sort())
+  })
+})
