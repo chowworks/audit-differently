@@ -90,23 +90,19 @@ export class ReportsService {
     const writer = workspaceRole(caller, c.workspaceId, WRITE_ROLES)
     // The month's page lists the workspace's documents and the engagement's participants: both are logged.
     if (documents.length > 0)
-      await this.log
-        .log(caller, {
-          workspaceId: r.workspaceId!,
-          resource: 'document',
-          action: 'list',
-          detail: `${documents.length} documents, ${r.period} report of ${c.name}`,
-        })
-        .catch(() => undefined)
+      await this.log.log(caller, {
+        workspaceId: r.workspaceId!,
+        resource: 'document',
+        action: 'list',
+        detail: `${documents.length} documents, ${r.period} report of ${c.name}`,
+      })
     if (c.participants.length > 0)
-      await this.log
-        .log(caller, {
-          workspaceId: r.workspaceId!,
-          resource: 'participant',
-          action: 'list',
-          detail: `${c.participants.length} participants, ${r.period} report of ${c.name}`,
-        })
-        .catch(() => undefined)
+      await this.log.log(caller, {
+        workspaceId: r.workspaceId!,
+        resource: 'participant',
+        action: 'list',
+        detail: `${c.participants.length} participants, ${r.period} report of ${c.name}`,
+      })
     return {
       id: r.id,
       period: r.period,
