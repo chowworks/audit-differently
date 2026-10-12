@@ -189,7 +189,7 @@ export class DocumentsService {
     const url = await this.storage.getSignedUrl(
       doc.storageKey,
       expiresInSeconds,
-      personal ? { downloadName: doc.fileName } : undefined
+      personal ? { downloadName: doc.fileName } : { inlineName: doc.fileName }
     )
     await this.log.log(caller, {
       workspaceId: doc.workspaceId,

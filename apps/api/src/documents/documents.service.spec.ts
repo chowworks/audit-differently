@@ -40,8 +40,12 @@ function service() {
   const storage = {
     upload: jest.fn(),
     getSignedUrl: jest.fn(
-      async (key: string, seconds: number, options?: { downloadName?: string }) =>
-        `signed:${key}:${seconds}:${options?.downloadName ?? 'inline'}`
+      async (
+        key: string,
+        seconds: number,
+        options?: { downloadName?: string; inlineName?: string }
+      ) =>
+        `signed:${key}:${seconds}:${options?.downloadName ?? (options?.inlineName ? `inline:${options.inlineName}` : 'inline')}`
     ),
     delete: jest.fn().mockResolvedValue(undefined),
     read: jest.fn(),
@@ -118,11 +122,11 @@ describe('DocumentsService', () => {
     )
   })
 
-  it('opens a financial document to a bookkeeper inline for two minutes, and logs it', async () => {
+  it('opens a financial document to a bookkeeper inline for two minutes under its original name, and logs it', async () => {
     const { service: s, log } = service()
     const who = member('bookkeeper')
     expect(await s.url(who, 'd-inv')).toEqual({
-      url: `signed:${invoice.storageKey}:120:inline`,
+      url: `signed:${invoice.storageKey}:120:inline:${invoice.fileName}`,
       expiresInSeconds: 120,
     })
     expect(log.log).toHaveBeenCalledWith(

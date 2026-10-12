@@ -65,14 +65,16 @@ export class R2DocumentStorage implements DocumentStorage {
   async getSignedUrl(
     key: string,
     expiresInSeconds: number,
-    options?: { downloadName?: string }
+    options?: { downloadName?: string; inlineName?: string }
   ): Promise<string> {
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: key,
       ResponseContentDisposition: options?.downloadName
-        ? `attachment; filename="${options.downloadName.replace(/"/g, '')}"`
-        : undefined,
+        ? disposition('attachment', options.downloadName)
+        : options?.inlineName
+          ? disposition('inline', options.inlineName)
+          : undefined,
     })
     return getSignedUrl(this.client(), command, { expiresIn: expiresInSeconds })
   }
@@ -80,4 +82,13 @@ export class R2DocumentStorage implements DocumentStorage {
   async delete(key: string): Promise<void> {
     await this.client().send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
   }
+}
+
+/** A Content-Disposition value that keeps the original file name: a plain fallback and the UTF-8 form. */
+export function disposition(kind: 'attachment' | 'inline', name: string): string {
+  const clean = [...name]
+    .filter((c) => c.charCodeAt(0) > 31 && c.charCodeAt(0) !== 127 && !'"\\/'.includes(c))
+    .join('')
+  const ascii = clean.replace(/[^\x20-\x7e]/g, '_')
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(clean)}`
 }
