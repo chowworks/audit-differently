@@ -304,6 +304,12 @@ export const PERSONAL_DOCUMENT_ROLES: ReadonlySet<Role> = new Set(['owner', 'aud
 
 export interface Me {
   userId: string
+  /** The version of the Terms now in force: the fingerprint of their wording, computed by the API. */
+  termsVersion: string
+  /** Whether this person has accepted that version; the app shows nothing else until they have. */
+  termsAccepted: boolean
+  /** True when they accepted an older version but not the current one: the prompt says the Terms were updated. */
+  termsPreviouslyAccepted: boolean
   memberships: { workspaceId: string; workspaceName: string; role: Role }[]
 }
 
@@ -519,8 +525,13 @@ export interface WorkspaceDto {
   termsAcceptedAt?: string | null
 }
 
-/** The terms an owner accepts when creating a workspace; a new version is a new date. */
-export const TERMS_VERSION = '2026-10-12'
+/** Body of POST /me/terms: the version being accepted, which must be the current one. */
+export interface AcceptTermsRequest {
+  version: string
+}
+
+/** The code of the 403 the API answers with while the caller has not accepted the current Terms. */
+export const TERMS_REQUIRED_CODE = 'terms_required'
 
 /** Deleting an engagement or workspace is permanent: the owner types this phrase and the exact name. */
 export const DELETE_PHRASE = 'delete permanently'

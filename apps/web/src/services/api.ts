@@ -1,3 +1,5 @@
+import { TERMS_REQUIRED_CODE } from '@ad/types'
+
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
 
 export class ApiError extends Error {
@@ -9,6 +11,9 @@ export class ApiError extends Error {
     super(message)
   }
 }
+
+/** Fired on `window` when the API refuses a call because the Terms changed since this tab loaded; the app then asks /me again. */
+export const TERMS_REQUIRED_EVENT = 'ad:terms-required'
 
 /** Hashing reads the whole file into memory; above this the tab could freeze, so only the size is checked. */
 const HASH_LIMIT_BYTES = 500 * 1024 * 1024
@@ -93,6 +98,11 @@ export async function apiFetch<T>(
       typeof (body as { message: unknown }).message === 'string'
         ? (body as { message: string }).message
         : null) ?? `${init.method ?? 'GET'} ${path} failed (${response.status})`
+    if (
+      response.status === 403 &&
+      (body as { code?: unknown } | null)?.code === TERMS_REQUIRED_CODE
+    )
+      window.dispatchEvent(new Event(TERMS_REQUIRED_EVENT))
     throw new ApiError(response.status, message, body)
   }
   if (response.status === 204) return undefined as T

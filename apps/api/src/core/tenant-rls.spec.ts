@@ -657,6 +657,77 @@ suite('tenant isolation', () => {
     })
   })
 
+  describe('terms acceptance', () => {
+    const accept = (user: string, version = 'v1') =>
+      `INSERT INTO "TermsAcceptance" ("id","userId","fingerprint") VALUES ('${user}-${version}','${user}','${version}')`
+
+    it('lets a person record their own acceptance, once per version, and read it back', async () => {
+      await as({ user: 'nobody' }, async () => {
+        expect((await attempt(accept('nobody'))).rows).toBe(1)
+        expect((await attempt(accept('nobody'))).error).toMatch(/duplicate key|unique/)
+        expect((await attempt(accept('nobody', 'v2'))).rows).toBe(1)
+        expect(await ids('TermsAcceptance')).toEqual(['nobody-v1', 'nobody-v2'])
+      })
+    })
+
+    it('refuses an acceptance written for someone else, and with no signed-in person', async () => {
+      await as({ user: 'nobody' }, async () => {
+        expect((await attempt(accept('owner-W1'))).error).toMatch(/row-level security/)
+      })
+      await as({}, async () => {
+        expect((await attempt(accept('nobody'))).error).toMatch(/row-level security/)
+      })
+      await as({ system: true }, async () => {
+        expect((await attempt(accept('nobody'))).error).toMatch(/row-level security/)
+      })
+    })
+
+    it("shows nobody else's acceptance", async () => {
+      await as({ user: 'owner-W1' }, async () => {
+        expect((await attempt(accept('owner-W1'))).rows).toBe(1)
+        await db.exec('RESET ROLE')
+        await db.exec(accept('book-W1'))
+        await db.exec('SET LOCAL ROLE ad_app')
+        expect(await ids('TermsAcceptance')).toEqual(['owner-W1-v1'])
+      })
+      await as({ user: 'nobody', workspaces: ['W1', 'W2'] }, async () => {
+        expect(await count('TermsAcceptance')).toBe(0)
+      })
+    })
+
+    it('cannot be changed or removed, by the person or by trusted work', async () => {
+      for (const ctx of [{ user: 'owner-W1' }, { system: true }])
+        await as(ctx, async () => {
+          await db.exec('RESET ROLE')
+          await db.exec(accept('owner-W1'))
+          await db.exec('SET LOCAL ROLE ad_app')
+          if (!ctx.system) {
+            expect((await attempt(`UPDATE "TermsAcceptance" SET fingerprint = 'v9'`)).rows).toBe(0)
+            expect((await attempt(`DELETE FROM "TermsAcceptance"`)).rows).toBe(0)
+            expect(await count('TermsAcceptance')).toBe(1)
+          } else {
+            expect((await attempt(`UPDATE "TermsAcceptance" SET fingerprint = 'v9'`)).rows).toBe(0)
+            expect((await attempt(`DELETE FROM "TermsAcceptance"`)).rows).toBe(0)
+          }
+          await db.exec('RESET ROLE')
+          expect(
+            (await db.query(`SELECT 1 FROM "TermsAcceptance" WHERE fingerprint = 'v1'`)).rows
+          ).toHaveLength(1)
+        })
+    })
+
+    it('outlives the person: no foreign key to User', async () => {
+      await as({}, async () => {
+        await db.exec('RESET ROLE')
+        await db.exec(accept('gone'))
+        await db.exec(`DELETE FROM "User" WHERE id = 'gone'`)
+        expect(
+          (await db.query(`SELECT 1 FROM "TermsAcceptance" WHERE "userId" = 'gone'`)).rows
+        ).toHaveLength(1)
+      })
+    })
+  })
+
   describe('the restricted role', () => {
     it('may execute only the functions the API needs', async () => {
       const r = await db.query<{ f: string }>(

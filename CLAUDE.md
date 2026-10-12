@@ -98,9 +98,13 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   key layout, on purpose, so one R2 lifecycle rule on each bucket expires it (a manual step, `docs/dev-api.md`). It
   is never a `Document` row, nothing serves it, and `deleteByPrefix` refuses it. It holds personal records, so the
   rule must exist before a real one is uploaded.
-- **Terms:** creating a workspace needs `acceptedTermsVersion === TERMS_VERSION` (`packages/types`); the version,
-  time and person are kept on the `Workspace` (`termsVersion`, `termsAcceptedAt`, `termsAcceptedById`; null for a
-  workspace made before). A new terms version is a new constant and a new acceptance for new workspaces.
+- **Terms:** the version is the fingerprint of the wording itself (`apps/api/src/auth/terms-fingerprint.ts`, computed
+  once at startup from `docs/terms/index.html`'s `#terms` section; startup refuses without it), so there is nothing to
+  bump. Creating a workspace needs `acceptedTermsVersion` equal to it (the web gets it from `GET /me`); the version, time
+  and person are kept on the `Workspace` (`termsVersion`, `termsAcceptedAt`, `termsAcceptedById`; null for a workspace
+  made before).
+- Every user accepts the Terms at first sign-in, and again whenever the wording changes (`TermsAcceptance`, append-only;
+  the guard answers 403 `terms_required` until then, except `GET /me` and `POST /me/terms`, marked `@SkipTermsGate`).
 - Documents are private objects: stored under `<workspaceId>/<engagementId or workspace>/<period or
 general>/<uuid>.<ext>` (a database trigger refuses any other key, migrations `20261011000600` and `..0700`,
   and the API serves, reads or deletes nothing from a row whose key says otherwise), served by a short-lived signed URL, never a public URL. Every read, list,

@@ -368,6 +368,20 @@ model DataAccessLog {
   @@index([actorId, createdAt])
 }
 
+// ── Terms ───────────────────────────────────────────────────────────────────
+// A person accepting the Terms, at first sign-in and again whenever their wording (its fingerprint) changes.
+// Append-only and one row per person per fingerprint. No foreign key: it outlives the User row. See migration
+// 20261012000300; a person reads and inserts only their own rows.
+
+model TermsAcceptance {
+  id         String   @id @default(uuid())
+  userId     String
+  fingerprint String // the Terms' version: the hash of their wording, see src/auth/terms-fingerprint.ts
+  acceptedAt  DateTime @default(now())
+
+  @@unique([userId, fingerprint])
+}
+
 // ── Deletion ────────────────────────────────────────────────────────────────
 // The record of an owner deleting an engagement (or, with engagementId null, a workspace's own documents and the
 // workspace). Made when the full export starts, 'downloaded' only when the response finished, 'deleted' when the

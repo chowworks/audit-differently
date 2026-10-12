@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { assertDeployedConfig, configProblems } from './startup-checks'
 
 const local = {
@@ -79,5 +82,18 @@ describe('startup checks', () => {
       'DEMO_AUTH is set, but demo personas no longer exist: remove it',
     ])
     expect(() => assertDeployedConfig({ ...local, DEMO_AUTH: 'on' })).toThrow('Refusing to start')
+  })
+
+  it('refuses to start without the Terms page, or without its #terms section', () => {
+    expect(configProblems(local, null)).toEqual([
+      'docs/terms/index.html was not found: the Terms are the version',
+    ])
+    const dir = mkdtempSync(join(tmpdir(), 'terms-'))
+    const bare = join(dir, 'index.html')
+    writeFileSync(bare, '<main><section id="contact">x</section></main>')
+    expect(configProblems(local, bare)).toEqual([
+      'docs/terms/index.html has no <section id="terms">',
+    ])
+    expect(() => assertDeployedConfig(local, null)).toThrow(/Refusing to start/)
   })
 })
