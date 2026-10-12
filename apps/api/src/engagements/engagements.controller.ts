@@ -1,6 +1,20 @@
-import { Body, Controller, Get, Param, Patch, Post, Res, UseGuards } from '@nestjs/common'
+import {
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import type { Response } from 'express'
 import type {
+  AuditPackagePartsDto,
   EngagementDetail,
   EngagementInput,
   EngagementSummary,
@@ -45,18 +59,49 @@ export class EngagementsController {
     return this.engagements.update(await this.callers.load(userId), id, body)
   }
 
-  /** Everything the auditor will ask for, as one zip, organized by step and month. Logged as an export. */
+  /**
+   * Everything the auditor will ask for, as one zip, organized by step and month. Logged as an export. A package
+   * over about 1.5 GB of files is split: without `?part=` it answers with the list of parts, and `?part=n`
+   * downloads part n. A package that fits in one zip is that zip, as ever.
+   */
   @Get(':id/audit-package')
   async auditPackage(
     @UserId() userId: string,
     @Param('id') id: string,
+    @Query('part') part: string | undefined,
     @Res() res: Response
   ): Promise<void> {
-    const pkg = await this.audit.build(await this.callers.load(userId), id)
+    const caller = await this.callers.load(userId)
+    const plan = await this.audit.plan(caller, id)
+    const layouts = this.audit.parts(plan)
+    if (layouts.length > 1 && part === undefined) {
+      const body: AuditPackagePartsDto = {
+        parts: layouts.map((l) => ({ n: l.n, fileName: l.fileName, sourceBytes: l.sourceBytes })),
+      }
+      res.setHeader('Cache-Control', 'no-store')
+      res.json(body)
+      return
+    }
+    const n = part === undefined ? 1 : Number(part)
+    if (!Number.isInteger(n) || n < 1 || n > layouts.length) throw new NotFoundException()
+    await this.audit.logExport(
+      caller,
+      plan,
+      layouts.length > 1 ? `part ${n} of ${layouts.length}` : undefined
+    )
     res.setHeader('Content-Type', 'application/zip')
-    res.setHeader('Content-Disposition', `attachment; filename="${pkg.name.replace(/"/g, '')}"`)
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${layouts[n - 1]!.fileName.replace(/["\r\n]/g, '')}"`
+    )
     res.setHeader('Cache-Control', 'no-store')
-    res.send(pkg.bytes)
+    try {
+      await pipeline(Readable.from(this.audit.streamPart(plan, layouts, n)), res)
+    } catch (e) {
+      // Nothing was sent yet: answer with the error. Part way: cut the response so the download fails.
+      if (!res.headersSent) throw e
+      res.destroy()
+    }
   }
 
   @Post(':id/reports')

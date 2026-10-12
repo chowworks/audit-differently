@@ -467,6 +467,196 @@ suite('tenant isolation', () => {
     })
   })
 
+  describe('deleting', () => {
+    /** Runs `fn` with the database owner's privileges (to set up rows), then goes back to the restricted role. */
+    const asOwner = async <T>(fn: () => Promise<T>): Promise<T> => {
+      await db.exec('RESET ROLE')
+      try {
+        return await fn()
+      } finally {
+        await db.exec('SET LOCAL ROLE ad_app')
+      }
+    }
+    const record = (id: string, ws: string, extra = '') =>
+      `INSERT INTO "DeletionRecord" ("id","workspaceId","engagementId","subjectName","deletedById","deletedByName","exportKey","expiresAt"${extra ? ',"status"' : ''})
+       VALUES ('${id}','${ws}','E-${ws}','n','owner-${ws}','The owner','retained/${ws}/E-${ws}-x.zip', now() + interval '30 days'${extra ? `,'${extra}'` : ''})`
+
+    it('lets only an owner write a deletion record of their own workspace, and nobody delete one', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(record('R1', 'W1'))).error).toMatch(/row-level security/)
+        expect(await count('DeletionRecord')).toBe(0)
+      })
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(record('R1', 'W1'))).rows).toBe(1)
+        expect((await attempt(record('R-bad', 'W2'))).error).toMatch(/row-level security/)
+        expect(await ids('DeletionRecord')).toEqual(['R1'])
+        expect(
+          (await attempt(`UPDATE "DeletionRecord" SET status = 'downloaded' WHERE id = 'R1'`)).rows
+        ).toBe(1)
+        expect((await attempt(`DELETE FROM "DeletionRecord"`)).rows).toBe(0)
+      })
+      await asOwner(async () => {
+        await db.exec(record('R-W2', 'W2'))
+      })
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect(await ids('DeletionRecord')).toEqual([])
+        expect(
+          (await attempt(`UPDATE "DeletionRecord" SET status = 'downloaded' WHERE id = 'R-W2'`))
+            .rows
+        ).toBe(0)
+      })
+      await as({ workspaces: ['W1', 'W2'], user: 'aud-W1' }, async () => {
+        expect(await count('DeletionRecord')).toBe(0)
+      })
+    })
+
+    it('moves a deletion record forward only, and never re-points it', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        await db.exec(record('R1', 'W1'))
+        expect(
+          (await attempt(`UPDATE "DeletionRecord" SET status = 'deleted' WHERE id = 'R1'`)).error
+        ).toMatch(/cannot go from exported to deleted/)
+        expect(
+          (await attempt(`UPDATE "DeletionRecord" SET status = 'downloaded' WHERE id = 'R1'`)).rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "DeletionRecord" SET status = 'exported' WHERE id = 'R1'`)).error
+        ).toMatch(/cannot go from downloaded to exported/)
+        expect(
+          (await attempt(`UPDATE "DeletionRecord" SET status = 'deleted' WHERE id = 'R1'`)).rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "DeletionRecord" SET "workspaceId" = 'W2' WHERE id = 'R1'`)).error
+        ).toBeDefined()
+        expect(
+          (await attempt(`UPDATE "DeletionRecord" SET "exportKey" = 'x' WHERE id = 'R1'`)).error
+        ).toMatch(/cannot be changed/)
+        expect(
+          (await attempt(`UPDATE "DeletionRecord" SET status = 'sold' WHERE id = 'R1'`)).error
+        ).toBeDefined()
+      })
+    })
+
+    it('lets trusted work delete a workspace and nobody else, and keeps the record and the access log', async () => {
+      // One transaction (rolled back), so the context changes in place of nesting `as`.
+      const switchTo = (workspaces: string[], user: string, system: boolean) =>
+        db.query(
+          `SELECT set_config('app.workspace_ids', $1, true), set_config('app.user_id', $2, true), set_config('app.system', $3, true)`,
+          [workspaces.join(','), user, system ? 'on' : '']
+        )
+      await as({}, async () => {
+        await asOwner(async () => {
+          await insert(db, 'Workspace', { id: 'W-del', name: 'gone' })
+          await insert(db, 'User', { id: 'owner-del' })
+          await insert(db, 'Membership', {
+            userId: 'owner-del',
+            workspaceId: 'W-del',
+            role: 'owner',
+          })
+          await insert(db, 'Suggestion', { workspaceId: 'W-del', userId: 'owner-del', text: 't' })
+          await insert(db, 'Document', {
+            id: 'D-del',
+            workspaceId: 'W-del',
+            storageKey: 'W-del/workspace/k',
+          })
+          await insert(db, 'DataAccessLog', { id: 'L-del', workspaceId: 'W-del', actorId: 'x' })
+          await db.exec(record('R-del', 'W-del'))
+        })
+        // An owner of the workspace, signed in, cannot delete it; neither can a caller that sees every workspace
+        // without the trusted-work mark.
+        await switchTo(['W-del'], 'owner-del', false)
+        expect((await attempt(`DELETE FROM "Workspace" WHERE id = 'W-del'`)).rows).toBe(0)
+        await switchTo(['W-del', 'W1', 'W2'], '', false)
+        expect((await attempt(`DELETE FROM "Workspace" WHERE id = 'W-del'`)).rows).toBe(0)
+
+        await switchTo(['W-del', 'W1', 'W2'], '', true)
+        // Its document still stands in the way: the API removes documents first.
+        expect((await attempt(`DELETE FROM "Workspace" WHERE id = 'W-del'`)).error).toMatch(
+          /foreign key|violates/
+        )
+        expect((await attempt(`DELETE FROM "Document" WHERE "workspaceId" = 'W-del'`)).rows).toBe(1)
+        expect((await attempt(`DELETE FROM "Workspace" WHERE id = 'W-del'`)).rows).toBe(1)
+        await asOwner(async () => {
+          expect(await ids('Workspace')).toEqual(['W1', 'W2'])
+          const left = async (t: string) =>
+            (await db.query(`SELECT 1 FROM "${t}" WHERE "workspaceId" = 'W-del'`)).rows.length
+          expect([await left('Membership'), await left('Suggestion')]).toEqual([0, 0])
+          // They outlive the workspace: the record of the deletion and the line that says who did it.
+          expect([await left('DeletionRecord'), await left('DataAccessLog')]).toEqual([1, 1])
+        })
+      })
+    })
+
+    it('deletes an engagement with everything under it, once its documents are gone', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        await asOwner(async () => {
+          await insert(db, 'Engagement', { id: 'E-del', workspaceId: 'W1', name: 'x', number: 'D' })
+          await insert(db, 'BudgetLine', { engagementId: 'E-del', category: 'wex' })
+          await insert(db, 'MonthlyReport', {
+            id: 'R-del',
+            engagementId: 'E-del',
+            period: '2026-08',
+          })
+          await insert(db, 'Expense', {
+            id: 'X-del',
+            engagementId: 'E-del',
+            monthlyReportId: 'R-del',
+            itemNumber: '1',
+            reportLine: 'wex',
+          })
+          await insert(db, 'Participant', {
+            id: 'P-del',
+            engagementId: 'E-del',
+            participantId: '9',
+          })
+          await insert(db, 'WexPayment', {
+            id: 'WX-del',
+            monthlyReportId: 'R-del',
+            participantId: 'P-del',
+          })
+          await insert(db, 'Check', { monthlyReportId: 'R-del', wexPaymentId: 'WX-del' })
+          await insert(db, 'Document', {
+            id: 'D-del',
+            workspaceId: 'W1',
+            engagementId: 'E-del',
+            storageKey: 'W1/E-del/general/k',
+          })
+          await insert(db, 'ExpenseDocument', { expenseId: 'X-del', documentId: 'D-del' })
+          await insert(db, 'ParticipantDocument', { participantId: 'P-del', documentId: 'D-del' })
+          await insert(db, 'WexPaymentDocument', { wexPaymentId: 'WX-del', documentId: 'D-del' })
+        })
+        // Left to the foreign keys alone, the document is un-linked from the engagement first, and the
+        // storage-key trigger refuses that. This is why the API deletes the documents before the engagement.
+        expect((await attempt(`DELETE FROM "Engagement" WHERE id = 'E-del'`)).error).toMatch(
+          /storage key must start with/
+        )
+        // The order the API uses: documents, then months (their payments), then the engagement.
+        expect((await attempt(`DELETE FROM "Document" WHERE "engagementId" = 'E-del'`)).rows).toBe(
+          1
+        )
+        expect(
+          (await attempt(`DELETE FROM "MonthlyReport" WHERE "engagementId" = 'E-del'`)).rows
+        ).toBe(1)
+        expect((await attempt(`DELETE FROM "Engagement" WHERE id = 'E-del'`)).rows).toBe(1)
+        await asOwner(async () => {
+          for (const [t, left] of [
+            ['BudgetLine', ['BL-W1', 'BL-W2']],
+            ['MonthlyReport', ['R-W1', 'R-W2']],
+            ['Expense', ['X-W1', 'X-W2']],
+            ['WexPayment', ['WX-W1', 'WX-W2']],
+            ['Check', ['K-W1', 'K-W2']],
+          ] as const)
+            expect([t, await ids(t)]).toEqual([t, left])
+          for (const t of ['ExpenseDocument', 'ParticipantDocument', 'WexPaymentDocument'])
+            expect([t, await count(t)]).toEqual([t, 2])
+          expect(await ids('Engagement')).toEqual(['E-W1', 'E-W2'])
+          expect(await ids('Participant')).toEqual(['P-W1', 'P-W2'])
+          expect(await ids('Document')).toEqual(['D-W1', 'D-W2'])
+        })
+      })
+    })
+  })
+
   describe('the restricted role', () => {
     it('may execute only the functions the API needs', async () => {
       const r = await db.query<{ f: string }>(

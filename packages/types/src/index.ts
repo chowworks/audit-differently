@@ -515,6 +515,48 @@ export interface WorkspaceDto {
   fundingSources: string[]
   /** Owners: people, lists, settings. */
   canManage: boolean
+  /** When the owner accepted the terms creating it; null for a workspace made before terms were recorded. */
+  termsAcceptedAt?: string | null
+}
+
+/** The terms an owner accepts when creating a workspace; a new version is a new date. */
+export const TERMS_VERSION = '2026-10-12'
+
+/** Deleting an engagement or workspace is permanent: the owner types this phrase and the exact name. */
+export const DELETE_PHRASE = 'delete permanently'
+
+/** How long we keep our own copy of the full export taken before a deletion (an R2 lifecycle rule expires it). */
+export const RETAINED_COPY_DAYS = 30
+
+/** What a deletion will remove, in counts, for the confirmation screen. */
+export interface DeletionSummaryDto {
+  months: number
+  participants: number
+  documents: number
+  /** Workspace only: documents filed to no engagement, which need their own export first. */
+  hasWorkspaceDocuments?: boolean
+}
+
+/**
+ * One zip of a split export. `bytes` is the exact size when it is known before the zip is made (it is not for
+ * the exports built on request); `sourceBytes` is the size of the files that go into it.
+ */
+export interface ExportPartDto {
+  n: number
+  fileName: string
+  bytes?: number
+  sourceBytes: number
+}
+
+/** A deletion's export: the record the delete will name, and the zips to download, each one a part. */
+export interface DeletionExportDto {
+  deletionId: string
+  parts: ExportPartDto[]
+}
+
+/** The audit package when it is too big for one zip: the parts to ask for with ?part=n. */
+export interface AuditPackagePartsDto {
+  parts: ExportPartDto[]
 }
 
 export interface WorkspaceMemberDto {

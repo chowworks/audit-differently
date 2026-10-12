@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
-import type { DocumentStorage } from './document-storage.interface'
+import { assertFolderPrefix, type DocumentStorage } from './document-storage.interface'
 
 /**
  * Local development only: files under apps/api/storage/ (gitignored), served by the documents controller
@@ -76,5 +76,16 @@ export class LocalDiskStorage implements DocumentStorage {
 
   async delete(key: string): Promise<void> {
     await rm(this.pathFor(key), { force: true })
+  }
+
+  async deleteByPrefix(prefix: string): Promise<void> {
+    assertFolderPrefix(prefix)
+    await rm(this.pathFor(prefix), { recursive: true, force: true })
+  }
+
+  async putFile(key: string, filePath: string): Promise<void> {
+    const file = this.pathFor(key)
+    await mkdir(path.dirname(file), { recursive: true })
+    await copyFile(filePath, file)
   }
 }

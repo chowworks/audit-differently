@@ -29,9 +29,24 @@ database has no public address and production's keys are never in a local `.env`
 3. Create a dev Clerk instance for this product; put its `sk_test_` key in `apps/api/.env` and its `pk_test_` key
    in `apps/web/.env.local`. Create the four demo people in it with the seed's emails (listed under "The demo people" below); their
    first sign-in takes over the seeded memberships.
-4. Create a dev R2 bucket (private, no public access) and put its keys in `apps/api/.env`.
+4. Create a dev R2 bucket (private, no public access) and put its keys in `apps/api/.env`. Add the lifecycle rule
+   below to it.
 5. `apps/api/scripts/railway-dev-vars.sh --apply` copies the dev keys to `api-dev` and sets the database URLs on
    the private host; then `apps/api/scripts/deploy-dev.sh`. Check `curl https://<domain>/api/health`.
+
+## The one manual bucket step: expire retained copies
+
+Before an owner deletes an engagement or a workspace the API builds them a full export (in parts when it is big) and keeps its own copy at
+`retained/<workspaceId>/<engagementId or workspace>-part<n>-<timestamp>.zip` for 30 days (`RETAINED_COPY_DAYS`), to cover an
+accidental delete or a failed download. Nothing in code expires it; the bucket does. We cannot set this from code, so
+do it once on **each** bucket (dev now, production before the first real row), in the Cloudflare dashboard: R2,
+the bucket, Settings, Object lifecycle rules, Add rule:
+
+- Prefix: `retained/` (exactly this; the rest of the bucket is workspace folders and must never expire)
+- Action: delete objects 30 days after they were created
+- Check it shows as enabled. Until it exists, retained copies (which hold personal records) are kept forever.
+
+The retained copy is the one key outside the `<workspaceId>/...` layout, on purpose, so one rule covers it.
 
 ## Every day
 

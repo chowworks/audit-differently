@@ -18,7 +18,11 @@ async function bootstrap() {
       referrerPolicy: { policy: 'no-referrer' },
     })
   )
-  app.enableCors({ origin: corsOrigin(process.env.FRONTEND_URL) })
+  app.enableCors({
+    origin: corsOrigin(process.env.FRONTEND_URL),
+    // The web app reads the file name, and the size and sha256 it checks a downloaded part against.
+    exposedHeaders: ['Content-Disposition', 'X-Export-Bytes', 'X-Export-Sha256'],
+  })
   // Behind a proxy (Railway) set TRUST_PROXY=1 so req.ip is the client.
   if (process.env.TRUST_PROXY) {
     const hops = Number(process.env.TRUST_PROXY)

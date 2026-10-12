@@ -12,6 +12,6 @@ import { EngagementsService } from './engagements.service'
   imports: [PrismaModule, CoreModule, ChecksModule, AuthModule, StorageModule],
   controllers: [EngagementsController],
   providers: [EngagementsService, AuditPackageService],
-  exports: [EngagementsService],
+  exports: [EngagementsService, AuditPackageService],
 })
 export class EngagementsModule {}

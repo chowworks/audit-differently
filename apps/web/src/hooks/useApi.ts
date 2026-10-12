@@ -18,10 +18,10 @@ export function useApi() {
       get: <T>(path: string) => call<T>('GET', path),
       post: <T>(path: string, body?: unknown) => call<T>('POST', path, body),
       patch: <T>(path: string, body?: unknown) => call<T>('PATCH', path, body),
-      del: <T>(path: string) => call<T>('DELETE', path),
+      del: <T>(path: string, body?: unknown) => call<T>('DELETE', path, body),
       upload: <T>(path: string, form: FormData) => call<T>('POST', path, form),
-      download: async (path: string, fileName: string) =>
-        apiDownload(path, await getToken(), fileName),
+      download: async <T = never>(path: string, fileName: string) =>
+        apiDownload<T>(path, await getToken(), fileName),
     }
   }, [getToken])
 }

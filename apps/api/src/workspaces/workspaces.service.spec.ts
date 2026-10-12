@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
-import type { Role } from '@ad/types'
+import { TERMS_VERSION, type Role } from '@ad/types'
 import { member, OTHER, scoped, stranger, W } from '../core/testing/callers'
 import { WorkspacesService } from './workspaces.service'
 
@@ -142,5 +142,25 @@ describe('WorkspacesService', () => {
     await expect(s.removeMember(owner, W, 'u-owner-ws-1')).rejects.toThrow(BadRequestException)
     expect(prisma.membership.update).not.toHaveBeenCalled()
     expect(prisma.membership.deleteMany).not.toHaveBeenCalled()
+  })
+
+  it('creates a workspace only when the current terms are accepted, and records which and when', async () => {
+    const { service: s, prisma } = service()
+    prisma.workspace.create.mockResolvedValue({ id: W })
+    const who = member('owner')
+    await expect(s.create(who, 'New team')).rejects.toThrow(BadRequestException)
+    await expect(s.create(who, 'New team', '2020-01-01')).rejects.toThrow(BadRequestException)
+    await expect(s.create(who, 'New team', '')).rejects.toThrow(BadRequestException)
+    expect(prisma.workspace.create).not.toHaveBeenCalled()
+    expect(prisma.membership.create).not.toHaveBeenCalled()
+    await s.create(who, 'New team', TERMS_VERSION)
+    expect(prisma.workspace.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        name: 'New team',
+        termsVersion: TERMS_VERSION,
+        termsAcceptedAt: expect.any(Date),
+        termsAcceptedById: who.userId,
+      }),
+    })
   })
 })

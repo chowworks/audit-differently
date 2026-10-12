@@ -23,6 +23,7 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   'Check',
   'DataAccessLog',
   'Suggestion',
+  'DeletionRecord',
 ])
 
 type Fields = Map<string, string> // relation field name -> the model it points at
