@@ -5,6 +5,7 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "env": ["VITE_API_URL", "VITE_CLERK_PUBLISHABLE_KEY"],
       "outputs": ["dist/**"]
     },
     "dev": {
