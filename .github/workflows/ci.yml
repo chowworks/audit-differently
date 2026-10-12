@@ -5,6 +5,13 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
+  # Run the whole pipeline by hand from the Actions tab (it deploys only from main).
+  workflow_dispatch:
+
+# One deploy at a time; a newer push waits for the one in flight instead of racing it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   ci:
@@ -29,13 +36,18 @@ jobs:
       - run: npm run build
       - run: npm run test
 
-  # Railway is declared in .railway/railway.ts and applied on every push to main, once the project exists:
-  # set the repository variable RAILWAY_PROJECT_READY=true and the secret RAILWAY_TOKEN (a project token). The
-  # Vercel deploy of apps/web is added the same way once that project exists.
+  # Everything below runs on main only, after CI passes. It is switched on by the repository variable
+  # DEPLOY_ENABLED=true and aimed by variables, so the same jobs serve dev now and production later:
+  #   secrets:   RAILWAY_TOKEN (a project token for ONE Railway environment), VERCEL_TOKEN
+  #   variables: RAILWAY_API_SERVICE (api-dev now, audit-differently for production), VERCEL_ORG_ID,
+  #              VERCEL_PROJECT_ID, API_URL and WEB_URL (the public addresses the smoke test checks)
+  # Railway is declared in .railway/railway.ts; a project token is tied to one environment, so the apply and the
+  # deploy touch dev or production depending on which token is set. Vercel's own GitHub deploy of main is turned
+  # off in apps/web/vercel.json, so a push deploys once, and only when CI has passed.
   railway-config:
     name: Apply Railway config (.railway/railway.ts)
     needs: [ci]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.RAILWAY_PROJECT_READY == 'true'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -44,7 +56,7 @@ jobs:
         with:
           node-version: '22'
       # The railway SDK (root devDependency) evaluates .railway/railway.ts.
-      - run: npm install
+      - run: npm ci
       - run: npm install -g @railway/cli@5.63.1
       - run: railway config plan --verbose
         env:
@@ -57,7 +69,22 @@ jobs:
   deploy-api:
     name: Deploy API (Railway)
     needs: [ci, railway-config]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.RAILWAY_PROJECT_READY == 'true'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    # A normal deploy takes a few minutes; `railway up` has been known to hang.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install -g @railway/cli@5.63.1
+      # Uploads the checked-out tree; migrations and the seed run when the service starts. --ci waits for the build.
+      - run: railway up --service "${{ vars.RAILWAY_API_SERVICE }}" --ci
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  deploy-web:
+    name: Deploy web (Vercel)
+    needs: [ci]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -65,7 +92,40 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install -g @railway/cli
-      - run: railway up --service audit-differently
+      # The project's settings (root apps/web, Vite, Node 22, its environment variables) live in Vercel; this
+      # uploads the tree and Vercel builds it.
+      - run: npx vercel@latest deploy --prod --yes --token "${{ secrets.VERCEL_TOKEN }}"
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+
+  # Proves the three pieces work together after a deploy: the API answers, the site answers, and the API accepts
+  # the site's origin (a wrong origin list is what breaks sign-in).
+  smoke-test:
+    name: Smoke test (API, web, CORS)
+    needs: [deploy-api, deploy-web]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: API is healthy
+        run: |
+          for i in $(seq 1 30); do
+            body=$(curl -fsS --max-time 10 "${{ vars.API_URL }}/api/health" || true)
+            echo "$body" | grep -q '"status":"ok"' && { echo "$body"; exit 0; }
+            sleep 10
+          done
+          echo "API did not become healthy"; exit 1
+      - name: Web serves the app and its public pages
+        run: |
+          for path in / /privacy/ /terms/ /release-notes/; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${{ vars.WEB_URL }}$path")
+            echo "$path -> $code"
+            [ "$code" = "200" ] || exit 1
+          done
+      - name: API accepts the web origin and refuses another
+        run: |
+          ok=$(curl -s -D - -o /dev/null -H "Origin: ${{ vars.WEB_URL }}" "${{ vars.API_URL }}/api/health" | grep -ci "access-control-allow-origin: ${{ vars.WEB_URL }}")
+          bad=$(curl -s -D - -o /dev/null -H "Origin: https://evil.example" "${{ vars.API_URL }}/api/health" | grep -ci "access-control-allow-origin")
+          echo "web origin allowed: $ok, foreign origin allowed: $bad"
+          [ "$ok" -ge 1 ] && [ "$bad" -eq 0 ]
