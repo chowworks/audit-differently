@@ -42,15 +42,15 @@ Migrations are shared the same way: `db:migrate` applies yours for everyone.
 ## The demo people
 
 The seed makes two fictional workspaces. Sign in as one of these people (they exist in the dev Clerk instance
-with these emails; the first sign-in takes over the seeded seat). An owner can give their own address Sam's
-seat with `SEED_OWNER_EMAIL` in a laptop's `.env`.
+with these emails; the first sign-in takes over the seeded seat). Sam's seat is the
+test account `test@chowworks.com`.
 
-| Person        | Email                           | Role                  | Sees                                                                                               |
-| ------------- | ------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------- |
-| Dana Okafor   | dana.okafor@riverbend.example   | bookkeeper, Riverbend | Riverbend's engagement: July approved, August submitted, September draft with five blocking checks |
-| Sam Whitfield | sam.whitfield@riverbend.example | owner, Riverbend      | The same, plus personal documents, the people and the lists of the workspace                       |
-| Jules Park    | jules.park@riverbend.example    | auditor, Riverbend    | Everything in Riverbend, read-only, personal documents included                                    |
-| Lee Tanaka    | lee.tanaka@harbortech.example   | bookkeeper, Harbor    | Only Harbor Tech's workspace: an engagement missing its proposal and narrative                     |
+| Person        | Email                         | Role                  | Sees                                                                                               |
+| ------------- | ----------------------------- | --------------------- | -------------------------------------------------------------------------------------------------- |
+| Dana Okafor   | dana.okafor@riverbend.example | bookkeeper, Riverbend | Riverbend's engagement: July approved, August submitted, September draft with five blocking checks |
+| Sam Whitfield | test@chowworks.com            | owner, Riverbend      | The same, plus personal documents, the people and the lists of the workspace                       |
+| Jules Park    | jules.park@riverbend.example  | auditor, Riverbend    | Everything in Riverbend, read-only, personal documents included                                    |
+| Lee Tanaka    | lee.tanaka@harbortech.example | bookkeeper, Harbor    | Only Harbor Tech's workspace: an engagement missing its proposal and narrative                     |
 
 The story: as Dana, the overview says September is owed and lists what is missing. Open the engagement:
 steps 1 to 4 are on file (proposal, award letter, narrative, contract), July and August are signed and in,
