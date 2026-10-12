@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    name: Lint, Typecheck, Build, Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      # The real reference documents must never be in the tree (CLAUDE.md, "Data rules").
+      - run: '! git ls-files | grep -E "^(Financial Reporting|docs/private)/"'
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test
+
+  # Railway is declared in .railway/railway.ts and applied on every push to main, once the project exists:
+  # set the repository variable RAILWAY_PROJECT_READY=true and the secret RAILWAY_TOKEN (a project token). The
+  # Vercel deploy of apps/web is added the same way once that project exists.
+  railway-config:
+    name: Apply Railway config (.railway/railway.ts)
+    needs: [ci]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.RAILWAY_PROJECT_READY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The railway SDK (root devDependency) evaluates .railway/railway.ts.
+      - run: npm install
+      - run: npm install -g @railway/cli@5.63.1
+      - run: railway config plan --verbose
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      # No --confirm-destructive: a plan that deletes anything fails here.
+      - run: railway config apply --yes
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  deploy-api:
+    name: Deploy API (Railway)
+    needs: [ci, railway-config]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.RAILWAY_PROJECT_READY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install -g @railway/cli
+      - run: railway up --service audit-differently
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

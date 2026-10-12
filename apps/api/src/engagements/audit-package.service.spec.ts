@@ -1,0 +1,345 @@
+import { NotFoundException } from '@nestjs/common'
+import { strFromU8, unzipSync } from 'fflate'
+import type { Role } from '@ad/types'
+import type { Caller } from '../core/caller'
+import { AuditPackageService } from './audit-package.service'
+
+/**
+ * The zip is laid out the way the funder's own package is (see the README it writes). These cases pin that
+ * layout: folder names, file names, the CSVs, what a statement shared by several lines does, and what a
+ * bookkeeper's copy leaves out.
+ */
+const W = 'ws-1'
+const doc = (id: string, fileName: string, kind: string, extra: Partial<Doc> = {}): Doc => ({
+  id,
+  workspaceId: W,
+  engagementId: 'e-1',
+  storageKey: `${W}/e-1/general/${id}`,
+  fileName,
+  kind,
+  sensitivity: 'financial',
+  period: null,
+  uploadedAt: new Date('2026-10-01T00:00:00Z'),
+  ...extra,
+})
+type Doc = {
+  id: string
+  workspaceId: string
+  engagementId: string | null
+  storageKey: string
+  fileName: string
+  kind: string
+  sensitivity: string
+  period: string | null
+  uploadedAt: Date
+}
+
+const statement = doc('d-stmt', '2026-09 Bank Statement.pdf', 'bank-statement')
+const register = doc('d-reg', 'RYS-13 payroll register.pdf', 'payroll-register')
+const timesheet = doc('d-ts', 'RYS-13 timesheets.pdf', 'timesheet')
+const stub = doc('d-stub', 'Jordan pay stub.pdf', 'pay-stub', { sensitivity: 'personal' })
+
+const engagement = () => ({
+  id: 'e-1',
+  workspaceId: W,
+  name: 'Coding Pathway',
+  number: 'DEMO-1',
+  funder: 'Demo Workforce Board',
+  periodStart: new Date('2026-07-01T00:00:00Z'),
+  periodEnd: new Date('2027-06-30T00:00:00Z'),
+  awardAmount: 125000,
+  preparerName: 'Dana Okafor',
+  preparerOrganization: null,
+  authorizerName: 'Sam Whitfield',
+  authorizerOrganization: 'Riverbend Youth Services',
+  waivers: { 'budget-narrative': 'this funder does not use one' },
+  eligibilityItems: [
+    { key: 'enrollment-form', label: 'Enrollment form', required: true },
+    { key: 'proof-of-age', label: 'Proof of age', required: true },
+  ],
+  workspace: { name: 'Riverbend Youth Services' },
+  documents: [
+    doc('d-prop', 'proposal.pdf', 'proposal'),
+    doc('d-award', 'award.pdf', 'award-letter'),
+    doc('d-contract', 'contract.pdf', 'contract'),
+    doc('d-letter', 'to the auditors.pdf', 'audit-letter'),
+    doc('d-memo', 'memo.pdf', 'other'),
+    doc('d-signed', 'signed Sep.pdf', 'signed-report', { period: '2026-09' }),
+  ],
+  monthlyReports: [
+    {
+      period: '2026-09',
+      expenses: [
+        {
+          itemNumber: 'RYS-11',
+          date: new Date('2026-09-02T00:00:00Z'),
+          vendor: 'Ledger & Co.',
+          memo: 'Monthly accounting',
+          account: '60701',
+          totalCost: 3000,
+          allocatedAmount: 555,
+          allocationType: 'payroll',
+          allocationNote: '18.5% of payroll hours',
+          reportLine: 'program-costs',
+          documents: [
+            { purpose: 'invoice', document: doc('d-inv11', 'inv 11.pdf', 'invoice') },
+            { purpose: 'payment', document: statement },
+            {
+              purpose: 'allocation',
+              document: doc('d-alloc11', 'alloc 11.xlsx', 'allocation-calculation'),
+            },
+          ],
+        },
+        {
+          itemNumber: 'RYS-16',
+          date: new Date('2026-09-09T00:00:00Z'),
+          vendor: 'Northline Computers',
+          memo: null,
+          account: null,
+          totalCost: 5200,
+          allocatedAmount: 5200,
+          allocationType: 'direct',
+          allocationNote: null,
+          reportLine: 'program-costs',
+          documents: [
+            { purpose: 'invoice', document: doc('d-inv16', 'inv 16.pdf', 'invoice') },
+            { purpose: 'payment', document: statement },
+          ],
+        },
+        {
+          itemNumber: 'RYS-13',
+          date: new Date('2026-09-25T00:00:00Z'),
+          vendor: 'PayPeople Payroll',
+          memo: 'Work experience wages',
+          account: '63103',
+          totalCost: 280,
+          allocatedAmount: 280,
+          allocationType: 'direct',
+          allocationNote: null,
+          reportLine: 'wex',
+          documents: [
+            { purpose: 'timesheet', document: timesheet },
+            { purpose: 'register', document: register },
+          ],
+        },
+      ],
+      wexPayments: [
+        {
+          payPeriodStart: new Date('2026-09-07T00:00:00Z'),
+          payPeriodEnd: new Date('2026-09-20T00:00:00Z'),
+          hours: 20,
+          grossAmount: 280,
+          participant: { displayName: 'Jordan Sample', participantId: '900001' },
+          documents: [
+            { purpose: 'timesheet', document: timesheet },
+            { purpose: 'register', document: register },
+            { purpose: 'payment', document: stub },
+          ],
+        },
+      ],
+    },
+  ],
+  participants: [
+    {
+      participantId: '900001',
+      displayName: 'Jordan Sample',
+      enrollmentStatus: 'new',
+      currentStatus: 'active',
+      documents: [
+        {
+          purpose: 'enrollment-form',
+          document: doc('d-enr', 'Jordan enrollment.pdf', 'enrollment-form', {
+            sensitivity: 'personal',
+          }),
+        },
+        {
+          purpose: 'proof-of-age',
+          document: doc('d-age', 'Jordan birth certificate.pdf', 'eligibility-record', {
+            sensitivity: 'personal',
+          }),
+        },
+      ],
+    },
+    {
+      participantId: '900002',
+      displayName: 'Riley Example',
+      enrollmentStatus: 'carryover',
+      currentStatus: 'offboarded',
+      documents: [
+        {
+          purpose: 'enrollment-form',
+          document: doc('d-enr2', 'Riley enrollment.pdf', 'enrollment-form', {
+            sensitivity: 'personal',
+          }),
+        },
+      ],
+    },
+  ],
+})
+
+const caller = (role: Role): Caller => ({
+  userId: `u-${role}`,
+  displayName: `The ${role}`,
+  memberships: [{ workspaceId: W, workspaceName: 'Riverbend Youth Services', role }],
+  workspaceIds: [W],
+})
+
+const build = async (role: Role) => {
+  const prisma = { engagement: { findFirst: jest.fn().mockResolvedValue(engagement()) } }
+  const log = { log: jest.fn().mockResolvedValue(undefined) }
+  const storage = {
+    read: jest.fn(async (key: string) => Buffer.from(`bytes of ${key}`)),
+    upload: jest.fn(),
+    getSignedUrl: jest.fn(),
+    delete: jest.fn(),
+  }
+  // The service only touches engagement.findFirst, log.log and storage.read.
+  const service = new AuditPackageService(prisma as never, log as never, storage)
+  const out = await service.build(caller(role), 'e-1')
+  const entries = unzipSync(new Uint8Array(out.bytes))
+  const root = 'Coding Pathway (DEMO-1)'
+  const paths = Object.keys(entries).map((p) => p.slice(root.length + 1))
+  const text = (path: string) => strFromU8(entries[`${root}/${path}`]!)
+  return { out, paths, text, log }
+}
+
+const MONTH = 'Months/September 2026 - $6,035.00'
+
+describe('AuditPackageService', () => {
+  it('lays the owner copy out like the funder package', async () => {
+    const { out, paths, text, log } = await build('owner')
+    expect(out.name).toBe('Coding Pathway (DEMO-1) - audit package.zip')
+    expect(out.personal).toBe(true)
+
+    // Root: the letter, the lists, the README and the index.
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'Letter to the auditors - to the auditors.pdf',
+        'Engagement records/01 Proposal - proposal.pdf',
+        'Engagement records/02 Award letter - award.pdf',
+        'Engagement records/04 Contract - contract.pdf',
+        'Other records/memo.pdf',
+        'Participants.csv',
+        'README.txt',
+        'Index.csv',
+      ])
+    )
+
+    // The month: named with the amount billed; signed report, ledger, flat program-cost files.
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        `${MONTH}/Signed report - signed Sep.pdf`,
+        `${MONTH}/Ledger.csv`,
+        `${MONTH}/Payroll.csv`,
+        `${MONTH}/Program Costs/RYS-11 - Ledger & Co. - $555.00 - 09.02.26 - Invoice.pdf`,
+        `${MONTH}/Program Costs/RYS-11 - Ledger & Co. - $555.00 - 09.02.26 - Allocation worksheet.xlsx`,
+        `${MONTH}/Program Costs/RYS-16 - Northline Computers - $5,200.00 - 09.09.26 - Invoice.pdf`,
+        `${MONTH}/Proof of Purchase - Bank Statements/2026-09 Bank Statement.pdf`,
+        `${MONTH}/Payroll and Timesheet Reports/RYS-13 payroll register.pdf`,
+        `${MONTH}/Payroll and Timesheet Reports/RYS-13 timesheets.pdf`,
+        `${MONTH}/WEX Documentation/Jordan Sample (900001)/Payroll Verification/Evidence of payment - Jordan pay stub.pdf`,
+      ])
+    )
+    // A statement shared by two lines is filed once, not once per line.
+    expect(paths.filter((p) => p.includes('Bank Statement'))).toHaveLength(1)
+    expect(paths.filter((p) => p.includes('payroll register'))).toHaveLength(1)
+    expect(paths.some((p) => p.includes('Program Costs/RYS-13'))).toBe(false)
+
+    // The ledger names every file behind a line, the shared statement included.
+    const ledger = text(`${MONTH}/Ledger.csv`).split('\r\n')
+    expect(ledger[0]).toBe(
+      '"Item #","Date","Vendor","Memo","Account","Total cost","Allocated","Allocation type","Allocation note","Report line","Files"'
+    )
+    expect(ledger[1]).toContain(
+      '"RYS-11","2026-09-02","Ledger & Co.","Monthly accounting","60701","3000.00","555.00","payroll","18.5% of payroll hours","program-costs"'
+    )
+    expect(ledger[1]).toContain('Proof of Purchase - Bank Statements/2026-09 Bank Statement.pdf')
+    expect(ledger[3]).toContain('Payroll and Timesheet Reports/RYS-13 payroll register.pdf')
+
+    const payroll = text(`${MONTH}/Payroll.csv`).split('\r\n')
+    expect(payroll[1]).toContain(
+      '"Jordan Sample","900001","2026-09-07","2026-09-20","20.00","280.00"'
+    )
+    expect(payroll[1]).toContain('Payroll Verification/Evidence of payment - Jordan pay stub.pdf')
+
+    // Every participant on the list; the eligibility folder for the roles that may open it.
+    const list = text('Participants.csv').split('\r\n')
+    expect(list[0]).toBe(
+      '"Participant id","Name","Beginning enrollment status","Current status","Eligibility file"'
+    )
+    expect(list[1]).toBe('"900001","Jordan Sample","new","active","complete"')
+    expect(list[2]).toBe(
+      '"900002","Riley Example","carryover","offboarded","missing: Proof of age"'
+    )
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'Participant Eligibility and Enrollment Forms/Jordan Sample - 900001/Enrollment form - Jordan enrollment.pdf',
+        'Participant Eligibility and Enrollment Forms/Jordan Sample - 900001/Proof of age - Jordan birth certificate.pdf',
+        'Participant Eligibility and Enrollment Forms/Riley Example - 900002 - offboarded/Enrollment form - Riley enrollment.pdf',
+      ])
+    )
+
+    // README: the layout and the records never issued; no list of the team's open checks.
+    const readme = text('README.txt')
+    expect(readme).toContain('Authorized by: Sam Whitfield, Riverbend Youth Services')
+    expect(readme).toContain('budget-narrative: this funder does not use one')
+    expect(readme).toContain('Participant Eligibility and Enrollment Forms/')
+    expect(readme).not.toContain('CHECKS STILL OPEN')
+
+    // The index carries the amount of each line.
+    const index = text('Index.csv').split('\r\n')
+    expect(index[0]).toBe(
+      '"Step","Month","Item","Vendor or participant","Purpose","Amount","Document type","File","Uploaded"'
+    )
+    expect(index.find((l) => l.includes('"RYS-16"'))).toContain(
+      '"06 Monthly ledger and proof","September 2026","RYS-16","Northline Computers","Invoice","5200.00"'
+    )
+
+    // Every download is logged as an export.
+    expect(log.log).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-owner' }),
+      expect.objectContaining({ workspaceId: W, resource: 'export', action: 'export' })
+    )
+    expect(out.files).toBe(paths.length - 5) // README, Index, Participants, Ledger, Payroll are generated
+  })
+
+  it('leaves personal records out of a bookkeeper copy and says so', async () => {
+    const { out, paths, text } = await build('bookkeeper')
+    expect(out.personal).toBe(false)
+    expect(paths.some((p) => p.startsWith('Participant Eligibility'))).toBe(false)
+    expect(paths.some((p) => p.includes('pay stub'))).toBe(false)
+    // The list, the ledger and the month-level registers stay: they are not personal records.
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'Participants.csv',
+        `${MONTH}/Payroll.csv`,
+        `${MONTH}/Payroll and Timesheet Reports/RYS-13 payroll register.pdf`,
+      ])
+    )
+    expect(text('README.txt')).toContain('are personal records and are not in this copy')
+  })
+
+  it('gives an auditor the personal records', async () => {
+    const { out, paths } = await build('auditor')
+    expect(out.personal).toBe(true)
+    expect(paths.some((p) => p.startsWith('Participant Eligibility'))).toBe(true)
+  })
+
+  it('asks only for the caller workspaces, and answers 404 for an engagement of another one', async () => {
+    const prisma = { engagement: { findFirst: jest.fn().mockResolvedValue(null) } }
+    const log = { log: jest.fn() }
+    const storage = {
+      read: jest.fn(),
+      upload: jest.fn(),
+      getSignedUrl: jest.fn(),
+      delete: jest.fn(),
+    }
+    const service = new AuditPackageService(prisma as never, log as never, storage)
+    await expect(service.build(caller('owner'), 'e-other')).rejects.toThrow(NotFoundException)
+    expect(prisma.engagement.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'e-other', workspaceId: { in: [W] } } })
+    )
+    expect(storage.read).not.toHaveBeenCalled()
+    expect(log.log).not.toHaveBeenCalled()
+  })
+})
