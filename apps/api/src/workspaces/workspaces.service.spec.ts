@@ -1,7 +1,9 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
-import { TERMS_VERSION, type Role } from '@ad/types'
+import type { Role } from '@ad/types'
 import { member, OTHER, scoped, stranger, W } from '../core/testing/callers'
 import { WorkspacesService } from './workspaces.service'
+
+const TERMS_VERSION = 'abcdef0123456789'
 
 /** Who may do what to a workspace: its members read it, owners run it, nobody outside sees it. */
 const workspace = () => ({
@@ -55,7 +57,11 @@ function service() {
     prisma.suggestion.create,
     prisma.user.create,
   ]
-  return { service: new WorkspacesService(prisma as never), prisma, writes }
+  return {
+    service: new WorkspacesService(prisma as never, { version: TERMS_VERSION } as never),
+    prisma,
+    writes,
+  }
 }
 
 const invite = { email: 'jules@example.org', role: 'auditor' as Role }

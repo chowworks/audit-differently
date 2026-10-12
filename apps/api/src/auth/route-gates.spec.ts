@@ -3,6 +3,7 @@ import { RequestMethod } from '@nestjs/common'
 import { GUARDS_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { AppModule } from '../app.module'
 import { AuthenticatedGuard } from './authenticated.guard'
+import { SKIP_TERMS_GATE } from './skip-terms-gate.decorator'
 
 /**
  * Every HTTP route of the API, read from the controllers' decorators, and whether AuthenticatedGuard applies
@@ -28,8 +29,8 @@ const join = (...parts: (string | undefined)[]) =>
     .join('/')
 
 /** Each route as "GET /api/path", with whether the guard runs for it (on the class or the handler). */
-function routes(): { route: string; gated: boolean }[] {
-  const out: { route: string; gated: boolean }[] = []
+function routes(): { route: string; gated: boolean; skipsTerms: boolean }[] {
+  const out: { route: string; gated: boolean; skipsTerms: boolean }[] = []
   for (const ctrl of controllersOf(AppModule as unknown as Ctor)) {
     const base = Reflect.getMetadata(PATH_METADATA, ctrl) as string | undefined
     const classGuards = (Reflect.getMetadata(GUARDS_METADATA, ctrl) ?? []) as unknown[]
@@ -46,6 +47,10 @@ function routes(): { route: string; gated: boolean }[] {
       out.push({
         route: `${RequestMethod[method]} ${join('api', base, path)}`,
         gated: guards.includes(AuthenticatedGuard),
+        skipsTerms: !!(
+          Reflect.getMetadata(SKIP_TERMS_GATE, handler) ??
+          Reflect.getMetadata(SKIP_TERMS_GATE, ctrl)
+        ),
       })
     }
   }
@@ -61,9 +66,13 @@ const PUBLIC = [
   'GET /api/documents/local/:token',
 ]
 
+/** The gated routes a person who has not accepted the current Terms may still call: the Terms screen's own. */
+const OPEN_BEFORE_TERMS = ['GET /api/me', 'POST /api/me/terms']
+
 /** Every other route. A member of another workspace gets 404 from each; the role checks are in the specs beside each service. */
 const GATED = [
   'GET /api/me',
+  'POST /api/me/terms',
   'GET /api/workspaces',
   'POST /api/workspaces',
   'GET /api/workspaces/:id',
@@ -127,5 +136,14 @@ describe('route gates', () => {
   it('guards each listed route', () => {
     const gated = new Set(all.filter((r) => r.gated).map((r) => r.route))
     for (const route of GATED) expect([route, gated.has(route)]).toEqual([route, true])
+  })
+
+  it('asks for accepted Terms on every gated route but the two the Terms screen needs', () => {
+    expect(
+      all
+        .filter((r) => r.gated && r.skipsTerms)
+        .map((r) => r.route)
+        .sort()
+    ).toEqual([...OPEN_BEFORE_TERMS].sort())
   })
 })

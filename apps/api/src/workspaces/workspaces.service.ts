@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto'
 import {
   WRITE_ROLES,
   DEFAULT_FUNDING_SOURCES,
-  TERMS_VERSION,
   ROLES,
   type ActivityEntry,
   type Role,
@@ -12,6 +11,7 @@ import {
   type WorkspaceDto,
   type WorkspaceMemberDto,
 } from '@ad/types'
+import { TermsService } from '../auth/terms.service'
 import { allow, workspaceRole, type Caller } from '../core/caller'
 import { runAsSystem } from '../core/tenant-context'
 import { PrismaService } from '../prisma/prisma.service'
@@ -23,7 +23,10 @@ import { PrismaService } from '../prisma/prisma.service'
  */
 @Injectable()
 export class WorkspacesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly terms: TermsService
+  ) {}
 
   private readonly include = {
     _count: { select: { memberships: true, engagements: true } },
@@ -130,7 +133,7 @@ export class WorkspacesService {
   ): Promise<WorkspaceDetail> {
     const clean = name?.trim()
     if (!clean) throw new BadRequestException('A workspace needs a name')
-    if (acceptedTermsVersion !== TERMS_VERSION)
+    if (acceptedTermsVersion !== this.terms.version)
       throw new BadRequestException('Accept the current terms to create a workspace')
     // The creator is not a member yet, so they could neither read the workspace back nor give themselves the
     // first membership; both are the one trusted step (migrations 20261011000400 and ..0500).
@@ -139,7 +142,7 @@ export class WorkspacesService {
         data: {
           name: clean,
           fundingSources: DEFAULT_FUNDING_SOURCES,
-          termsVersion: TERMS_VERSION,
+          termsVersion: this.terms.version,
           termsAcceptedAt: new Date(),
           termsAcceptedById: caller.userId,
         },

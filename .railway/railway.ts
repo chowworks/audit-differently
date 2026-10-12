@@ -76,7 +76,10 @@ export default defineRailway((ctx) => {
   const PostgresPITR = bucket('Postgres-PITR', { region: 'iad' })
   const api = service('audit-differently', {
     source: github('chowworks/audit-differently', { checkSuites: true }),
-    build: { ...build, watchPatterns: ['apps/api/**', 'packages/types/**', 'package*.json'] },
+    build: {
+      ...build,
+      watchPatterns: ['apps/api/**', 'packages/types/**', 'docs/terms/**', 'package*.json'],
+    },
     start: `${migrate} && node apps/api/dist/main.js`,
     deploy: { restartPolicyMaxRetries: 3 },
     replicas: { [REGION]: 1 },

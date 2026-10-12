@@ -5,7 +5,7 @@ import { useApi, useLoad } from '@/hooks/useApi'
 import { Button, Empty, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
 import { DeleteModal } from '@/components/DeleteModal'
 import { TermsBox } from '@/components/TermsBox'
-import { TERMS_VERSION } from '@ad/types'
+import { useTermsVersion } from '@/auth/me'
 import { HandCard } from '@/components/HandCard'
 
 const roleLabel = (role: Role | null) => (role ? ROLE_LABELS[role] : null)
@@ -128,6 +128,7 @@ function NewWorkspaceModal({
   onCreated: (w: WorkspaceDetail) => void
 }) {
   const api = useApi()
+  const termsVersion = useTermsVersion()
   const [name, setName] = useState('')
   const [accepted, setAccepted] = useState(false)
   const [readAll, setReadAll] = useState(false)
@@ -141,7 +142,7 @@ function NewWorkspaceModal({
       onCreated(
         await api.post<WorkspaceDetail>('/workspaces', {
           name,
-          acceptedTermsVersion: TERMS_VERSION,
+          acceptedTermsVersion: termsVersion,
         })
       )
     } catch (e) {
