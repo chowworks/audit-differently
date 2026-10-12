@@ -9,6 +9,8 @@ import {
 import { AccessLogService } from '../core/access-log.service'
 import { keyInWorkspace } from '../documents/documents.service'
 import { eligibilityItemsOf } from './eligibility'
+import { zipEntries, type ZipSource } from './zip-stream'
+import { splitParts, streamPart, type ExportObject, type PartLayout } from './export-parts'
 import { tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { PrismaService } from '../prisma/prisma.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
@@ -34,7 +36,7 @@ const MONTH_SHARED: Record<string, string> = {
 }
 
 const purposeLabel = (p: string) => DOCUMENT_PURPOSE_LABELS[p as DocumentPurpose] ?? p
-const safe = (s: string) =>
+export const safe = (s: string) =>
   s
     .replace(/[\\/:*?"<>|]+/g, '-')
     .replace(/\s+/g, ' ')
@@ -60,7 +62,7 @@ const monthName = (period: string) => {
     timeZone: 'UTC',
   })
 }
-const csv = (rows: (string | number)[][]) =>
+export const csv = (rows: (string | number)[][]) =>
   rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n')
 
 type Doc = {
@@ -69,6 +71,7 @@ type Doc = {
   fileName: string
   kind: string
   uploadedAt: Date
+  size: number
   workspaceId: string
   engagementId: string | null
 }
@@ -88,18 +91,27 @@ export class AuditPackageService {
     @Inject(DOCUMENT_STORAGE) private readonly storage: DocumentStorage
   ) {}
 
-  async build(
+  /**
+   * Works out every file of the package without fetching any stored object: the text files are made here, each
+   * stored object is a key to fetch when it is written. `complete` is the copy taken before an engagement is
+   * deleted: it also files whatever the layout does not reach (a document attached to nothing) under Unfiled
+   * records, and adds the budget, the months' status and the checks as CSVs, so nothing the owner may see is lost.
+   */
+  async plan(
     caller: Caller,
-    engagementId: string
-  ): Promise<{ name: string; bytes: Buffer; files: number; personal: boolean }> {
+    engagementId: string,
+    options: { complete?: boolean } = {}
+  ): Promise<PackagePlan> {
     const c = await this.prisma.engagement.findFirst({
       where: { id: engagementId, ...tenantWhere(caller) },
       include: {
         workspace: true,
         documents: { orderBy: { uploadedAt: 'asc' } },
+        budgetLines: { orderBy: { sortOrder: 'asc' } },
         monthlyReports: {
           orderBy: { period: 'asc' },
           include: {
+            checks: true,
             expenses: {
               orderBy: [{ date: 'asc' }, { itemNumber: 'asc' }],
               include: { documents: { include: { document: true } } },
@@ -119,7 +131,9 @@ export class AuditPackageService {
     if (!c) throw new NotFoundException()
     const personal = workspaceRole(caller, c.workspaceId, [...PERSONAL_DOCUMENT_ROLES] as Role[])
     const root = safe(`${c.name}${c.number ? ` (${c.number})` : ''}`)
-    const files: Zippable = {}
+    const files: Record<string, Uint8Array> = {}
+    const objects: ExportObject[] = []
+    const placedDocs = new Set<string>()
     const index: (string | number)[][] = [
       [
         'Step',
@@ -153,7 +167,8 @@ export class AuditPackageService {
       while (seen.has(path)) path = `${root}/${relPath.replace(/(\.[^.]+)?$/, ` (${n++})$1`)}`
       seen.add(path)
       if (!keyInWorkspace(doc)) throw new NotFoundException()
-      files[path] = new Uint8Array(await this.storage.read(doc.storageKey))
+      objects.push([path, doc.storageKey, doc.size ?? 0])
+      placedDocs.add(doc.id)
       count++
       index.push([
         meta.step,
@@ -344,6 +359,75 @@ export class AuditPackageService {
     }
     files[`${root}/Participants.csv`] = strToU8(csv(list))
 
+    if (options.complete) {
+      // Anything the layout above did not reach, so a deletion loses no stored file the owner may see.
+      for (const d of c.documents) {
+        if (placedDocs.has(d.id) || (d.sensitivity === 'personal' && !personal)) continue
+        await add(`Unfiled records/${safe(d.fileName)}`, d, {
+          step: 'Unfiled records',
+          month: d.period ? monthName(d.period) : '',
+        })
+      }
+      files[`${root}/Budget.csv`] = strToU8(
+        csv([
+          ['Category', 'Report line', 'Amount', 'Narrative'],
+          ...c.budgetLines.map((b) => [
+            b.category,
+            b.reportLine,
+            Number(b.amount).toFixed(2),
+            b.narrative ?? '',
+          ]),
+        ])
+      )
+      files[`${root}/Months.csv`] = strToU8(
+        csv([
+          [
+            'Month',
+            'Status',
+            'Due',
+            'Submitted',
+            'Prepared by',
+            'Authorized by',
+            'Authorized',
+            'Funder review',
+            'Denied reason',
+            'Comments',
+            'Final',
+          ],
+          ...c.monthlyReports.map((r) => [
+            r.period,
+            r.status,
+            day(r.dueDate),
+            r.submittedAt ? day(r.submittedAt) : '',
+            r.preparedByName ?? '',
+            r.authorizedByName ?? '',
+            r.authorizedAt ? day(r.authorizedAt) : '',
+            r.review ? JSON.stringify(r.review) : '',
+            r.deniedReason ?? '',
+            r.comments ?? '',
+            r.isFinal ? 'yes' : 'no',
+          ]),
+        ])
+      )
+      files[`${root}/Checks.csv`] = strToU8(
+        csv([
+          ['Month', 'Code', 'Severity', 'Source', 'Message', 'Status', 'Resolution', 'Resolved'],
+          ...c.monthlyReports.flatMap((r) =>
+            r.checks.map((k) => [
+              r.period,
+              k.code,
+              k.severity,
+              k.source,
+              k.message,
+              k.status,
+              k.resolution ?? '',
+              k.resolvedAt ? day(k.resolvedAt) : '',
+            ])
+          ),
+        ])
+      )
+    }
+
     const readme = [
       `AUDIT PACKAGE: ${c.name}${c.number ? ` (${c.number})` : ''}`,
       `Workspace: ${c.workspace.name}`,
@@ -374,6 +458,15 @@ export class AuditPackageService {
         : '                           of the workspace can produce a package that holds them.',
       '  Other records/           anything else the team kept with this engagement',
       '  Index.csv                every file in this package with its step, month, item, purpose and amount',
+      ...(options.complete
+        ? [
+            '  Unfiled records/         records kept with this engagement that no step above reaches',
+            "  Budget.csv, Months.csv, Checks.csv  the approved budget, each month's status and funder review,",
+            '                           and every check finding with how it was resolved',
+            '',
+            'This is the full copy taken before the engagement was deleted.',
+          ]
+        : []),
       '',
       'RECORDS THAT DO NOT EXIST FOR THIS ENGAGEMENT',
       ...(Object.keys(waivers).length
@@ -384,19 +477,79 @@ export class AuditPackageService {
     files[`${root}/README.txt`] = strToU8(readme)
     files[`${root}/Index.csv`] = strToU8(csv(index))
 
-    const bytes = zipSync(files, { level: 6 })
-    await this.log.log(caller, {
-      workspaceId: c.workspaceId,
-      resource: 'export',
-      subjectId: c.id,
-      action: 'export',
-      detail: `audit package, ${count} files${personal ? ', personal records included' : ''}`,
-    })
     return {
       name: `${root} - audit package.zip`,
-      bytes: Buffer.from(bytes),
+      subject: c.name,
+      workspaceId: c.workspaceId,
+      engagementId: c.id,
+      text: files,
+      objects,
       files: count,
       personal,
     }
   }
+
+  /** The package as bytes in memory (the download button): fine for a small engagement. */
+  async build(
+    caller: Caller,
+    engagementId: string
+  ): Promise<{ name: string; bytes: Buffer; files: number; personal: boolean }> {
+    const p = await this.plan(caller, engagementId)
+    const files: Zippable = { ...p.text }
+    for (const [path, key] of p.objects) files[path] = new Uint8Array(await this.storage.read(key))
+    const bytes = zipSync(files, { level: 6 })
+    await this.log.log(caller, {
+      workspaceId: p.workspaceId,
+      resource: 'export',
+      subjectId: p.engagementId,
+      action: 'export',
+      detail: `audit package, ${p.files} files${p.personal ? ', personal records included' : ''}`,
+    })
+    return { name: p.name, bytes: Buffer.from(bytes), files: p.files, personal: p.personal }
+  }
+
+  /** The planned package as zip chunks, one stored object in memory at a time. */
+  stream(plan: PackagePlan): AsyncGenerator<Uint8Array> {
+    const entries: [string, ZipSource][] = [
+      ...Object.entries(plan.text),
+      ...plan.objects.map(([path, key]): [string, ZipSource] => [
+        path,
+        async () => new Uint8Array(await this.storage.read(key)),
+      ]),
+    ]
+    return zipEntries(entries)
+  }
+
+  /** How the plan splits into parts (one part unless it holds more than about 1.5 GB of files). */
+  parts(plan: PackagePlan): PartLayout[] {
+    return splitParts(plan)
+  }
+
+  /** Part `n` of the layout as zip chunks, one stored object in memory at a time. */
+  streamPart(plan: PackagePlan, layouts: PartLayout[], n: number): AsyncGenerator<Uint8Array> {
+    return streamPart(plan, layouts, n, async (key) => new Uint8Array(await this.storage.read(key)))
+  }
+
+  /** The audit package download is logged as an export, once per part. */
+  async logExport(caller: Caller, plan: PackagePlan, part?: string): Promise<void> {
+    await this.log.log(caller, {
+      workspaceId: plan.workspaceId,
+      resource: 'export',
+      subjectId: plan.engagementId,
+      action: 'export',
+      detail: `audit package${part ? ` (${part})` : ''}, ${plan.files} files${plan.personal ? ', personal records included' : ''}`,
+    })
+  }
+}
+
+/** What `plan` works out: the text files made, and the stored objects to fetch, each at its path in the zip. */
+export interface PackagePlan {
+  name: string
+  subject: string
+  workspaceId: string
+  engagementId: string
+  text: Record<string, Uint8Array>
+  objects: ExportObject[]
+  files: number
+  personal: boolean
 }

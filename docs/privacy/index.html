@@ -108,7 +108,6 @@
         font-weight: 800;
       }
       section {
-        max-width: 720px;
         margin-bottom: 20px;
         padding: 18px 22px;
         background: var(--surface);
@@ -199,7 +198,6 @@
     <main class="wrap">
       <h1><span aria-hidden="true">🔒</span> Privacy and Data Protection</h1>
 
-      <!-- EDIT HERE: the wording of both sections below (draft from the owner). -->
       <section id="protected">
         <h2><span aria-hidden="true">🛡️</span> How your data is protected</h2>
         <p>
@@ -264,6 +262,20 @@
           using the information below.
         </p>
       </section>
+      <section id="retention">
+        <h2><span aria-hidden="true">🗂️</span> Records and retention</h2>
+        <p>
+          Your organization is responsible for the retention of its own records, and for keeping its
+          own copies of everything it must keep to satisfy legal or regulatory requirements. Audit
+          Differently is not liable for data retention.
+        </p>
+        <p>
+          When an owner deletes an engagement or a workspace, it is permanent. We provide a full
+          export first, which the owner must download before the deletion can go ahead. We keep a
+          safety copy of that export for 30 days, only to cover an accidental delete or a failed
+          download, and then it is destroyed.
+        </p>
+      </section>
       <!-- END EDIT HERE -->
 
       <section id="contact">
@@ -276,7 +288,10 @@
     </main>
 
     <footer class="wrap">
-      <p><a href="/release-notes/">Release notes</a> · <a href="/">Back to the app</a></p>
+      <p>
+        <a href="/release-notes/">Release notes</a> · <a href="/terms/">Terms</a> ·
+        <a href="/">Back to the app</a>
+      </p>
     </footer>
   </body>
 </html>

@@ -33,6 +33,8 @@ function service() {
         ...data,
       })),
       delete: jest.fn(),
+      deleteByPrefix: jest.fn(),
+      putFile: jest.fn(),
     },
     engagement: scoped(),
   }
@@ -48,6 +50,8 @@ function service() {
         `signed:${key}:${seconds}:${options?.downloadName ?? (options?.inlineName ? `inline:${options.inlineName}` : 'inline')}`
     ),
     delete: jest.fn().mockResolvedValue(undefined),
+    deleteByPrefix: jest.fn(),
+    putFile: jest.fn(),
     read: jest.fn(),
   }
   return {

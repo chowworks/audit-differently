@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import {
   WRITE_ROLES,
   DEFAULT_FUNDING_SOURCES,
+  TERMS_VERSION,
   ROLES,
   type ActivityEntry,
   type Role,
@@ -34,6 +35,7 @@ export class WorkspacesService {
       id: string
       name: string
       fundingSources: string[]
+      termsAcceptedAt?: Date | null
       _count: { memberships: number; engagements: number }
     }
   ): WorkspaceDto {
@@ -45,6 +47,7 @@ export class WorkspacesService {
       engagementCount: w._count.engagements,
       fundingSources: w.fundingSources.length ? w.fundingSources : DEFAULT_FUNDING_SOURCES,
       canManage: workspaceRole(caller, w.id, ['owner']),
+      termsAcceptedAt: w.termsAcceptedAt?.toISOString() ?? null,
     }
   }
 
@@ -119,15 +122,27 @@ export class WorkspacesService {
     return this.get(caller, id)
   }
 
-  /** A new workspace; whoever creates it owns it. */
-  async create(caller: Caller, name: string): Promise<WorkspaceDetail> {
+  /** A new workspace; whoever creates it owns it, and accepts the current terms doing so (version and time kept). */
+  async create(
+    caller: Caller,
+    name: string,
+    acceptedTermsVersion?: string
+  ): Promise<WorkspaceDetail> {
     const clean = name?.trim()
     if (!clean) throw new BadRequestException('A workspace needs a name')
+    if (acceptedTermsVersion !== TERMS_VERSION)
+      throw new BadRequestException('Accept the current terms to create a workspace')
     // The creator is not a member yet, so they could neither read the workspace back nor give themselves the
     // first membership; both are the one trusted step (migrations 20261011000400 and ..0500).
     const w = await runAsSystem(async () => {
       const made = await this.prisma.workspace.create({
-        data: { name: clean, fundingSources: DEFAULT_FUNDING_SOURCES },
+        data: {
+          name: clean,
+          fundingSources: DEFAULT_FUNDING_SOURCES,
+          termsVersion: TERMS_VERSION,
+          termsAcceptedAt: new Date(),
+          termsAcceptedById: caller.userId,
+        },
       })
       await this.prisma.membership.create({
         data: { userId: caller.userId, workspaceId: made.id, role: 'owner' },

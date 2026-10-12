@@ -47,6 +47,13 @@ personal document). Those stay in the API.
   funder's decision or open a personal document is the application's rule. The access log is written by
   whoever acts, read inside the workspace, and never changed or deleted through the API.
 
+- **A deletion record outlives what it describes.** `DeletionRecord` (who exported and deleted which engagement
+  or workspace, and where our retained copy is) has no foreign keys, so deleting the engagement or the workspace
+  leaves it. Only an owner of its workspace reads, inserts or updates it; nobody deletes it through the API. Its
+  `workspaceId` is named by the row (there is no parent to copy it from, so no `_1_set_tenant`), the policy ties
+  it to a workspace the writer owns, `_3_keep` stops it being re-pointed, and its status only moves forward
+  (exported, downloaded, deleted).
+
 ## How a request works
 
 1. `TenantMiddleware` opens an empty context (`src/core/tenant-context.ts`) for the request.
@@ -63,7 +70,9 @@ personal document). Those stay in the API.
 admit the mark (so a workspace's creator can be made its owner, an invitation can leave a placeholder, and a
 first sign-in can take it over); every other policy treats trusted work like any member of every workspace.
 Keep the list short and reviewed. Trusted work is also the only writer of a `Workspace` row (the creator's
-first membership comes with it), and it deletes `pending-` users only. Prisma reads back every row it inserts
+first membership comes with it), the only deleter of a `Workspace` row (migration `20261012000100`; the API
+checks first that the caller owns an empty workspace; memberships and suggestions go by foreign key, the access
+log has no foreign key and stays), and it deletes `pending-` users only. Prisma reads back every row it inserts
 (`RETURNING`), and Postgres applies the read policy to those rows too, which is why trusted work may read
 `User` and `Workspace`; the database spec inserts with `RETURNING` to keep that true.
 

@@ -3,6 +3,9 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ROLE_LABELS, type Role, type WorkspaceDetail, type WorkspaceDto } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { Button, Empty, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
+import { DeleteModal } from '@/components/DeleteModal'
+import { TermsBox } from '@/components/TermsBox'
+import { TERMS_VERSION } from '@ad/types'
 import { HandCard } from '@/components/HandCard'
 
 const roleLabel = (role: Role | null) => (role ? ROLE_LABELS[role] : null)
@@ -11,6 +14,7 @@ const roleLabel = (role: Role | null) => (role ? ROLE_LABELS[role] : null)
 export function WorkspacesPage() {
   const { data, error, loading, reload } = useLoad<WorkspaceDto[]>('/workspaces')
   const [creating, setCreating] = useState(false)
+  const [deleting, setDeleting] = useState<WorkspaceDto | null>(null)
   const navigate = useNavigate()
   return (
     <>
@@ -67,6 +71,17 @@ export function WorkspacesPage() {
                     Open workspace →
                   </Link>
                 </div>
+                {w.myRole === 'owner' && (
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      className="ad-quiet-delete"
+                      onClick={() => setDeleting(w)}
+                    >
+                      Delete workspace…
+                    </button>
+                  </div>
+                )}
               </div>
             </section>
           ))}
@@ -80,6 +95,17 @@ export function WorkspacesPage() {
           </HandCard>
         </div>
       </div>
+      {deleting && (
+        <DeleteModal
+          target={{ kind: 'workspace', id: deleting.id, name: deleting.name }}
+          engagementsLeft={deleting.engagementCount}
+          onClose={() => setDeleting(null)}
+          onDeleted={async () => {
+            setDeleting(null)
+            await reload()
+          }}
+        />
+      )}
       {creating && (
         <NewWorkspaceModal
           onClose={() => setCreating(false)}
@@ -103,6 +129,8 @@ function NewWorkspaceModal({
 }) {
   const api = useApi()
   const [name, setName] = useState('')
+  const [accepted, setAccepted] = useState(false)
+  const [readAll, setReadAll] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const save = async (ev: React.FormEvent) => {
@@ -110,14 +138,19 @@ function NewWorkspaceModal({
     setBusy(true)
     setError(null)
     try {
-      onCreated(await api.post<WorkspaceDetail>('/workspaces', { name }))
+      onCreated(
+        await api.post<WorkspaceDetail>('/workspaces', {
+          name,
+          acceptedTermsVersion: TERMS_VERSION,
+        })
+      )
     } catch (e) {
       setError((e as Error).message)
       setBusy(false)
     }
   }
   return (
-    <Modal title="New workspace" onClose={onClose}>
+    <Modal title="New workspace" onClose={onClose} wide>
       <form onSubmit={save} className="grid gap-4">
         <ErrorNote message={error} />
         <Field label="Workspace name" hint="Usually your organization's name">
@@ -129,11 +162,35 @@ function NewWorkspaceModal({
             autoFocus
           />
         </Field>
+        <div className="grid gap-2">
+          <span className="text-sm font-semibold">Terms &amp; Conditions</span>
+          <TermsBox onReadAll={() => setReadAll(true)} />
+          {readAll ? (
+            <p className="ad-terms-done">
+              ✓ You have reached the end of the Terms &amp; Conditions.
+            </p>
+          ) : (
+            <p className="ad-terms-scroll" role="status">
+              ↓ Scroll to the bottom of the Terms &amp; Conditions to continue
+            </p>
+          )}
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={accepted}
+              disabled={!readAll}
+              onChange={(e) => setAccepted(e.target.checked)}
+              required
+            />
+            <span>I have read and accept the Terms &amp; Conditions</span>
+          </label>
+        </div>
         <div className="flex justify-end gap-2">
           <Button type="button" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" kind="primary" disabled={busy || !name.trim()}>
+          <Button type="submit" kind="primary" disabled={busy || !name.trim() || !accepted}>
             Create workspace
           </Button>
         </div>

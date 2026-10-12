@@ -192,6 +192,8 @@ const build = async (role: Role) => {
     upload: jest.fn(),
     getSignedUrl: jest.fn(),
     delete: jest.fn(),
+    deleteByPrefix: jest.fn(),
+    putFile: jest.fn(),
   }
   // The service only touches engagement.findFirst, log.log and storage.read.
   const service = new AuditPackageService(prisma as never, log as never, storage)
@@ -333,6 +335,8 @@ describe('AuditPackageService', () => {
       upload: jest.fn(),
       getSignedUrl: jest.fn(),
       delete: jest.fn(),
+      deleteByPrefix: jest.fn(),
+      putFile: jest.fn(),
     }
     const service = new AuditPackageService(prisma as never, log as never, storage)
     await expect(service.build(caller('owner'), 'e-other')).rejects.toThrow(NotFoundException)
@@ -341,5 +345,98 @@ describe('AuditPackageService', () => {
     )
     expect(storage.read).not.toHaveBeenCalled()
     expect(log.log).not.toHaveBeenCalled()
+  })
+})
+
+describe('AuditPackageService: the full copy taken before a deletion', () => {
+  const orphan = doc('d-orphan', 'loose invoice.pdf', 'invoice', { period: '2026-09' })
+  const personalOrphan = doc('d-pers', 'loose id.pdf', 'eligibility-record', {
+    sensitivity: 'personal',
+  })
+  const fixture = () => {
+    const e = engagement()
+    return {
+      ...e,
+      documents: [...e.documents, orphan, personalOrphan],
+      budgetLines: [{ category: 'wex', reportLine: 'wex', amount: 9000, narrative: 'Wages' }],
+      monthlyReports: e.monthlyReports.map((r) => ({
+        ...r,
+        status: 'submitted',
+        dueDate: new Date('2026-10-12T00:00:00Z'),
+        submittedAt: new Date('2026-10-10T00:00:00Z'),
+        preparedByName: 'Dana Okafor',
+        authorizedByName: 'Sam Whitfield',
+        authorizedAt: new Date('2026-10-10T00:00:00Z'),
+        review: { invoiceNumber: 'INV-1' },
+        deniedReason: null,
+        comments: null,
+        isFinal: false,
+        checks: [
+          {
+            code: 'missing-proof',
+            severity: 'attention',
+            source: 'rule',
+            message: 'No invoice',
+            status: 'waived',
+            resolution: 'Vendor closed',
+            resolvedAt: new Date('2026-10-02T00:00:00Z'),
+          },
+        ],
+      })),
+    }
+  }
+  const run = async (role: Role, complete: boolean) => {
+    const prisma = { engagement: { findFirst: jest.fn().mockResolvedValue(fixture()) } }
+    const storage = {
+      read: jest.fn(async (key: string) => Buffer.from(`bytes of ${key}`)),
+    }
+    const service = new AuditPackageService(
+      prisma as never,
+      { log: jest.fn() } as never,
+      storage as never
+    )
+    const plan = await service.plan(caller(role), 'e-1', { complete })
+    const chunks: Uint8Array[] = []
+    for await (const c of service.stream(plan)) chunks.push(c)
+    const zip = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0))
+    let at = 0
+    for (const c of chunks) {
+      zip.set(c, at)
+      at += c.length
+    }
+    return { plan, storage, entries: unzipSync(zip) }
+  }
+  const root = 'Coding Pathway (DEMO-1)'
+
+  it('files what the layout does not reach, and adds the budget, months and checks', async () => {
+    const { entries, plan } = await run('owner', true)
+    const paths = Object.keys(entries).map((p) => p.slice(root.length + 1))
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'Unfiled records/loose invoice.pdf',
+        'Unfiled records/loose id.pdf',
+        'Budget.csv',
+        'Months.csv',
+        'Checks.csv',
+      ])
+    )
+    expect(strFromU8(entries[`${root}/Checks.csv`]!)).toContain('Vendor closed')
+    expect(strFromU8(entries[`${root}/Months.csv`]!)).toContain('INV-1')
+    expect(strFromU8(entries[`${root}/Index.csv`]!)).toContain('Unfiled records')
+    expect(strFromU8(entries[`${root}/README.txt`]!)).toContain('before the engagement was deleted')
+    expect(plan.subject).toBe('Coding Pathway')
+  })
+
+  it('every stored file of the engagement is in the owner copy, and the plain package is unchanged', async () => {
+    const full = await run('owner', true)
+    const stored = new Set(Object.values(full.entries).map((b) => strFromU8(b)))
+    for (const d of fixture().documents) expect(stored).toContain(`bytes of ${d.storageKey}`)
+    const plain = await run('owner', false)
+    expect(Object.keys(plain.entries).some((p) => p.includes('Unfiled'))).toBe(false)
+  })
+
+  it('reads every stored object once while streaming', async () => {
+    const { storage, plan } = await run('owner', true)
+    expect(storage.read).toHaveBeenCalledTimes(plan.objects.length)
   })
 })

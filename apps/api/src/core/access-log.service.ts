@@ -11,7 +11,8 @@ export class AccessLogService {
     caller: Caller,
     entry: {
       workspaceId: string
-      resource: 'engagement' | 'document' | 'expense' | 'report' | 'participant' | 'export'
+      resource:
+        'workspace' | 'engagement' | 'document' | 'expense' | 'report' | 'participant' | 'export'
       subjectId?: string | null
       action:
         | 'read'

@@ -12,6 +12,8 @@ const docs = resolve(__dirname, '../../docs')
 const notesPage = resolve(docs, 'release-notes/index.html')
 // The privacy page (docs/privacy) is published the same way at /privacy/, so it opens before sign-in.
 const privacyPage = resolve(docs, 'privacy/index.html')
+// The terms (docs/terms) the same way, at /terms/.
+const termsPage = resolve(docs, 'terms/index.html')
 const shots = resolve(docs, 'screenshots')
 const SHOTS = /\.\.\/screenshots\/[^"'\s)]+\.(?:png|jpe?g|webp|gif)/g
 
@@ -26,6 +28,8 @@ function publishReleaseNotes(): Plugin {
       copyFileSync(notesPage, resolve(out, 'release-notes/index.html'))
       mkdirSync(resolve(out, 'privacy'), { recursive: true })
       copyFileSync(privacyPage, resolve(out, 'privacy/index.html'))
+      mkdirSync(resolve(out, 'terms'), { recursive: true })
+      copyFileSync(termsPage, resolve(out, 'terms/index.html'))
       for (const shot of page.match(SHOTS) ?? []) {
         const rel = shot.slice('../'.length)
         const from = resolve(docs, rel)
@@ -59,16 +63,17 @@ function serveReleaseNotes(): Plugin {
         } catch {
           return next()
         }
-        if (url === '/release-notes' || url === '/privacy') {
+        if (url === '/release-notes' || url === '/privacy' || url === '/terms') {
           res.writeHead(302, { Location: `${url}/` })
           res.end()
           return
         }
-        // Exactly the notes page, the privacy page and files inside docs/screenshots: nothing else under docs/ (docs/private
+        // Exactly the notes page, the privacy and terms pages and files inside docs/screenshots: nothing else under docs/ (docs/private
         // holds real documents on some machines) is reachable, however the path is spelled.
         let file: string | undefined
         if (url === '/release-notes/' || url === '/release-notes/index.html') file = notesPage
         else if (url === '/privacy/' || url === '/privacy/index.html') file = privacyPage
+        else if (url === '/terms/' || url === '/terms/index.html') file = termsPage
         else if (url.startsWith('/screenshots/')) {
           const candidate = resolve(shots, `.${url.slice('/screenshots'.length)}`)
           if (candidate.startsWith(shots + sep)) file = candidate

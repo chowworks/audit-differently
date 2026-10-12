@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Terms</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <!--
+  DRAFT. The wording to edit is between "EDIT HERE" and "END EDIT HERE" below: nothing else on this page is copy.
+  Static page like the privacy page: the web build copies it to /terms/ (apps/web/vite.config.ts) and the
+  dev server serves the same file, so it opens without signing in. When the wording changes in substance,
+  bump TERMS_VERSION in packages/types. Fictional data only.
+-->
+    <style>
+      :root {
+        --ink: #0b1f2e;
+        --navy: #0b1f2e;
+        --muted: #4a5d6c;
+        --paper: #f6f7f4;
+        --surface: #ffffff;
+        --line: #dfe6ec;
+        --accent: #1a7a42;
+        --brand: #27b35e;
+        --radius: 12px;
+        --header-bg: #0b1f2e;
+        --header-ink: #ffffff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font:
+          15px/1.55 Manrope,
+          system-ui,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: var(--accent);
+      }
+      :focus-visible {
+        outline: 2px solid var(--ink);
+        outline-offset: 3px;
+      }
+      .wrap {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 0 32px;
+      }
+      .top {
+        background: var(--header-bg);
+        color: var(--header-ink);
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px 32px;
+        padding-top: 22px;
+        padding-bottom: 22px;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--header-ink);
+        text-decoration: none;
+      }
+      .wordmark {
+        font-weight: 800;
+        font-size: 20px;
+        letter-spacing: -0.03em;
+      }
+      .slash {
+        color: var(--brand);
+      }
+      .bar nav a {
+        color: var(--header-ink);
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .bar nav a:hover {
+        color: var(--brand);
+      }
+      h1 {
+        margin: 28px 0 16px;
+        font-weight: 800;
+        font-size: 28px;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
+        color: var(--navy);
+      }
+      h2 {
+        margin: 0 0 8px;
+        font-size: 19px;
+        font-weight: 800;
+      }
+      section {
+        margin-bottom: 20px;
+        padding: 18px 22px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+      }
+      section p,
+      section ul {
+        margin: 0 0 10px;
+      }
+      section li {
+        margin-bottom: 4px;
+      }
+      footer {
+        padding-bottom: 40px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      @media (max-width: 640px) {
+        .wrap {
+          padding: 0 16px;
+        }
+        .bar {
+          padding-top: 14px;
+          padding-bottom: 14px;
+        }
+        h1 {
+          font-size: 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="top">
+      <div class="wrap bar">
+        <a class="brand" href="/">
+          <svg width="34" height="34" viewBox="0 0 40 40" aria-hidden="true" focusable="false">
+            <path
+              d="M10 4h20v30l-3.3-2.6-3.4 2.6-3.3-2.6-3.3 2.6-3.4-2.6L10 34z"
+              fill="#0b1f2e"
+              stroke="#ffffff"
+              stroke-width="3"
+              stroke-linejoin="round"
+            />
+            <line
+              x1="15"
+              y1="12"
+              x2="25"
+              y2="12"
+              stroke="#ffffff"
+              stroke-width="2.5"
+              stroke-linecap="round"
+            />
+            <line
+              x1="15"
+              y1="18"
+              x2="25"
+              y2="18"
+              stroke="#ffffff"
+              stroke-width="2.5"
+              stroke-linecap="round"
+            />
+            <line
+              x1="15"
+              y1="24"
+              x2="20"
+              y2="24"
+              stroke="#ffffff"
+              stroke-width="2.5"
+              stroke-linecap="round"
+            />
+            <circle cx="29" cy="29" r="8" fill="#27b35e" stroke="#ffffff" stroke-width="2.5" />
+            <path
+              d="M25 29l3 3 5-6"
+              fill="none"
+              stroke="#ffffff"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span class="wordmark">audit<span class="slash">/</span>differently</span>
+        </a>
+        <nav aria-label="Main"><a href="/">Back to the app</a></nav>
+      </div>
+    </div>
+
+    <main class="wrap">
+      <h1><span aria-hidden="true">📄</span> Terms</h1>
+
+      <!-- EDIT HERE: the wording of the Terms (draft; have it reviewed before relying on it). -->
+      <section id="terms">
+        <h2>1. Who accepts</h2>
+        <p>
+          By creating a workspace, you agree to these terms for your use of Audit Differently. You
+          confirm that you are permitted to use the service for the purposes for which you create
+          the workspace. You are responsible for using the service in accordance with your
+          organization's policies and any applicable requirements.
+        </p>
+        <h2>2. Your records are your responsibility</h2>
+        <p>
+          Audit Differently is a tool for organizing records. Your organization is responsible for
+          determining which records it must retain and for how long, including requirements imposed
+          by funders, contracts, and applicable laws.
+        </p>
+        <p>
+          Your organization is responsible for the retention of its own records, and for keeping its
+          own copies of everything it must keep to satisfy legal or regulatory requirements. Do not
+          rely on Audit Differently as your only copy of any record you are required to retain.
+        </p>
+        <p>
+          Audit Differently is not liable for data retention. It does not assume responsibility for
+          determining your organization's record-retention requirements or for ensuring that your
+          organization meets them.
+        </p>
+        <h2>3. Deleting is permanent</h2>
+        <p>
+          A workspace owner can delete an engagement. Once all engagements have been deleted, the
+          owner can delete the workspace.
+        </p>
+        <p>
+          When an owner deletes an engagement or a workspace, it is permanent. We provide a full
+          export first, which the owner must download before the deletion can go ahead. The owner
+          should open and verify that export before deleting.
+        </p>
+        <p>
+          We keep a safety copy of that export for 30 days, only to cover an accidental delete or a
+          failed download, and then it is destroyed. The safety copy is not an archive or a
+          substitute for keeping your own records. Do not rely on it to recover information after
+          deletion.
+        </p>
+        <h2>4. People and roles</h2>
+        <p>
+          Workspace owners are responsible for deciding who to invite, assigning appropriate roles,
+          and removing access when it is no longer needed.
+        </p>
+        <p>
+          Owners and auditors may be able to view personal records within a workspace. Assign these
+          roles only to people who need that access and are authorized to have it.
+        </p>
+        <p>
+          You are responsible for ensuring that people you invite are permitted to access the
+          information available to them and for reviewing access permissions when circumstances
+          change.
+        </p>
+        <h2>5. Personal records</h2>
+        <p>
+          Personal records, including eligibility records and participant information, are handled
+          as described in our <a href="/privacy/">Privacy and Data Protection</a> page.
+        </p>
+        <p>
+          You must not enter real participant data or other personal information unless your
+          organization is authorized to provide that information to Audit Differently for the
+          intended purpose.
+        </p>
+        <p>
+          You are responsible for ensuring that you have the necessary permissions and legal basis
+          to provide personal information through the service, and that its use is consistent with
+          applicable privacy requirements.
+        </p>
+        <h2>6. Acceptable use</h2>
+        <p>
+          You must use Audit Differently only for lawful purposes and in a way that you are
+          authorized to use it.
+        </p>
+        <p>
+          You must not attempt to access another organization's workspace or information without
+          permission, interfere with the service, or use the service to upload information you are
+          not authorized to share.
+        </p>
+        <h2>7. Availability and changes</h2>
+        <p>
+          We aim to keep Audit Differently available and functioning reliably, but we cannot
+          guarantee uninterrupted access or that the service will always be available without
+          errors.
+        </p>
+        <p>
+          We may update, improve, or change the service from time to time. Where changes materially
+          affect these terms, we will take reasonable steps to communicate the changes.
+        </p>
+        <h2>8. Limitation of responsibility</h2>
+        <p>
+          To the extent permitted by law, Audit Differently is not responsible for losses arising
+          from your organization's failure to retain required records, maintain its own copies,
+          assign appropriate access permissions, or obtain the necessary authorization to provide
+          personal information.
+        </p>
+        <p>Nothing in these terms excludes or limits liability where doing so would be unlawful.</p>
+      </section>
+      <!-- END EDIT HERE -->
+
+      <section id="contact">
+        <h2><span aria-hidden="true">✉️</span> Contact</h2>
+        <p>
+          Questions about these terms:
+          <a href="mailto:info@auditdifferently.tech">info@auditdifferently.tech</a>.
+        </p>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <p>
+        <a href="/release-notes/">Release notes</a> · <a href="/privacy/">Privacy</a> ·
+        <a href="/">Back to the app</a>
+      </p>
+    </footer>
+  </body>
+</html>

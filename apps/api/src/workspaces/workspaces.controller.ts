@@ -18,8 +18,15 @@ export class WorkspacesController {
   }
 
   @Post()
-  async create(@UserId() userId: string, @Body() body: { name: string }): Promise<WorkspaceDetail> {
-    return this.workspaces.create(await this.callers.load(userId), body.name)
+  async create(
+    @UserId() userId: string,
+    @Body() body: { name: string; acceptedTermsVersion?: string }
+  ): Promise<WorkspaceDetail> {
+    return this.workspaces.create(
+      await this.callers.load(userId),
+      body.name,
+      body.acceptedTermsVersion
+    )
   }
 
   @Get(':id')

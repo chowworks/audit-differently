@@ -6,6 +6,7 @@ import { join, relative } from 'node:path'
  * the User/Membership/Workspace policies admit). A new call site is a review item: add it here on purpose.
  */
 const TRUSTED_CALL_SITES = [
+  'deletion/deletion.service.ts', // deleting a workspace, after the owner check and only once it holds no engagement
   'documents/documents.controller.ts', // the local-disk file behind a signed token (404 whenever R2 is set)
   'me/me.controller.ts', // first sign-in: the User row and the takeover of an invitation's placeholder
   'workspaces/workspaces.service.ts', // a new workspace with its creator as owner; an invitation's placeholder

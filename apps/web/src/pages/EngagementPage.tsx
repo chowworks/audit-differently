@@ -4,10 +4,12 @@ import {
   BUDGET_CATEGORY_LABELS,
   ENGAGEMENT_KIND_LABELS,
   REPORT_LINE_LABELS,
+  type AuditPackagePartsDto,
   type DocumentDto,
   type DocumentKind,
   type EngagementDetail,
   type ReportSummary,
+  type WorkspaceDto,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { money, nextPeriod, periodLabel, shortDate } from '@/lib/format'
@@ -20,6 +22,7 @@ import {
   type StepKey,
 } from '@/lib/workflow'
 import { Button, Card, Chip, Empty, ErrorNote, Modal, Notice, StatusChip } from '@/components/ui'
+import { DeleteModal } from '@/components/DeleteModal'
 import { AttachModal } from '@/components/AttachModal'
 import { AddParticipantModal } from '@/components/AddParticipantModal'
 import { DocumentMenuModal } from '@/components/DocumentMenuModal'
@@ -60,6 +63,8 @@ export function EngagementPage() {
   const [record, setRecord] = useState<{ kind: DocumentKind; title: string } | null>(null)
   const [editing, setEditing] = useState<Focus | 'all' | null>(null)
   const [addingOther, setAddingOther] = useState(false)
+  // Set when the audit package is too big for one zip: the parts to download one by one.
+  const [packageParts, setPackageParts] = useState<AuditPackagePartsDto['parts'] | null>(null)
   const [addingParticipant, setAddingParticipant] = useState(false)
   const [participantsOpen, setParticipantsOpen] = useState<{ fileFor?: string } | null>(null)
   const [monthsOpen, setMonthsOpen] = useState<'ledger' | 'submission' | null>(null)
@@ -100,10 +105,23 @@ export function EngagementPage() {
   const openMenu = (doc: DocumentDto, kind: DocumentKind, period: string | null = null) =>
     setMenu({ doc, kind, period })
   const downloadPackage = () =>
-    run(
-      () => api.download(`/engagements/${c.id}/audit-package`, `${c.name} - audit package.zip`),
-      'Audit package downloaded. The export is in the access log.'
-    )
+    run(async () => {
+      const listing = await api.download<AuditPackagePartsDto>(
+        `/engagements/${c.id}/audit-package`,
+        `${c.name} - audit package.zip`
+      )
+      if (listing) setPackageParts(listing.parts)
+      else
+        setNotice({
+          tone: 'ok',
+          text: 'Audit package downloaded. The export is in the access log.',
+        })
+    })
+  const downloadPackagePart = (n: number, fileName: string) =>
+    run(async () => {
+      await api.download(`/engagements/${c.id}/audit-package?part=${n}`, fileName)
+      setNotice({ tone: 'ok', text: `Part ${n} downloaded. The export is in the access log.` })
+    })
   const budgetTotal = c.budgetLines.reduce((t, b) => t + b.amount, 0)
   const remaining = (c.awardAmount ?? 0) - c.cumulativeBilled
   const billedPct = c.awardAmount ? Math.min(100, (c.cumulativeBilled / c.awardAmount) * 100) : 0
@@ -257,6 +275,28 @@ export function EngagementPage() {
                 a README and an index. Every download is logged.
               </span>
             </div>
+            {packageParts && (
+              <div className="grid gap-2">
+                <p className="text-sm">
+                  This package is too big for one zip, so it comes in {packageParts.length} parts.
+                  Download each one; each opens on its own.
+                </p>
+                {packageParts.map((p) => (
+                  <div key={p.n} className="flex flex-wrap items-center gap-3">
+                    <span className="text-sm">
+                      Part {p.n} of {packageParts.length}
+                    </span>
+                    <Button
+                      size="sm"
+                      onClick={() => downloadPackagePart(p.n, p.fileName)}
+                      disabled={!!busy}
+                    >
+                      Download
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </StepRow>
@@ -404,6 +444,13 @@ export function EngagementPage() {
         </div>
       </div>
 
+      <DangerZone
+        engagementId={c.id}
+        workspaceId={c.workspaceId}
+        name={c.name}
+        onDeleted={() => navigate('/')}
+      />
+
       {menu && (
         <DocumentMenuModal
           doc={menu.doc}
@@ -521,6 +568,43 @@ export function EngagementPage() {
         </Modal>
       )}
     </>
+  )
+}
+
+/** Owners only: delete this engagement for good (the role comes from the workspace list; nothing for anyone else). */
+function DangerZone({
+  engagementId,
+  workspaceId,
+  name,
+  onDeleted,
+}: {
+  engagementId: string
+  workspaceId: string
+  name: string
+  onDeleted: () => void
+}) {
+  const { data } = useLoad<WorkspaceDto[]>('/workspaces')
+  const [open, setOpen] = useState(false)
+  if (data?.find((w) => w.id === workspaceId)?.myRole !== 'owner') return null
+  return (
+    <div className="mt-8">
+      <Card eyebrow="Danger zone" title="Delete this engagement">
+        <p className="mb-3 text-sm text-soft">
+          Deleting is permanent. You download a full export first, and every month, participant and
+          document goes with it.
+        </p>
+        <Button kind="danger" onClick={() => setOpen(true)}>
+          Delete this engagement…
+        </Button>
+      </Card>
+      {open && (
+        <DeleteModal
+          target={{ kind: 'engagement', id: engagementId, name }}
+          onClose={() => setOpen(false)}
+          onDeleted={onDeleted}
+        />
+      )}
+    </div>
   )
 }
 

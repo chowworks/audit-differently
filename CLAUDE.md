@@ -83,6 +83,24 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   attaches them and does not read them back), every read logged, and never part of an export the funder did
   not ask for by name. Stored as uploaded: no OCR and no AI reading of a personal document without
   the workspace owner's written decision.
+- **Deleting is permanent and owner-only** (`apps/api/src/deletion/`; a bookkeeper or auditor gets 403, another
+  workspace's row 404). An owner deletes an engagement, and the workspace once no engagement remains. The order is
+  fixed: `POST .../deletion` plans a full export, split into zips of about 1.5 GB of files each, and `GET .../deletion/:deletionId/parts/:n` sends each part (the audit package plus everything the owner may see: unfiled
+  records, budget, months, checks; `AuditPackageService.plan` with `complete`) and writes a `DeletionRecord`; the
+  record becomes `downloaded` only when every part's response has finished, and `DELETE` needs that record (this engagement,
+  under 60 minutes old), the exact name and `DELETE_PHRASE`. The access log line is written first, the stored files
+  go by prefix (`deleteByPrefix`) before the rows, and the rows go in one transaction (documents, then months, then
+  the engagement; a document's storage-key trigger and `WexPayment -> Participant` Restrict make that order
+  required). A workspace delete is the one other `runAsSystem` write, after the owner check. `DataAccessLog` and
+  `DeletionRecord` rows stay (no foreign keys).
+- **Our retained copy of a deletion export** lives at `retained/<workspaceId>/<engagementId or workspace>-part<n>-<timestamp>.zip`
+  for `RETAINED_COPY_DAYS` (30). This top-level `retained/` prefix is the only exception to the workspace-first
+  key layout, on purpose, so one R2 lifecycle rule on each bucket expires it (a manual step, `docs/dev-api.md`). It
+  is never a `Document` row, nothing serves it, and `deleteByPrefix` refuses it. It holds personal records, so the
+  rule must exist before a real one is uploaded.
+- **Terms:** creating a workspace needs `acceptedTermsVersion === TERMS_VERSION` (`packages/types`); the version,
+  time and person are kept on the `Workspace` (`termsVersion`, `termsAcceptedAt`, `termsAcceptedById`; null for a
+  workspace made before). A new terms version is a new constant and a new acceptance for new workspaces.
 - Documents are private objects: stored under `<workspaceId>/<engagementId or workspace>/<period or
 general>/<uuid>.<ext>` (a database trigger refuses any other key, migrations `20261011000600` and `..0700`,
   and the API serves, reads or deletes nothing from a row whose key says otherwise), served by a short-lived signed URL, never a public URL. Every read, list,

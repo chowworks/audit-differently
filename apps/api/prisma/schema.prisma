@@ -19,16 +19,20 @@ datasource db {
 // refuses a row without one. The funder (a state agency, a board) is a name on the engagement, not an actor.
 
 model Workspace {
-  id             String       @id @default(uuid())
-  name           String
+  id                String       @id @default(uuid())
+  name              String
   // The lists this workspace's owners keep: the "source of funds" boxes an engagement may tick.
-  fundingSources String[]     @default([])
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  memberships    Membership[]
-  engagements    Engagement[]
-  documents      Document[]
-  suggestions    Suggestion[]
+  fundingSources    String[]     @default([])
+  // The terms the owner accepted creating the workspace (TERMS_VERSION in packages/types); null before this was recorded.
+  termsVersion      String?
+  termsAcceptedAt   DateTime?
+  termsAcceptedById String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  memberships       Membership[]
+  engagements       Engagement[]
+  documents         Document[]
+  suggestions       Suggestion[]
 }
 
 // Something a member asked for: today, an addition to one of the workspace's lists. Kept so the product can
@@ -354,7 +358,7 @@ model DataAccessLog {
   workspaceId String
   actorId     String
   actorName   String
-  resource    String // 'engagement' | 'document' | 'expense' | 'report' | 'participant' | 'export'
+  resource    String // 'workspace' | 'engagement' | 'document' | 'expense' | 'report' | 'participant' | 'export'
   subjectId   String?
   action      String // 'read' | 'list' | 'download' | 'create' | 'update' | 'delete' | 'export'
   detail      String? // short, non-sensitive context, e.g. 'audit package, 3 months, 41 files'
@@ -362,4 +366,30 @@ model DataAccessLog {
 
   @@index([workspaceId, createdAt])
   @@index([actorId, createdAt])
+}
+
+// ── Deletion ────────────────────────────────────────────────────────────────
+// The record of an owner deleting an engagement (or, with engagementId null, a workspace's own documents and the
+// workspace). Made when the full export starts, 'downloaded' only when the response finished, 'deleted' when the
+// delete ran. It has no foreign keys on purpose: it outlives the rows it describes. The retained copy is the object
+// at exportKey, under the top-level `retained/` prefix that one R2 lifecycle rule expires after 30 days (it is not a
+// Document). Owners write it; nobody reads or deletes it through the API.
+
+model DeletionRecord {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  engagementId  String?
+  subjectName   String
+  deletedById   String
+  deletedByName String
+  status        String    @default("exported") // 'exported' | 'downloaded' | 'deleted'
+  exportKey     String
+  sha256        String    @default("")
+  bytes         Int       @default(0)
+  parts         Json      @default("[]") // one entry per zip of the export, see migration 20261012000200
+  createdAt     DateTime  @default(now())
+  deletedAt     DateTime?
+  expiresAt     DateTime
+
+  @@index([workspaceId, engagementId])
 }

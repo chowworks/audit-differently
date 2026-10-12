@@ -13,6 +13,7 @@ import { WorkspacesModule } from './workspaces/workspaces.module'
 import { ReportsModule } from './reports/reports.module'
 import { DocumentsModule } from './documents/documents.module'
 import { ParticipantsModule } from './participants/participants.module'
+import { DeletionModule } from './deletion/deletion.module'
 import { TenantMiddleware } from './core/tenant.middleware'
 
 @Module({
@@ -32,6 +33,7 @@ import { TenantMiddleware } from './core/tenant.middleware'
     ReportsModule,
     DocumentsModule,
     ParticipantsModule,
+    DeletionModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

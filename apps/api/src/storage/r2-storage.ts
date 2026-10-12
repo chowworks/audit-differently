@@ -1,12 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common'
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
+import { createReadStream } from 'node:fs'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import type { DocumentStorage } from './document-storage.interface'
+import { assertFolderPrefix, type DocumentStorage } from './document-storage.interface'
 
 function required(name: string): string {
   const value = process.env[name]
@@ -81,6 +84,41 @@ export class R2DocumentStorage implements DocumentStorage {
 
   async delete(key: string): Promise<void> {
     await this.client().send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
+  }
+
+  /** Lists and deletes a page (up to 1000 keys) at a time until nothing is left; any key R2 refuses is an error. */
+  async deleteByPrefix(prefix: string): Promise<void> {
+    assertFolderPrefix(prefix)
+    let token: string | undefined
+    do {
+      const page = await this.client().send(
+        new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix, ContinuationToken: token })
+      )
+      const keys = (page.Contents ?? []).flatMap((o) => (o.Key ? [{ Key: o.Key }] : []))
+      if (keys.length > 0) {
+        const res = await this.client().send(
+          new DeleteObjectsCommand({
+            Bucket: this.bucket,
+            Delete: { Objects: keys, Quiet: true },
+          })
+        )
+        if (res.Errors?.length)
+          throw new Error(`R2 refused to delete ${res.Errors.length} objects under ${prefix}`)
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined
+    } while (token)
+  }
+
+  async putFile(key: string, filePath: string, size: number, contentType: string): Promise<void> {
+    await this.client().send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: createReadStream(filePath),
+        ContentLength: size,
+        ContentType: contentType,
+      })
+    )
   }
 }
 
