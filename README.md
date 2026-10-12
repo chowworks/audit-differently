@@ -1,6 +1,10 @@
-# Audit Differently
+<p align="center">
+  <img src="docs/brand/logo.svg" alt="Audit Differently" width="96" height="96">
+</p>
 
-**Be audit-ready on day one, not on audit day.**
+<h1 align="center">Audit Differently</h1>
+
+<p align="center"><strong>Be audit-ready on day one, not on audit day.</strong></p>
 
 Audit Differently is for the people who account for grant and contract money: the bookkeeper at a training
 provider, a youth program, a nonprofit. You win an award. Every month you report how you spent it, with the
