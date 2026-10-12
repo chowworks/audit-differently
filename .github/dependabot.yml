@@ -5,6 +5,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Major versions are a planned upgrade, decided by hand (Tailwind 4, React Router 7, Vite and ESLint majors),
+    # not a pull request that keeps coming back. Minor and patch updates, and security updates, still arrive.
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     groups:
       nestjs:
         patterns: ['@nestjs/*']
@@ -14,3 +19,6 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
