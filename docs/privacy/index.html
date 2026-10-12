@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Privacy and Data Protection</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <!--
+  DRAFT. The wording to edit is the <section id="protected"> below: nothing else on this page is copy.
+  This is a static page, like the release notes: the web build copies it to /privacy/ (apps/web/vite.config.ts)
+  and the dev server serves the same file, so it opens without signing in.
+  Only claim what the code does today (CLAUDE.md "Data rules" and "Tenant isolation"). Not yet in place, so
+  not claimed: two-step sign-in, a malware check on uploads, daily backups with point-in-time recovery.
+  No certifications are claimed or promised. Fictional data only.
+-->
+    <style>
+      :root {
+        --ink: #0b1f2e;
+        --navy: #0b1f2e;
+        --muted: #4a5d6c;
+        --paper: #f6f7f4;
+        --surface: #ffffff;
+        --line: #dfe6ec;
+        --accent: #1a7a42;
+        --brand: #27b35e;
+        --radius: 12px;
+        --header-bg: #0b1f2e;
+        --header-ink: #ffffff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font:
+          15px/1.55 Manrope,
+          system-ui,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: var(--accent);
+      }
+      :focus-visible {
+        outline: 2px solid var(--ink);
+        outline-offset: 3px;
+      }
+      .wrap {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 0 32px;
+      }
+      .top {
+        background: var(--header-bg);
+        color: var(--header-ink);
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px 32px;
+        padding-top: 22px;
+        padding-bottom: 22px;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--header-ink);
+        text-decoration: none;
+      }
+      .wordmark {
+        font-weight: 800;
+        font-size: 20px;
+        letter-spacing: -0.03em;
+      }
+      .slash {
+        color: var(--brand);
+      }
+      .bar nav a {
+        color: var(--header-ink);
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .bar nav a:hover {
+        color: var(--brand);
+      }
+      h1 {
+        margin: 28px 0 16px;
+        font-weight: 800;
+        font-size: 28px;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
+        color: var(--navy);
+      }
+      h2 {
+        margin: 0 0 8px;
+        font-size: 19px;
+        font-weight: 800;
+      }
+      section {
+        max-width: 720px;
+        margin-bottom: 20px;
+        padding: 18px 22px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+      }
+      section p,
+      section ul {
+        margin: 0 0 10px;
+      }
+      section li {
+        margin-bottom: 4px;
+      }
+      footer {
+        padding-bottom: 40px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      @media (max-width: 640px) {
+        .wrap {
+          padding: 0 16px;
+        }
+        .bar {
+          padding-top: 14px;
+          padding-bottom: 14px;
+        }
+        h1 {
+          font-size: 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="top">
+      <div class="wrap bar">
+        <a class="brand" href="/">
+          <svg width="34" height="34" viewBox="0 0 40 40" aria-hidden="true" focusable="false">
+            <path
+              d="M10 4h20v30l-3.3-2.6-3.4 2.6-3.3-2.6-3.3 2.6-3.4-2.6L10 34z"
+              fill="#0b1f2e"
+              stroke="#ffffff"
+              stroke-width="3"
+              stroke-linejoin="round"
+            />
+            <line
+              x1="15"
+              y1="12"
+              x2="25"
+              y2="12"
+              stroke="#ffffff"
+              stroke-width="2.5"
+              stroke-linecap="round"
+            />
+            <line
+              x1="15"
+              y1="18"
+              x2="25"
+              y2="18"
+              stroke="#ffffff"
+              stroke-width="2.5"
+              stroke-linecap="round"
+            />
+            <line
+              x1="15"
+              y1="24"
+              x2="20"
+              y2="24"
+              stroke="#ffffff"
+              stroke-width="2.5"
+              stroke-linecap="round"
+            />
+            <circle cx="29" cy="29" r="8" fill="#27b35e" stroke="#ffffff" stroke-width="2.5" />
+            <path
+              d="M25 29l3 3 5-6"
+              fill="none"
+              stroke="#ffffff"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span class="wordmark">audit<span class="slash">/</span>differently</span>
+        </a>
+        <nav aria-label="Main"><a href="/">Back to the app</a></nav>
+      </div>
+    </div>
+
+    <main class="wrap">
+      <h1><span aria-hidden="true">🔒</span> Privacy and Data Protection</h1>
+
+      <!-- EDIT HERE: the wording of both sections below (draft from the owner). -->
+      <section id="protected">
+        <h2><span aria-hidden="true">🛡️</span> How your data is protected</h2>
+        <p>
+          Audit Differently takes the security of your personal information seriously. We use a
+          combination of technical, physical, and administrative safeguards to protect your data
+          from unauthorized access, loss, destruction, or alteration.
+        </p>
+        <ul>
+          <li>
+            <strong><span aria-hidden="true">🔐</span> Encryption:</strong> All personal data is
+            encrypted in transit and at rest using industry-standard encryption.
+          </li>
+          <li>
+            <strong><span aria-hidden="true">🔑</span> Access controls:</strong> Only authorized
+            personnel with a strict business need have access to your data.
+          </li>
+          <li>
+            <strong><span aria-hidden="true">🧹</span> Data minimization:</strong> We only collect
+            and retain the personal data necessary to provide our services, and we enable you to
+            securely delete it when it is no longer needed.
+          </li>
+          <li>
+            <strong><span aria-hidden="true">🤝</span> Third-party security:</strong> Any
+            third-party service providers or vendors we use are thoroughly vetted and contractually
+            required to maintain high standards of data protection.
+          </li>
+        </ul>
+        <p>
+          While we strive to use commercially acceptable means to protect your data, no method of
+          transmission over the internet or electronic storage is 100% secure. If you have questions
+          about our security practices, you can contact us using the information below.
+        </p>
+      </section>
+
+      <section id="privacy">
+        <h2><span aria-hidden="true">📜</span> Privacy Statement</h2>
+        <p>
+          Audit Differently is committed to protecting your privacy and provided personal
+          information.
+        </p>
+        <p>
+          We collect personal information, such as your name, email address, and other relevant
+          details, to provide our services, respond to inquiries, and improve your experience.
+        </p>
+        <p>
+          We only use your information for legitimate business purposes and do not sell your
+          personal data. We may share information with trusted service providers when necessary to
+          deliver our services or comply with legal obligations.
+        </p>
+        <p>
+          We take reasonable measures to protect your personal information and retain it only for as
+          long as necessary.
+        </p>
+        <p>
+          Where applicable, you have the right to access, correct, or request the deletion of your
+          personal data, restrict or object to certain processing, and withdraw consent. You may
+          exercise these rights by contacting us or any organizational admin who manages your audit
+          data in our tool.
+        </p>
+        <p>
+          For questions about this Privacy Statement or how we handle your personal data, contact us
+          using the information below.
+        </p>
+      </section>
+      <!-- END EDIT HERE -->
+
+      <section id="contact">
+        <h2><span aria-hidden="true">✉️</span> Contact</h2>
+        <p>
+          Questions about your data or this page:
+          <a href="mailto:info@auditdifferently.tech">info@auditdifferently.tech</a>.
+        </p>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <p><a href="/release-notes/">Release notes</a> · <a href="/">Back to the app</a></p>
+    </footer>
+  </body>
+</html>

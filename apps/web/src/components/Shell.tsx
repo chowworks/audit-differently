@@ -1,6 +1,7 @@
 import { Link, NavLink, useLocation } from 'react-router-dom'
 import { AccountMenu } from '@/components/AccountMenu'
 import { Mark } from '@/components/Mark'
+import { SiteFooter } from '@/components/SiteFooter'
 
 /** Page frame: the wordmark, the navigation and the account menu, over the page. */
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -37,6 +38,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </header>
       </div>
       <main className="ad-wrap ad-main">{children}</main>
+      <SiteFooter />
     </div>
   )
 }

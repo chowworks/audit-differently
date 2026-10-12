@@ -223,8 +223,7 @@
     padding: 0;
   }
   .ad-account-menu button,
-  .ad-account-option,
-  .ad-account-link {
+  .ad-account-option {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -240,15 +239,10 @@
     text-align: left;
     cursor: pointer;
   }
-  .ad-account-link {
-    text-decoration: none;
-  }
   .ad-account-menu button:hover,
   .ad-account-menu button:focus-visible,
   .ad-account-option:hover,
-  .ad-account-option:has(:focus-visible),
-  .ad-account-link:hover,
-  .ad-account-link:focus-visible {
+  .ad-account-option:has(:focus-visible) {
     background: var(--paper);
   }
   .ad-account-option input {
@@ -264,6 +258,29 @@
   .ad-main {
     padding-top: 16px;
     padding-bottom: 64px;
+  }
+  .ad-footer {
+    border-top: 1px solid var(--line);
+    padding-top: 16px;
+    padding-bottom: 28px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px 24px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .ad-footer ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 20px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .ad-footer a {
+    color: var(--ink);
+    font-weight: 600;
   }
 
   /* Type */

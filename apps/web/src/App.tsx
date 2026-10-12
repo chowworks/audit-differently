@@ -4,6 +4,7 @@ import type { Me } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
 import { useSession } from '@/auth/session'
 import { Shell } from '@/components/Shell'
+import { SiteFooter } from '@/components/SiteFooter'
 import { OverviewPage } from '@/pages/OverviewPage'
 import { WorkspacesPage } from '@/pages/WorkspacesPage'
 import { WorkspacePage } from '@/pages/WorkspacePage'
@@ -22,8 +23,11 @@ export default function App() {
         <Route
           path="/sign-in/*"
           element={
-            <div className="min-h-screen flex items-center justify-center p-6">
-              <SignIn routing="path" path="/sign-in" fallbackRedirectUrl="/" />
+            <div className="min-h-screen flex flex-col">
+              <div className="flex flex-1 items-center justify-center p-6">
+                <SignIn routing="path" path="/sign-in" fallbackRedirectUrl="/" />
+              </div>
+              <SiteFooter />
             </div>
           }
         />
