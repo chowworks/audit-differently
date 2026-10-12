@@ -69,8 +69,9 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
 
 ## Data rules (this repository handles payroll and bank records)
 
-- The repository is private and stays private. Even so: **fictional data only** in code, seeds, tests, docs,
-  screenshots and issues. `Financial Reporting/` and `docs/private/` hold real reference documents and are
+- The repository is **public** (owner's decision, 2026-10-12), so everything committed, every issue and every
+  comment is world-readable, the security design in these docs included. **Fictional data only** in code, seeds,
+  tests, docs, screenshots and issues, and never a secret, a real hostname or a real key. `Financial Reporting/` and `docs/private/` hold real reference documents and are
   gitignored; never read them into a seed or test, and never copy names, amounts, contract numbers or
   signatures from them into anything committed.
 - **No real provider document is uploaded to any environment, local included, until** that environment runs
@@ -237,7 +238,7 @@ Only when the user asks for screenshots on an issue or PR:
 4. Save PNGs to `docs/screenshots/<feature>/`, named after the feature, never a phase. Seed data only.
 5. Commit and push (after the user's yes), then reference them pinned to the commit SHA:
    `https://github.com/<owner>/<repo>/blob/<sha>/docs/screenshots/<feature>/NN-name.png?raw=true` (the
-   repository is private, so the raw.githubusercontent form does not render for viewers).
+   repository is public, so any form of the link renders; the commit SHA keeps it from drifting).
 6. Post via `gh issue comment <N> --body "$(cat <<EOF ... EOF)"`.
 
 ## Out of scope for the MVP
