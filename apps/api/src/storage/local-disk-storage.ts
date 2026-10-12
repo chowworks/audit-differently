@@ -39,7 +39,7 @@ export class LocalDiskStorage implements DocumentStorage {
   async getSignedUrl(
     key: string,
     expiresInSeconds: number,
-    options?: { downloadName?: string }
+    options?: { downloadName?: string; inlineName?: string }
   ): Promise<string> {
     const payload = Buffer.from(
       JSON.stringify({

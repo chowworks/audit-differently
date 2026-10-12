@@ -8,12 +8,13 @@ export interface DocumentStorage {
   upload(key: string, buffer: Buffer, contentType: string): Promise<void>
   /**
    * Time-limited signed URL for `key`. With `downloadName` the link forces a download
-   * (Content-Disposition: attachment) instead of rendering in the browser.
+   * (Content-Disposition: attachment) instead of rendering in the browser; with `inlineName` it renders
+   * in the browser and, if the person saves it, keeps that file name.
    */
   getSignedUrl(
     key: string,
     expiresInSeconds: number,
-    options?: { downloadName?: string }
+    options?: { downloadName?: string; inlineName?: string }
   ): Promise<string>
   delete(key: string): Promise<void>
   /** The bytes under `key`, for the audit package. */
