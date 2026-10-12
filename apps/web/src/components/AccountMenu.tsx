@@ -5,7 +5,7 @@ import { THEMES, type ThemeKey, useTheme } from '@/theme'
 /**
  * The account control at the right of the header, in the shape of Learn Differently's: an avatar that
  * opens a short menu. Navigation lives in the top bar, so the menu holds only who you are, the colour
- * theme, the release notes and Sign out.
+ * theme and Sign out. The release notes, privacy page and contact are in the site footer.
  */
 export function AccountMenu() {
   const { user } = useUser()
@@ -106,12 +106,7 @@ function Menu({
               ))}
             </ul>
           </fieldset>
-          <div className="ad-account-out">
-            <a className="ad-account-link" href="/release-notes/">
-              Release notes
-            </a>
-            {footer}
-          </div>
+          <div className="ad-account-out">{footer}</div>
         </div>
       )}
     </div>
