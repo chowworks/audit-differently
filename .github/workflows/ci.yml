@@ -125,7 +125,8 @@ jobs:
           done
       - name: API accepts the web origin and refuses another
         run: |
-          ok=$(curl -s -D - -o /dev/null -H "Origin: ${{ vars.WEB_URL }}" "${{ vars.API_URL }}/api/health" | grep -ci "access-control-allow-origin: ${{ vars.WEB_URL }}")
-          bad=$(curl -s -D - -o /dev/null -H "Origin: https://evil.example" "${{ vars.API_URL }}/api/health" | grep -ci "access-control-allow-origin")
+          # grep -c exits 1 when it counts zero, which is the right answer for the foreign origin: tolerate it.
+          ok=$(curl -s -D - -o /dev/null -H "Origin: ${{ vars.WEB_URL }}" "${{ vars.API_URL }}/api/health" | grep -ci "access-control-allow-origin: ${{ vars.WEB_URL }}" || true)
+          bad=$(curl -s -D - -o /dev/null -H "Origin: https://evil.example" "${{ vars.API_URL }}/api/health" | grep -ci "access-control-allow-origin" || true)
           echo "web origin allowed: $ok, foreign origin allowed: $bad"
           [ "$ok" -ge 1 ] && [ "$bad" -eq 0 ]
