@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" role="img" aria-label="Audit Differently">
+  <path d="M10 4h20v30l-3.3-2.6-3.4 2.6-3.3-2.6-3.3 2.6-3.4-2.6L10 34z" fill="#ffffff" stroke="#0b1f2e" stroke-width="3" stroke-linejoin="round"/>
+  <line x1="15" y1="12" x2="25" y2="12" stroke="#0b1f2e" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="15" y1="18" x2="25" y2="18" stroke="#0b1f2e" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="15" y1="24" x2="20" y2="24" stroke="#0b1f2e" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="29" cy="29" r="8" fill="#27b35e" stroke="#0b1f2e" stroke-width="2.5"/>
+  <path d="M25 29l3 3 5-6" fill="none" stroke="#0b1f2e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
