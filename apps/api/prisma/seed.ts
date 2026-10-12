@@ -36,9 +36,10 @@ async function main() {
 
   // ── People ──
   // Placeholder rows, the way an invitation makes them: the first Clerk sign-in with the same email takes
-  // over the memberships (me.controller.ts). Create these four in the dev Clerk instance to walk the demo, or
-  // set SEED_OWNER_EMAIL (local .env only, never committed) to make Sam's seat yours with an existing Clerk user.
-  const ownerEmail = process.env.SEED_OWNER_EMAIL?.trim() || 'sam.whitfield@riverbend.example'
+  // over the memberships (me.controller.ts). Sam's seat is the project's test account in the dev Clerk instance,
+  // so signing in as it opens Riverbend as its owner; create the other three in the dev Clerk instance to walk
+  // the rest of the demo.
+  const ownerEmail = 'test@chowworks.com'
   const people: { id: string; name: string; email: string; role: string; workspaceId: string }[] = [
     {
       id: 'pending-demo-dana',
@@ -71,7 +72,7 @@ async function main() {
   ]
   for (const p of people) {
     // Already claimed by a real account, by email or by the seat itself: leave that account alone and plant
-    // no placeholder beside it (a deploy's seed runs without the laptop's SEED_OWNER_EMAIL).
+    // no placeholder beside it (a re-run of the seed leaves a claimed seat alone).
     const claimedByEmail = await prisma.user.findFirst({
       where: {
         email: { equals: p.email, mode: 'insensitive' },
