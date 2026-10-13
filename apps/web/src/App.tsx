@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { Navigate, Route, Routes, useParams } from 'react-router-dom'
+import { useEffect, type ReactNode } from 'react'
+import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import { SignIn, useClerk } from '@clerk/clerk-react'
 import type { Me } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
@@ -16,11 +16,35 @@ import { EngagementPage } from '@/pages/EngagementPage'
 import { NewEngagementPage } from '@/pages/NewEngagementPage'
 import { ReportPage } from '@/pages/ReportPage'
 import { ReportFormPage } from '@/pages/ReportFormPage'
+import { HomePage } from '@/home/HomePage'
+import { ContactPage } from '@/pages/ContactPage'
+import { NotFoundPage } from '@/pages/NotFoundPage'
+import { Mark } from '@/components/Mark'
 import { Button, Empty, ErrorNote } from '@/components/ui'
+
+/** The app's own addresses: signed in, each renders its page; signed out, each asks for sign-in. */
+const APP_ROUTES: { path: string; element: ReactNode }[] = [
+  { path: '/overview', element: <OverviewPage /> },
+  { path: '/workspaces', element: <WorkspacesPage /> },
+  { path: '/workspaces/:id', element: <WorkspacePage /> },
+  { path: '/engagements/new', element: <NewEngagementPage /> },
+  { path: '/engagements/:id', element: <EngagementPage /> },
+  { path: '/reports/:id', element: <ReportPage /> },
+  { path: '/reports/:id/form', element: <ReportFormPage /> },
+  // Older links.
+  { path: '/contracts', element: <Navigate to="/workspaces" replace /> },
+  { path: '/contracts/:id', element: <ToEngagement /> },
+  { path: '/grants', element: <Navigate to="/workspaces" replace /> },
+  { path: '/grants/:id', element: <ToEngagement /> },
+]
 
 export default function App() {
   const session = useSession()
+  const { pathname } = useLocation()
   if (!session.ready) return <Empty>Loading…</Empty>
+  // The public homepage is / for everyone, outside the app's frame; the app starts at /overview.
+  if (pathname === '/') return <HomePage />
+  if (pathname === '/home') return <Navigate to="/" replace />
   if (!session.signedIn) {
     return (
       <Routes>
@@ -29,13 +53,32 @@ export default function App() {
           element={
             <div className="min-h-screen flex flex-col">
               <div className="flex flex-1 items-center justify-center p-6">
-                <SignIn routing="path" path="/sign-in" fallbackRedirectUrl="/" />
+                <SignIn routing="path" path="/sign-in" fallbackRedirectUrl="/overview" />
               </div>
               <SiteFooter />
             </div>
           }
         />
-        <Route path="*" element={<Navigate to="/sign-in" replace />} />
+        <Route
+          path="/contact"
+          element={
+            <PublicFrame>
+              <ContactPage />
+            </PublicFrame>
+          }
+        />
+        {/* The app's own addresses ask for sign-in; anything else is not a page. */}
+        {APP_ROUTES.map(({ path }) => (
+          <Route key={path} path={path} element={<Navigate to="/sign-in" replace />} />
+        ))}
+        <Route
+          path="*"
+          element={
+            <PublicFrame>
+              <NotFoundPage />
+            </PublicFrame>
+          }
+        />
       </Routes>
     )
   }
@@ -81,20 +124,12 @@ function SignedIn() {
     <TermsVersionProvider value={me.termsVersion}>
       <Shell>
         <Routes>
-          <Route path="/" element={<OverviewPage />} />
-          <Route path="/sign-in/*" element={<Navigate to="/" replace />} />
-          <Route path="/workspaces" element={<WorkspacesPage />} />
-          <Route path="/workspaces/:id" element={<WorkspacePage />} />
-          <Route path="/engagements/new" element={<NewEngagementPage />} />
-          <Route path="/engagements/:id" element={<EngagementPage />} />
-          <Route path="/reports/:id" element={<ReportPage />} />
-          <Route path="/reports/:id/form" element={<ReportFormPage />} />
-          {/* Older links. */}
-          <Route path="/contracts" element={<Navigate to="/workspaces" replace />} />
-          <Route path="/contracts/:id" element={<ToEngagement />} />
-          <Route path="/grants" element={<Navigate to="/workspaces" replace />} />
-          <Route path="/grants/:id" element={<ToEngagement />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {APP_ROUTES.map(({ path, element }) => (
+            <Route key={path} path={path} element={element} />
+          ))}
+          <Route path="/sign-in/*" element={<Navigate to="/overview" replace />} />
+          <Route path="/contact" element={<ContactPage />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </Shell>
     </TermsVersionProvider>
@@ -104,4 +139,24 @@ function SignedIn() {
 function ToEngagement() {
   const { id } = useParams()
   return <Navigate to={`/engagements/${id}`} replace />
+}
+
+/** The frame for public pages outside the app: the brand, the page, the footer. */
+function PublicFrame({ children }: { children: ReactNode }) {
+  return (
+    <div className="min-h-screen flex flex-col">
+      <div className="ad-top">
+        <header className="ad-wrap ad-header">
+          <Link to="/" className="ad-brand">
+            <Mark />
+            <span className="ad-wordmark">
+              audit<span className="ad-slash">/</span>differently
+            </span>
+          </Link>
+        </header>
+      </div>
+      <main className="ad-wrap ad-main flex-1">{children}</main>
+      <SiteFooter />
+    </div>
+  )
 }

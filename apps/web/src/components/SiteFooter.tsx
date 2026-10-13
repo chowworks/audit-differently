@@ -6,7 +6,9 @@
 export function SiteFooter() {
   return (
     <footer className="ad-wrap ad-footer">
-      <span>audit/differently</span>
+      <a href="/" className="ad-footer-home">
+        audit/differently
+      </a>
       <nav aria-label="Footer">
         <ul>
           <li>
@@ -19,7 +21,7 @@ export function SiteFooter() {
             <a href="/terms/">Terms</a>
           </li>
           <li>
-            <a href="mailto:info@auditdifferently.tech">Contact</a>
+            <a href="/contact">Contact</a>
           </li>
         </ul>
       </nav>

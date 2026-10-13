@@ -1,0 +1,439 @@
+/* The public homepage (home/HomePage.tsx). Built on the app's tokens and components in index.css; this file
+   only adds the page's own layout and motion. Every animation stops under prefers-reduced-motion. */
+
+.adh {
+  background: var(--paper);
+}
+.adh a.ad-btn,
+.adh a.ad-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.adh a.ad-btn:hover {
+  color: var(--on-dark);
+}
+.adh-btn-lg {
+  padding: 13px 24px;
+  font-size: 16px;
+}
+.adh-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* The header follows the theme: a navy band in some, plain paper in others, so its ink is the theme's. */
+.adh-signin {
+  padding: 8px 18px;
+  border: 1px solid var(--header-ink);
+  border-radius: var(--radius);
+  color: var(--header-ink);
+  font-weight: 700;
+  text-decoration: none;
+}
+.adh-signin:hover {
+  background: var(--header-ink);
+  color: var(--paper);
+}
+:root[data-theme='navy-band'] .adh-signin:hover {
+  color: var(--navy);
+}
+.adh-btn-light {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--on-dark);
+  border-radius: var(--radius);
+  color: var(--on-dark);
+  font-weight: 700;
+  text-decoration: none;
+}
+.adh-btn-light:hover {
+  background: var(--on-dark);
+  color: var(--navy);
+}
+
+/* Type */
+.adh-eyebrow {
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.adh-title {
+  margin: 0;
+  color: var(--navy);
+  font-weight: 800;
+  font-size: clamp(40px, 6vw, 68px);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+}
+.adh-title-2 {
+  display: block;
+  color: var(--muted);
+  font-weight: 700;
+}
+.adh-underline {
+  white-space: nowrap;
+  background: linear-gradient(
+    transparent 68%,
+    color-mix(in srgb, var(--brand) 45%, transparent) 68%
+  );
+}
+.adh-lede {
+  max-width: 34em;
+  margin: 22px 0 0;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.55;
+}
+.adh-h2 {
+  margin: 0;
+  color: var(--navy);
+  font-weight: 800;
+  font-size: clamp(28px, 3.6vw, 40px);
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  max-width: 22em;
+}
+.adh-text {
+  max-width: 38em;
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.6;
+}
+.adh-small {
+  font-size: 15px;
+}
+.adh-on-dark {
+  color: var(--on-dark);
+}
+.adh-on-dark-soft {
+  color: color-mix(in srgb, var(--on-dark) 78%, transparent);
+}
+.adh-eyebrow.adh-on-dark {
+  color: var(--brand);
+}
+
+/* Layout */
+.adh-section {
+  padding: 88px 0;
+}
+.adh-alt {
+  background: var(--surface-alt);
+}
+.adh-two > * {
+  /* Let each column shrink below its content, so the graphics scale to the screen instead of widening it. */
+  min-width: 0;
+}
+.adh-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  align-items: center;
+}
+.adh-ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 30px;
+}
+.adh-center {
+  justify-content: center;
+}
+
+/* A section whose graphic sits on the left on wide screens, mirroring the hero; text first on phones. */
+@media (min-width: 1024px) {
+  /* The graphic takes the larger share of the row. */
+  .adh-flip {
+    grid-template-columns: 1.25fr 0.95fr;
+  }
+  .adh-flip > :last-child {
+    order: -1;
+  }
+  .adh-flip .fv-fit {
+    margin-left: 0;
+    margin-right: auto;
+  }
+}
+
+/* Hero */
+.adh-hero {
+  padding: 72px 0 88px;
+  background:
+    radial-gradient(
+      circle at 85% 20%,
+      color-mix(in srgb, var(--brand) 14%, transparent),
+      transparent 42%
+    ),
+    var(--paper);
+}
+.adh-hero-grid > * {
+  /* Let the columns shrink below their content, so the hero graphic can scale to the screen. */
+  min-width: 0;
+}
+.adh-hero-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 56px;
+  align-items: center;
+}
+
+/* The film */
+.adh-story {
+  padding: 88px 0 96px;
+  background: var(--navy);
+}
+.adh-player {
+  margin-top: 32px;
+  aspect-ratio: 16 / 9;
+  border-radius: 18px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--navy) 70%, black);
+  box-shadow: 0 30px 70px -30px rgb(0 0 0 / 0.6);
+}
+.adh-player-tall {
+  aspect-ratio: 9 / 16;
+  max-height: 80vh;
+  margin-left: auto;
+  margin-right: auto;
+}
+.adh-video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #000;
+}
+.adh-cover {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 0;
+  cursor: pointer;
+  color: var(--on-dark);
+  background:
+    radial-gradient(
+      circle at 30% 30%,
+      color-mix(in srgb, var(--brand) 22%, transparent),
+      transparent 50%
+    ),
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--navy) 88%, white),
+      color-mix(in srgb, var(--navy) 70%, black)
+    );
+}
+/* The cover's teaser: the film's opening, replayed under the play button */
+.adh-teaser {
+  position: absolute;
+  inset: 0 0 80px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 18px;
+  opacity: 0.85;
+}
+.adh-clock {
+  color: var(--on-dark);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: clamp(28px, 6vw, 64px);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: color 300ms ease;
+}
+.adh-clock-hit {
+  color: var(--brand);
+}
+.adh-mail {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  max-width: min(520px, 86%);
+  padding: 14px 18px;
+  border: 1px solid color-mix(in srgb, var(--on-dark) 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--navy) 80%, black);
+  color: var(--on-dark);
+  text-align: left;
+  opacity: 0;
+  translate: 0 16px;
+  transition:
+    opacity 400ms ease,
+    translate 400ms ease;
+}
+.adh-mail.adh-in {
+  opacity: 1;
+  translate: 0 0;
+}
+.adh-mail small {
+  color: color-mix(in srgb, var(--on-dark) 70%, transparent);
+  font-size: 12px;
+}
+.adh-mail b {
+  font-size: 16px;
+}
+.adh-stamp {
+  position: absolute;
+  right: -10px;
+  top: -18px;
+  padding: 4px 12px;
+  border: 3px solid #e5484d;
+  border-radius: 6px;
+  color: #e5484d;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  rotate: 10deg;
+  opacity: 0;
+  scale: 1.8;
+  transition:
+    opacity 200ms ease,
+    scale 250ms cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+.adh-stamp.adh-in {
+  opacity: 1;
+  scale: 1;
+}
+.adh-cover-cta {
+  position: absolute;
+  z-index: 1;
+  left: 24px;
+  bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 18px 10px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--navy) 70%, black);
+  text-align: left;
+}
+.adh-cover-cta .adh-cover-title,
+.adh-cover-cta .adh-cover-sub {
+  display: block;
+}
+.adh-cover-cta .adh-cover-title {
+  margin-top: 0;
+  font-size: 18px;
+}
+.adh-cover-cta .adh-play {
+  width: 52px;
+  height: 52px;
+  font-size: 20px;
+  padding-left: 4px;
+}
+.adh-play {
+  display: grid;
+  place-items: center;
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: var(--navy);
+  font-size: 32px;
+  padding-left: 6px;
+  transition: transform 200ms ease;
+}
+.adh-cover:hover .adh-play,
+.adh-cover:focus-visible .adh-play {
+  transform: scale(1.08);
+}
+.adh-cover-title {
+  margin-top: 8px;
+  font-weight: 800;
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+.adh-cover-sub {
+  color: color-mix(in srgb, var(--on-dark) 70%, transparent);
+  font-size: 14px;
+}
+
+/* Closing */
+.adh-closing {
+  padding: 96px 0;
+  background: var(--navy);
+  text-align: center;
+}
+.adh-closing-inner .adh-h2,
+.adh-closing-inner .adh-text {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Motion */
+@keyframes adh-in {
+  from {
+    opacity: 0;
+    translate: 0 24px;
+  }
+}
+@keyframes adh-flag {
+  0%,
+  45% {
+    background: var(--danger);
+  }
+  55%,
+  100% {
+    background: var(--ok);
+  }
+}
+
+/* Nothing in a section animates until it scrolls into view (HomePage adds .adh-inview). */
+[data-animate]:not(.adh-inview),
+[data-animate]:not(.adh-inview) * {
+  animation-play-state: paused !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adh *,
+  .adh *::before,
+  .adh *::after {
+    animation-duration: 0.01s !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition: none !important;
+  }
+}
+
+@media (max-width: 1023px) {
+  .adh-hero-grid,
+  .adh-two {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .adh-section,
+  .adh-story,
+  .adh-closing {
+    padding: 56px 0;
+  }
+  .adh-hero {
+    padding: 40px 0 56px;
+  }
+  .adh-lede {
+    font-size: 16px;
+  }
+  .adh .ad-header {
+    flex-wrap: nowrap;
+    gap: 12px;
+  }
+  .adh .ad-header nav {
+    display: none;
+  }
+  .adh-signin {
+    padding: 6px 14px;
+    white-space: nowrap;
+  }
+}

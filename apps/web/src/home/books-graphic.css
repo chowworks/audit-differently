@@ -1,0 +1,498 @@
+/* The "Around your books" graphic (BooksGraphic.tsx). A looping step counter drives the state; this file styles
+   the states and their transitions. */
+
+.fv-fit {
+  width: 100%;
+  max-width: 560px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+/* Pipes and the mark, shared by the options below */
+.fv-pipe {
+  height: 4px;
+  margin: 0 4px;
+  border-radius: 4px;
+  background: var(--line);
+}
+.fv-pipe.fv-flow {
+  background: repeating-linear-gradient(90deg, var(--brand) 0 8px, transparent 8px 14px);
+  background-size: 28px 4px;
+  animation: fv-flow 0.6s linear infinite;
+}
+@keyframes fv-flow {
+  to {
+    background-position: 28px 0;
+  }
+}
+.fv-mk-body {
+  fill: var(--navy);
+  stroke: var(--on-dark);
+}
+.fv-mk-ink {
+  stroke: var(--on-dark);
+}
+.fv-mk-seal {
+  fill: var(--brand);
+  stroke: var(--on-dark);
+}
+
+/* ---- G and H: chaos → Audit Differently → order ---- */
+.fx-tag {
+  display: inline-block;
+  justify-self: start;
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.fx-tag-bad {
+  background: var(--danger);
+  color: var(--on-dark);
+}
+.fx-tag-good {
+  background: var(--brand);
+  color: var(--navy);
+}
+.fx-pile {
+  position: relative;
+  min-height: 300px;
+  padding: 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--danger-tint) 75%, var(--surface));
+  overflow: hidden;
+}
+@keyframes fx-jitter {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  25% {
+    translate: 2px -2px;
+  }
+  50% {
+    translate: -2px 1px;
+  }
+  75% {
+    translate: 1px 2px;
+  }
+}
+.fx-q {
+  position: absolute;
+  color: var(--danger);
+  font-weight: 800;
+  font-size: 28px;
+  animation: fx-jitter 1.6s ease-in-out infinite;
+}
+.fx-ready {
+  justify-self: start;
+  padding: 6px 12px;
+  border-radius: 99px;
+  background: var(--brand);
+  color: var(--navy);
+  font-weight: 800;
+  font-size: 12.5px;
+  opacity: 0;
+  translate: 0 6px;
+  transition:
+    opacity 300ms ease,
+    translate 300ms ease;
+}
+.fx-ready.fx-in {
+  opacity: 1;
+  translate: 0 0;
+}
+.fx-engine {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 14px 8px;
+  border-radius: 14px;
+  background: var(--navy);
+  color: var(--on-dark);
+  text-align: center;
+  font-size: 12px;
+  transition: box-shadow 300ms ease;
+}
+.fx-engine.fx-busy {
+  animation: fx-pulse 1.2s ease-in-out infinite;
+}
+@keyframes fx-pulse {
+  50% {
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--brand) 28%, transparent);
+  }
+}
+.fx-engine-sm {
+  padding: 10px;
+  border-radius: 50%;
+}
+
+/* The file in flight */
+.fx-traveler {
+  position: absolute;
+  z-index: 3;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--brand);
+  color: var(--navy);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11.5px;
+  white-space: nowrap;
+  box-shadow: 0 10px 24px -12px rgb(11 31 46 / 0.6);
+  pointer-events: none;
+}
+@keyframes fx-travel-x {
+  from {
+    translate: 0 0;
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  to {
+    translate: 210px 0;
+    opacity: 0;
+    scale: 0.6;
+  }
+}
+
+.fx-status {
+  color: var(--brand);
+  font-weight: 700;
+  font-size: 11.5px;
+}
+
+/* G. D with a pipeline on the right, with the detail of each stage */
+.gp-fit {
+  max-width: 680px;
+}
+.gp {
+  position: relative;
+  display: grid;
+  grid-template-columns: 180px 24px 100px 24px minmax(0, 1fr);
+  align-items: stretch;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 24px 50px -32px rgb(11 31 46 / 0.45);
+}
+.gp > .fv-pipe,
+.gp > .fx-engine {
+  align-self: center;
+}
+.gp-pile {
+  min-height: 0;
+}
+.gp-order {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+.gp-stages {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.gp-stages::before {
+  content: '';
+  position: absolute;
+  left: 13px;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--line);
+}
+.gp-stages > li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+.gp-num {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  transition:
+    background 300ms ease,
+    border-color 300ms ease,
+    color 300ms ease;
+}
+.gp-num-on {
+  border-color: var(--brand);
+  color: var(--navy);
+}
+.gp-num-done {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: var(--navy);
+}
+.gp-num-alert {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: var(--on-dark);
+}
+.gp-body {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  opacity: 0.55;
+  transition:
+    opacity 300ms ease,
+    border-color 300ms ease,
+    box-shadow 300ms ease;
+}
+.gp-on .gp-body {
+  opacity: 1;
+  border-color: var(--brand);
+  box-shadow: 0 14px 28px -22px rgb(11 31 46 / 0.5);
+}
+.gp-done .gp-body {
+  opacity: 1;
+}
+.gp-body > b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--navy);
+  font-size: 12.5px;
+}
+.gp-files,
+.gp-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+.gp-files li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--navy);
+  font-size: 11.5px;
+  opacity: 0.2;
+  translate: -8px 0;
+  transition:
+    opacity 300ms ease,
+    translate 300ms ease;
+}
+.gp-files li.gp-in {
+  opacity: 1;
+  translate: 0 0;
+}
+.gp-files small {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.gp-alert {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  padding: 4px 7px;
+  border-left: 3px solid var(--danger);
+  border-radius: 6px;
+  color: var(--navy);
+  font-size: 11.5px;
+  font-weight: 600;
+  opacity: 0.2;
+  transition:
+    opacity 300ms ease,
+    background 300ms ease,
+    border-color 300ms ease;
+}
+.gp-alert.gp-in {
+  opacity: 1;
+  background: color-mix(in srgb, var(--danger-tint) 70%, var(--surface));
+}
+.gp-alert.gp-fixed {
+  border-left-color: var(--brand);
+  background: transparent;
+}
+.gp-alert small {
+  display: block;
+  color: var(--danger);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.gp-alert.gp-fixed small {
+  color: var(--ok);
+}
+.gp-bell {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: var(--on-dark);
+  font-size: 10px;
+  font-weight: 800;
+}
+.gp-fixed .gp-bell {
+  background: var(--brand);
+  color: var(--navy);
+}
+.gp-checks li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+}
+.gp-checks em {
+  font-style: normal;
+  text-align: center;
+}
+.gp-checks i {
+  font-style: normal;
+  font-weight: 800;
+  color: var(--ok);
+}
+.gp-checks li.gp-ok {
+  color: var(--navy);
+}
+.gp-checks li.gp-ok em {
+  color: var(--ok);
+}
+.gp-share {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--navy);
+  font-size: 11.5px;
+  font-weight: 600;
+  opacity: 0.3;
+  transition: opacity 300ms ease;
+}
+.gp-share.gp-in {
+  opacity: 1;
+}
+.gp-share small {
+  display: block;
+  color: var(--ok);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.gp-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: var(--on-dark);
+  font-size: 10px;
+  font-weight: 800;
+}
+.gp-travel {
+  top: 40%;
+  left: 40px;
+  animation: fx-travel-x 0.65s cubic-bezier(0.5, 0, 0.3, 1) both;
+}
+
+/* H. The mess as it really looks */
+.gx-pile {
+  overflow: hidden;
+}
+.gx-item {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 88%;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--navy);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 8px 16px -12px rgb(11 31 46 / 0.6);
+  animation: fx-jitter 2.4s var(--d) ease-in-out infinite;
+  transition:
+    opacity 400ms ease,
+    scale 400ms ease;
+}
+.gx-item.fx-gone {
+  opacity: 0.2;
+  scale: 0.9;
+  filter: grayscale(1);
+  animation-play-state: paused;
+}
+.gx-emoji {
+  font-size: 15px;
+}
+.gx-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gx-text small {
+  display: block;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 500;
+}
+.gx-email {
+  border-left: 3px solid var(--accent);
+}
+.gx-sheet {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+  background:
+    linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 100% 8px,
+    linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 14px 100%,
+    var(--surface);
+}
+.gx-receipt {
+  padding-bottom: 9px;
+  border-radius: 3px 3px 0 0;
+  -webkit-mask:
+    linear-gradient(#000 0 0) top / 100% calc(100% - 5px) no-repeat,
+    conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 8px 5px
+      repeat-x;
+  mask:
+    linear-gradient(#000 0 0) top / 100% calc(100% - 5px) no-repeat,
+    conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 8px 5px
+      repeat-x;
+}
+.gx-bank {
+  padding-top: 11px;
+  background: linear-gradient(var(--navy) 0 5px, var(--surface) 5px);
+}
+.gx-photo {
+  background: color-mix(in srgb, var(--muted) 14%, var(--surface));
+}
+.gx-note {
+  border: 0;
+  border-radius: 2px;
+  background: #fde68a;
+  color: #713f12;
+  font-family: 'Comic Sans MS', 'Marker Felt', cursive;
+  font-size: 12px;
+}

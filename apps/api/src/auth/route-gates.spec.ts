@@ -8,7 +8,7 @@ import { SKIP_TERMS_GATE } from './skip-terms-gate.decorator'
 /**
  * Every HTTP route of the API, read from the controllers' decorators, and whether AuthenticatedGuard applies
  * to it. This data holds payroll and eligibility records: a route without the guard is a public one, and the
- * list of those is two long and written down here. Adding a route means adding it to the list below.
+ * list of those is three long and written down here. Adding a route means adding it to the list below.
  */
 type Ctor = { new (...args: never[]): unknown; prototype: Record<string, unknown> }
 
@@ -64,6 +64,8 @@ const PUBLIC = [
   // The file behind a signed, expiring token that the gated (and logged) /documents/:id/url issued; local disk
   // only, 404 when R2 is configured. The signature is the credential, as with an R2 signed URL.
   'GET /api/documents/local/:token',
+  // The contact form a visitor fills in before having an account: validated, throttled to 5 per 10 minutes, honeypot.
+  'POST /api/contact',
 ]
 
 /** The gated routes a person who has not accepted the current Terms may still call: the Terms screen's own. */
@@ -124,7 +126,7 @@ describe('route gates', () => {
     expect(new Set(all.map((r) => r.route))).toEqual(new Set([...PUBLIC, ...GATED]))
   })
 
-  it('puts AuthenticatedGuard on every route but the two public ones', () => {
+  it('puts AuthenticatedGuard on every route but the three public ones', () => {
     expect(
       all
         .filter((r) => !r.gated)

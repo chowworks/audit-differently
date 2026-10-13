@@ -1,0 +1,160 @@
+/* The Security graphic on the homepage (SecurityGraphic.tsx). */
+
+.sg-fit {
+  width: 100%;
+  max-width: 560px;
+  min-width: 0;
+}
+.sg-mono {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+.sg-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.sg-log li {
+  opacity: 0;
+  translate: 0 6px;
+  transition:
+    opacity 300ms ease,
+    translate 300ms ease;
+}
+.sg-log li.sg-in {
+  opacity: 1;
+  translate: 0 0;
+}
+.sg-log .sg-mono {
+  color: var(--accent);
+  margin-right: 6px;
+}
+.sg-people {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.sg-people li {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  color: var(--navy);
+  font-size: 14px;
+  opacity: 0;
+  translate: 0 -6px;
+  transition:
+    opacity 300ms ease,
+    translate 300ms ease,
+    background 300ms ease;
+}
+.sg-people li.sg-in {
+  opacity: 1;
+  translate: 0 0;
+}
+.sg-people li.sg-new {
+  background: var(--ok-tint);
+}
+.sg-people em {
+  font-style: normal;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.sg-avatar {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: var(--on-dark);
+  font-size: 12px;
+  font-weight: 800;
+}
+.sg-else {
+  border: 1px dashed var(--line);
+}
+.sg-else .sg-avatar {
+  background: var(--surface-alt);
+}
+.sg-people li.sg-deny {
+  background: var(--danger-tint);
+}
+.sg-deny em {
+  color: var(--danger);
+}
+.sg-locks {
+  display: grid;
+  gap: 12px;
+}
+.sg-lock {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 18px 40px -30px rgb(11 31 46 / 0.45);
+  opacity: 0.35;
+  transition:
+    opacity 300ms ease,
+    border-color 300ms ease;
+}
+.sg-lock.sg-in {
+  opacity: 1;
+  border-color: var(--brand);
+}
+.sg-lock-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--ok-tint);
+  font-size: 22px;
+}
+.sg-lock strong {
+  display: block;
+  color: var(--navy);
+  font-size: 16px;
+}
+.sg-lock small {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.sg-cipher {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface-alt);
+  color: var(--navy);
+  font-size: 13px;
+  transition:
+    background 200ms ease,
+    color 200ms ease;
+}
+.sg-cipher.sg-scrambled {
+  background: var(--navy);
+  color: var(--brand);
+}
+.sg-lock .sg-people li {
+  grid-template-columns: 28px 1fr auto;
+  padding: 4px 6px;
+  font-size: 13.5px;
+}
+.sg-lock .sg-avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+}

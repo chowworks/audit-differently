@@ -20,13 +20,6 @@ docs/private/
 # Local dev file storage (uploaded documents)
 apps/api/storage/
 
-# Pitch and demo-recording material stays out of the repository (owner's call, 2026-10-11)
-docs/pitch/
-docs/demo/
-PITCH-SCRIPT.md
-*.mp4
-*.webm
-
 # Data of local database experiments and the Railway CLI's link file
 apps/api/.pgdata/
 apps/api/.pglite/

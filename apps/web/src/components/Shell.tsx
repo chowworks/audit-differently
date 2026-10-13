@@ -14,7 +14,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
     <div>
       <div className="ad-top">
         <header className="ad-wrap ad-header">
-          <Link to="/" className="ad-brand">
+          <Link to="/overview" className="ad-brand">
             <Mark />
             <span className="ad-wordmark">
               audit<span className="ad-slash">/</span>differently
@@ -23,7 +23,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <nav aria-label="Main">
             <ul className="ad-nav">
               <li>
-                <NavLink to="/" end>
+                <NavLink to="/overview" end>
                   Overview
                 </NavLink>
               </li>

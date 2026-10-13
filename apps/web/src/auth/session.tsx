@@ -6,6 +6,9 @@ export interface Session {
   ready: boolean
   signedIn: boolean
   displayName: string
+  /** The person's own name and email, for forms that would otherwise ask (empty when unknown). */
+  name: string
+  email: string
   getToken: () => Promise<string | null>
 }
 
@@ -25,6 +28,8 @@ function ClerkSession({ children }: { children: React.ReactNode }) {
       ready: isLoaded,
       signedIn: !!isSignedIn,
       displayName: user?.fullName ?? user?.primaryEmailAddress?.emailAddress ?? '',
+      name: user?.fullName ?? '',
+      email: user?.primaryEmailAddress?.emailAddress ?? '',
       getToken: () => getToken(),
     }),
     [isLoaded, isSignedIn, user, getToken]

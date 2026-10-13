@@ -49,6 +49,10 @@ export default defineRailway((ctx) => {
     R2_ACCESS_KEY_ID: preserve(),
     R2_SECRET_ACCESS_KEY: preserve(),
     R2_DOCUMENTS_BUCKET: preserve(),
+    // The public contact form sends through Resend (src/contact); unset, the form says it is unavailable.
+    RESEND_API_KEY: preserve(),
+    CONTACT_FROM_EMAIL: preserve(),
+    CONTACT_TO_EMAIL: preserve(),
   }
 
   // `dev`: the shared development environment. Laptops point apps/api/.env at its database through the TCP proxy
