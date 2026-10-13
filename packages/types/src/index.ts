@@ -300,6 +300,31 @@ export const DEFAULT_FUNDING_SOURCES = [
 /** Roles that may open a 'personal' document. A bookkeeper attaches them; they do not read them back. */
 export const PERSONAL_DOCUMENT_ROLES: ReadonlySet<Role> = new Set(['owner', 'auditor'])
 
+/** What a contact-form message is about. The contact page's `?topic=` picks one; anything else is 'question'. */
+export const CONTACT_TOPICS = [
+  'demo',
+  'question',
+  'broken-link',
+  'privacy',
+  'account',
+  'other',
+] as const
+export type ContactTopic = (typeof CONTACT_TOPICS)[number]
+export const CONTACT_TOPIC_LABELS: Record<ContactTopic, string> = {
+  demo: 'Book a demo',
+  question: 'A general question',
+  'broken-link': 'A broken link or missing page',
+  privacy: 'Privacy or my data',
+  account: 'My account or signing in',
+  other: 'Something else',
+}
+/**
+ * The address a contact message is about (the 404 page's `?page=`): a path only, never a query string or
+ * hash, which can carry tokens. Checked the same way by the form and the API.
+ */
+export const CONTACT_PAGE_MAX = 300
+export const CONTACT_PAGE_PATTERN = /^\/[^\s?#]*$/
+
 // ── API shapes ──────────────────────────────────────────────────────────────
 
 export interface Me {

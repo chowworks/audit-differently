@@ -14,6 +14,7 @@ import { ReportsModule } from './reports/reports.module'
 import { DocumentsModule } from './documents/documents.module'
 import { ParticipantsModule } from './participants/participants.module'
 import { DeletionModule } from './deletion/deletion.module'
+import { ContactModule } from './contact/contact.module'
 import { TenantMiddleware } from './core/tenant.middleware'
 
 @Module({
@@ -34,6 +35,7 @@ import { TenantMiddleware } from './core/tenant.middleware'
     DocumentsModule,
     ParticipantsModule,
     DeletionModule,
+    ContactModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

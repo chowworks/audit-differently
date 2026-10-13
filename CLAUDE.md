@@ -150,9 +150,10 @@ of two.
   otherwise). A path that returns nothing under it is the bug, not the policy.
 - Raw SQL is always parameterized. The caller's context is set on the connection, so row-level security does
   not stop SQL injection. Never build SQL from request values.
-- **Every route carries `AuthenticatedGuard`** except `GET /api/health` and `GET /api/documents/local/:token`
+- **Every route carries `AuthenticatedGuard`** except `GET /api/health`, `GET /api/documents/local/:token`
   (the file behind a signed, expiring token that the gated `/documents/:id/url` issued; local disk only, which
-  a deployed API refuses); `apps/api/src/auth/route-gates.spec.ts` lists every
+  a deployed API refuses) and `POST /api/contact` (the public contact form: validated, throttled, honeypot,
+  sent through Resend, nothing stored or logged); `apps/api/src/auth/route-gates.spec.ts` lists every
   route and fails on a new one without the guard. Inside the line, a row of another workspace is a 404 from
   the tenant-scoped query (`tenantWhere`), never the row and never a different error; a change needs
   `WRITE_ROLES` (lists and members: `owner`), opening a personal document `PERSONAL_DOCUMENT_ROLES`, and a

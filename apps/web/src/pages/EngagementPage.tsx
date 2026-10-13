@@ -448,7 +448,7 @@ export function EngagementPage() {
         engagementId={c.id}
         workspaceId={c.workspaceId}
         name={c.name}
-        onDeleted={() => navigate('/')}
+        onDeleted={() => navigate('/overview')}
       />
 
       {menu && (

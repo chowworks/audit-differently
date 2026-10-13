@@ -1,0 +1,192 @@
+/* The homepage hero graphic (HeroApp.tsx). A looping step counter there drives the state; this file styles
+   each state and the transitions between them. */
+
+.hv-mono {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+.hv-fit {
+  width: 100%;
+  max-width: 560px;
+  min-width: 0;
+}
+.hv-app {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+  box-shadow: 0 30px 60px -32px rgb(11 31 46 / 0.45);
+  rotate: 1deg;
+}
+.hv-app-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: var(--navy);
+  color: var(--on-dark);
+  font-size: 13px;
+}
+.hv-app-bar span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--on-dark) 40%, transparent);
+}
+.hv-app-bar b {
+  margin-left: 10px;
+  font-weight: 800;
+}
+.hv-app-body {
+  display: grid;
+  grid-template-columns: 0.9fr 1.3fr;
+}
+.hv-app-side {
+  padding: 16px;
+  border-right: 1px solid var(--line);
+  background: var(--surface-alt);
+}
+.hv-app-kicker {
+  color: var(--navy);
+  font-weight: 800;
+  font-size: 13.5px;
+}
+.hv-app-side .hv-app-kicker {
+  margin-bottom: 10px;
+}
+.hv-app-side ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+}
+.hv-app-side li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 600;
+}
+.hv-app-side i {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  transition:
+    background 250ms ease,
+    border-color 250ms ease;
+}
+.hv-app-side li.hv-on i {
+  border-color: var(--brand);
+  background: var(--brand);
+}
+.hv-app-main {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+.hv-app-label {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.hv-app-num {
+  color: var(--navy);
+  font-weight: 800;
+  font-size: 38px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.hv-app-bar2 {
+  margin-top: 8px;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--surface-alt);
+  overflow: hidden;
+}
+.hv-app-bar2 i {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+  transition: width 450ms ease;
+}
+.hv-app-row {
+  display: grid;
+  grid-template-columns: 1fr auto 132px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--navy);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.hv-chip {
+  justify-self: end;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid;
+  white-space: nowrap;
+  transition:
+    color 250ms ease,
+    background 250ms ease;
+}
+.hv-chip-bad {
+  color: var(--danger);
+  background: var(--danger-tint);
+}
+.hv-chip-good {
+  color: var(--ok);
+  background: var(--ok-tint);
+}
+.hv-app-cta {
+  justify-self: start;
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: var(--on-dark);
+  font-weight: 800;
+  font-size: 14px;
+  opacity: 0.35;
+  transition:
+    opacity 300ms ease,
+    box-shadow 300ms ease;
+}
+.hv-app-cta.hv-on {
+  opacity: 1;
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--brand) 30%, transparent);
+}
+
+.hv-app-row-2 {
+  row-gap: 0;
+}
+.hv-cmp {
+  grid-column: 1 / -1;
+  max-height: 0;
+  overflow: hidden;
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 500;
+  opacity: 0;
+  transition:
+    max-height 300ms ease,
+    opacity 300ms ease,
+    color 300ms ease;
+}
+.hv-cmp.hv-in {
+  max-height: 40px;
+  margin-top: 6px;
+  opacity: 1;
+}
+.hv-cmp.hv-ok {
+  color: var(--ok);
+  font-weight: 600;
+}
