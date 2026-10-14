@@ -32,7 +32,10 @@ export default defineRailway((ctx) => {
     buildEnvironment: 'V3',
     builder: 'NIXPACKS',
   } as const
-  const migrate = 'npx prisma migrate deploy --schema apps/api/prisma/schema.prisma'
+  // Then the restricted role is brought in step with DATABASE_URL (scripts/ensure-app-role.ts): after the migrations, so
+  // the functions it may execute exist, and before the API connects as it.
+  const migrate =
+    'npx prisma migrate deploy --schema apps/api/prisma/schema.prisma && npm run role:ensure -w @ad/api'
 
   // The variables every API environment carries; the ones that differ are set below.
   const shared = {

@@ -149,7 +149,8 @@ of two.
   Clerk email only. The restricted role never bypasses a policy. A guard calls
   `identifyCaller` right after it verifies the caller.
 - **The API connects as the restricted role in every environment, a laptop included:** `DATABASE_URL` is the
-  role from `apps/api/scripts/create-app-role.ts` (never a superuser, `BYPASSRLS` or the owner), and
+  role from `apps/api/scripts/create-app-role.ts`, kept in step on every Railway deploy by `role:ensure` after the
+  migrations (never a superuser, `BYPASSRLS` or the owner), and
   `SCHEMA_DATABASE_URL` is the owner, for Prisma's CLI, the seed and the scripts (import
   `scripts/lib/owner-env.ts` first in any new one). Every environment sets `REQUIRE_TENANT_RLS=on`, and every
   connection to a database off the machine uses TLS (`sslmode=require`; `src/startup-checks.ts` refuses

@@ -105,7 +105,10 @@ Every script that writes needs `--confirm-host <host>`.
 1. Point `DATABASE_URL` and `SCHEMA_DATABASE_URL` at the owner. Run `npm run db:migrate`, then `npm run db:seed`
    if it is a development database.
 2. Create the restricted role: `APP_ROLE_PASSWORD=... npm run role:create -- --confirm-host <host>`. Set
-   `DATABASE_URL` to the URL it prints; `SCHEMA_DATABASE_URL` stays the owner.
+   `DATABASE_URL` to the URL it prints; `SCHEMA_DATABASE_URL` stays the owner. On Railway this step is automatic:
+   set `DATABASE_URL` to the role's URL with a password you choose, and every deploy runs
+   `npm run role:ensure` after the migrations (`scripts/ensure-app-role.ts`), which creates the role if it is
+   missing, sets its password from `DATABASE_URL` when that cannot log in, and re-applies its limits and grants.
 3. Make the first owner: `npm run role:grant -- --user <clerk user id> --workspace "<name>" --role owner --confirm-host <host>`.
 4. Set `REQUIRE_TENANT_RLS=on` (every environment), `sslmode=require` on both URLs, and turn point-in-time
    recovery on before the first real row (`.railway/railway.ts` declares the volume backups and the PITR bucket).

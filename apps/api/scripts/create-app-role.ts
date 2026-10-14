@@ -5,7 +5,8 @@
  *
  *   APP_ROLE_PASSWORD=... npx ts-node scripts/create-app-role.ts --confirm-host <host>
  *
- * The password travels in a SQL statement, so do not run this against a server that logs statements.
+ * The password is sent as its SCRAM verifier (src/core/app-role.ts), never in plain text. Deploys keep the role in step
+ * on their own (scripts/ensure-app-role.ts); this script is for a database set up by hand.
  *
  * The role may read and write the tables but cannot change the schema, and may execute only the functions listed
  * in src/core/app-role-grants.ts. Tables made later by migrations (run as the owner) get table grants through
@@ -15,7 +16,7 @@
 import './lib/owner-env'
 import { PrismaClient } from '@prisma/client'
 import { assertBypassesRls, requireHostConfirmation } from './lib/db-guard'
-import { APP_ROLE_FUNCTIONS } from '../src/core/app-role-grants'
+import { appRoleSql, scramVerifier } from '../src/core/app-role'
 
 const ROLE = process.env.APP_ROLE_NAME ?? 'ad_app'
 
@@ -30,42 +31,17 @@ async function main(): Promise<void> {
     const [me] = await prisma.$queryRawUnsafe<{ current_user: string; db: string }[]>(
       `SELECT current_user, current_database() AS db`
     )
-    const quoted = password.replace(/'/g, "''")
-    const exists = await prisma.$queryRawUnsafe<unknown[]>(
-      `SELECT 1 FROM pg_roles WHERE rolname = '${ROLE}'`
-    )
-    if (exists.length && !process.argv.includes('--rotate')) {
+    const exists = await prisma.$queryRaw<unknown[]>`SELECT 1 FROM pg_roles WHERE rolname = ${ROLE}`
+    const keep = exists.length > 0 && !process.argv.includes('--rotate')
+    if (keep)
       console.log(
         `Role ${ROLE} already exists: its password is left alone (pass --rotate to set APP_ROLE_PASSWORD, which changes what a running API must connect with). Privileges are refreshed.`
       )
-    } else {
-      await prisma.$executeRawUnsafe(
-        `${exists.length ? 'ALTER' : 'CREATE'} ROLE ${ROLE} LOGIN PASSWORD '${quoted}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`
-      )
-    }
-    await prisma.$executeRawUnsafe(`GRANT CONNECT ON DATABASE "${me.db}" TO ${ROLE}`)
-    await prisma.$executeRawUnsafe(`GRANT USAGE ON SCHEMA public TO ${ROLE}`)
-    await prisma.$executeRawUnsafe(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${ROLE}`
-    )
-    await prisma.$executeRawUnsafe(
-      `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${ROLE}`
-    )
-    // Functions: only the ones in src/core/app-role-grants.ts. Nothing is granted by default, so a function added
-    // later is not callable by the API until it is listed there and this script is run again.
-    await prisma.$executeRawUnsafe(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM ${ROLE}`)
-    for (const fn of APP_ROLE_FUNCTIONS) {
-      await prisma.$executeRawUnsafe(`GRANT EXECUTE ON FUNCTION ${fn} TO ${ROLE}`)
-    }
-    await prisma.$executeRawUnsafe(
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${ROLE}`
-    )
-    await prisma.$executeRawUnsafe(
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${ROLE}`
-    )
-    await prisma.$executeRawUnsafe(
-      `ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM ${ROLE}`
-    )
+    for (const sql of appRoleSql(ROLE, me.db, {
+      exists: exists.length > 0,
+      verifier: keep ? null : scramVerifier(password),
+    }))
+      await prisma.$executeRawUnsafe(sql)
     const url = new URL(process.env.DATABASE_URL as string)
     url.username = ROLE
     url.password = '***'
