@@ -110,6 +110,12 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
 general>/<uuid>.<ext>` (a database trigger refuses any other key, migrations `20261011000600` and `..0700`,
   and the API serves, reads or deletes nothing from a row whose key says otherwise), served by a short-lived signed URL, never a public URL. Every read, list,
   download and export of a document or a participant row is written to `DataAccessLog`.
+- **Every change is logged with it** (`AccessLogService.change`): the write and its `DataAccessLog` line go in one
+  transaction, so neither is kept without the other. The `description` says what the person did in the words of
+  the screen they did it on; staff are named by email, never display name; `changes` come from `changesOf`
+  (`src/core/changes.ts`), which keeps personal and free-text fields to their name alone. A page writes one read
+  line when it is opened, never because it re-fetched after the person's own action (actions return the updated
+  data), and nothing turns read logging off.
 - No document ever leaves the system by email. Notifications carry links.
 - Allowed uploads: pdf, png, jpg/jpeg, xlsx, docx, and the bytes must begin the way that type does
   (`looksLike` in `documents.service.ts`); the browser's claimed type alone is never trusted. Record the sha256
