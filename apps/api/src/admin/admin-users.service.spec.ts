@@ -57,6 +57,43 @@ const admins = (n: number) => ({
 
 afterEach(() => jest.restoreAllMocks())
 
+describe('AdminUsersService search', () => {
+  const everyone = [
+    { id: 'a', email: 'pat@example.org', displayName: 'Pat Lee', role: null },
+    { id: 'b', email: 'sam@other.com', displayName: 'Sam', role: null },
+    { id: 'c', email: null, displayName: 'Patricia', role: null },
+  ]
+
+  it('passes plain text to Clerk unchanged', async () => {
+    const { users, clerk } = setup()
+    await users.search('  pat ')
+    expect(clerk.searchUsers).toHaveBeenCalledWith('pat')
+  })
+
+  it('lists up to 100 people for a bare *', async () => {
+    const { users, clerk } = setup()
+    clerk.searchUsers.mockResolvedValue(everyone)
+    expect(await users.search('*')).toEqual(everyone)
+    expect(clerk.searchUsers).toHaveBeenCalledWith('', 100)
+  })
+
+  it('matches a wildcard pattern against the whole email or name', async () => {
+    const { users, clerk } = setup()
+    clerk.searchUsers.mockResolvedValue(everyone)
+    expect((await users.search('*@example.org')).map((u) => u.id)).toEqual(['a'])
+    expect(clerk.searchUsers).toHaveBeenCalledWith('@example.org', 100)
+    expect((await users.search('pat*')).map((u) => u.id)).toEqual(['a', 'c'])
+    expect((await users.search('PAT*E*')).map((u) => u.id)).toEqual(['a'])
+  })
+
+  it('treats every other character literally', async () => {
+    const { users, clerk } = setup()
+    clerk.searchUsers.mockResolvedValue(everyone)
+    expect(await users.search('.*')).toEqual([])
+    expect(await users.search('(*')).toEqual([])
+  })
+})
+
 describe('AdminUsersService', () => {
   it('makes someone an admin, and logs who changed whom, by email', async () => {
     const { users, clerk, lines } = setup()

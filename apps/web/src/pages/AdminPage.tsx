@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useUser } from '@clerk/clerk-react'
 import {
@@ -223,18 +223,33 @@ function Admins() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<{ at: number; text: string } | null>(null)
-  const search = async (ev: React.FormEvent) => {
-    ev.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      setFound(await api.get<AdminUserDto[]>(`/admin/users?q=${encodeURIComponent(query.trim())}`))
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
+  const apiRef = useRef(api)
+  apiRef.current = api
+  // Searches as the admin types, a moment after the last key; an answer to an older query is dropped.
+  useEffect(() => {
+    const q = query.trim()
+    if (!q) {
+      setFound(null)
+      return
     }
-  }
+    let current = true
+    const timer = setTimeout(async () => {
+      try {
+        const people = await apiRef.current.get<AdminUserDto[]>(
+          `/admin/users?q=${encodeURIComponent(q)}`
+        )
+        if (!current) return
+        setError(null)
+        setFound(people)
+      } catch (e) {
+        if (current) setError((e as Error).message)
+      }
+    }, 300)
+    return () => {
+      current = false
+      clearTimeout(timer)
+    }
+  }, [query])
   const setRole = async (u: AdminUserDto, role: 'admin' | null) => {
     const who = u.email ?? u.displayName ?? u.id
     if (!confirm(role ? `Make ${who} a platform admin?` : `Remove ${who} as a platform admin?`))
@@ -318,34 +333,25 @@ function Admins() {
               )}
             </>
           )}
-          <form onSubmit={search} className="mt-4 flex gap-2">
-            <input
-              className={inputClass}
-              placeholder="Find a person by name or email"
-              aria-label="Find a person by name or email"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <Button type="submit" disabled={busy || !query.trim()}>
-              Search
-            </Button>
-          </form>
+          <input
+            type="search"
+            className={`${inputClass} mt-4`}
+            placeholder="Find a person by name or email"
+            aria-label="Find a person by name or email"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
           <p className="mt-2 text-xs text-soft">
-            Only people who have signed in to Audit Differently at least once can be found. Someone
-            new signs in first (they will see that they are not in a workspace yet), then search
-            again.
+            Results appear as you type. Use * as a wildcard (<code>*</code> alone lists everyone,{' '}
+            <code>*@example.org</code> a whole domain). Only people who have signed in at least once
+            can be found.
           </p>
           {done && (
             <p className="mt-2">
               <SavedMark at={done.at}>{done.text}</SavedMark>
             </p>
           )}
-          {found?.length === 0 && (
-            <Empty>
-              Nobody matches. If they have never signed in, ask them to sign in once, then search
-              again.
-            </Empty>
-          )}
+          {found?.length === 0 && <Empty>Nobody matches.</Empty>}
           {!!found?.length && (
             <>
               <p className="ad-group-title mt-4">Search results</p>
@@ -353,6 +359,9 @@ function Admins() {
                 {head}
                 <tbody>{found.map((u) => row(u, true))}</tbody>
               </table>
+              {found.length >= 100 && (
+                <p className="mt-2 text-xs text-soft">Showing the first 100: narrow the search.</p>
+              )}
             </>
           )}
         </Card>
@@ -364,8 +373,7 @@ function Admins() {
         <HandCard lead="Admins run the platform, not the records.">
           <p>
             An admin sets up workspaces and their people. You cannot change your own role, so there
-            is always at least one admin, and there can be at most 20. To make someone an admin,
-            they sign in once first, then you find them here.
+            is always at least one admin, and there can be at most 20.
           </p>
         </HandCard>
       </div>

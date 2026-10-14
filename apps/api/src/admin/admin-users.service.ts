@@ -9,6 +9,9 @@ import {
 import { ClerkService } from '../auth/clerk.service'
 import { PrismaService } from '../prisma/prisma.service'
 
+/** The most people one wildcard search returns (Clerk's page size). */
+export const WILDCARD_LIMIT = 100
+
 /**
  * Admin tools: who is a platform admin (Clerk `publicMetadata.role` on this product's instance). It is the only role
  * an account carries; every other role is a membership in a workspace. Same rules as Learn Differently's
@@ -26,8 +29,25 @@ export class AdminUsersService {
     private readonly prisma: PrismaService
   ) {}
 
-  search(query: string | undefined): Promise<AdminUserDto[]> {
-    return this.clerk.searchUsers((query ?? '').trim().slice(0, 100))
+  /**
+   * Plain text is Clerk's own substring match on name or email (20 newest). With a `*` it is a wildcard pattern that
+   * must match the whole email or the whole name (`pat*`, `*@example.org`, `*` for everyone): Clerk narrows by the
+   * longest literal piece, up to 100 people, and the pattern is applied here.
+   */
+  async search(query: string | undefined): Promise<AdminUserDto[]> {
+    const q = (query ?? '').trim().slice(0, 100)
+    if (!q.includes('*')) return this.clerk.searchUsers(q)
+    const literal = q.split('*').reduce((a, b) => (b.trim().length > a.trim().length ? b : a), '')
+    const found = await this.clerk.searchUsers(literal.trim(), WILDCARD_LIMIT)
+    if (!q.replace(/\*/g, '')) return found
+    const pattern = new RegExp(
+      `^${q
+        .split(/\*+/)
+        .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+        .join('.*')}$`,
+      'i'
+    )
+    return found.filter((u) => pattern.test(u.email ?? '') || pattern.test(u.displayName ?? ''))
   }
 
   /**
