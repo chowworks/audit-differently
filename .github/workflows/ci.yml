@@ -75,11 +75,33 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - run: npm install -g @railway/cli@5.63.1
-      # Uploads the checked-out tree and returns (--detach); Railway builds and starts it (deploy:start runs the
-      # migrations and role:ensure). Not --ci, which GitHub's CI=true turns on anyway: production rebuilds only when its
-      # watch paths changed, and --ci then waits for a build that never comes, until the job times out.
-      - run: railway up --service "${{ vars.RAILWAY_API_SERVICE }}" --detach
+        with:
+          fetch-depth: 0
+      # Railway rebuilds the API only when a file in its watch paths changed (.railway/railway.ts: apps/api/**,
+      # packages/types/**, docs/terms/** and package*.json, gitignore-style, so the last matches at any depth). Keep this
+      # list in step with that one. A push that changed one of them uploads and waits for the build (--ci), so a
+      # failed build fails this job; any other push uploads nothing, since Railway would build nothing and --ci would
+      # wait for a build that never comes. A re-run, or a push whose previous commit is unknown, uploads without waiting.
+      - name: Did this push change the API?
+        id: api
+        run: |
+          before='${{ github.event.before }}'
+          if [ "${{ github.run_attempt }}" != "1" ] || ! git cat-file -e "$before^{commit}" 2>/dev/null; then
+            echo "deploy=detach" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$before" "${{ github.sha }}" | grep -qE '^(apps/api/|packages/types/|docs/terms/)|(^|/)package[^/]*\.json$'; then
+            echo "deploy=wait" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=skip" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.api.outputs.deploy != 'skip'
+        run: npm install -g @railway/cli@5.63.1
+      # Uploads the checked-out tree; Railway builds and starts it (deploy:start runs the migrations and role:ensure).
+      - if: steps.api.outputs.deploy == 'wait'
+        run: railway up --service "${{ vars.RAILWAY_API_SERVICE }}" --ci
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - if: steps.api.outputs.deploy == 'detach'
+        run: railway up --service "${{ vars.RAILWAY_API_SERVICE }}" --detach
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
