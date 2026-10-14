@@ -76,8 +76,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: npm install -g @railway/cli@5.63.1
-      # Uploads the checked-out tree; migrations and the seed run when the service starts. --ci waits for the build.
-      - run: railway up --service "${{ vars.RAILWAY_API_SERVICE }}" --ci
+      # Uploads the checked-out tree and returns (--detach); Railway builds and starts it (deploy:start runs the
+      # migrations and role:ensure). Not --ci, which GitHub's CI=true turns on anyway: production rebuilds only when its
+      # watch paths changed, and --ci then waits for a build that never comes, until the job times out.
+      - run: railway up --service "${{ vars.RAILWAY_API_SERVICE }}" --detach
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
