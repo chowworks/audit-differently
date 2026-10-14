@@ -695,6 +695,48 @@
     border-left-color: var(--warn);
     background: var(--warn-tint);
   }
+  /* The contact form's confirmation */
+  .ad-sent {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 0 8px;
+    text-align: center;
+  }
+  .ad-sent-mark {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    margin-bottom: 16px;
+    border-radius: 50%;
+    background: var(--ok-tint);
+    color: var(--ok);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--ok-tint) 50%, transparent);
+  }
+  .ad-sent-title {
+    margin: 0 0 6px;
+    color: var(--navy);
+    font-weight: 700;
+    font-size: 20px;
+    line-height: 1.2;
+  }
+  .ad-sent-text {
+    max-width: 420px;
+    margin: 0;
+    color: var(--muted);
+  }
+  .ad-sent-text strong {
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+  .ad-sent-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px 12px;
+    margin-top: 22px;
+  }
   .ad-empty {
     padding: 24px 0;
     text-align: center;

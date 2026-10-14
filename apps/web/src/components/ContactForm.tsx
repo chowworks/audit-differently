@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { CONTACT_TOPICS, CONTACT_TOPIC_LABELS, type ContactTopic } from '@ad/types'
 import { useSession } from '@/auth/session'
 import { ApiError, apiFetch } from '@/services/api'
-import { Button, Card, ErrorNote, Field, Notice, inputClass } from '@/components/ui'
+import { Icon } from '@/components/icons'
+import { Button, Card, ErrorNote, Field, inputClass } from '@/components/ui'
 
 const EMPTY = {
   name: '',
@@ -39,7 +41,7 @@ export function ContactForm({
   page?: string
 }) {
   // Signed in, the name and email come from the account; the person can still change them.
-  const { name, email } = useSession()
+  const { name, email, signedIn } = useSession()
   const [form, setForm] = useState({
     ...EMPTY,
     name,
@@ -48,7 +50,8 @@ export function ContactForm({
     message: initialMessage,
   })
   const [busy, setBusy] = useState(false)
-  const [sent, setSent] = useState(false)
+  // What was sent, for the confirmation: who to answer and whether it was a demo request.
+  const [sent, setSent] = useState<{ email: string; demo: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const set =
     (k: keyof typeof EMPTY) =>
@@ -64,8 +67,8 @@ export function ContactForm({
         method: 'POST',
         body: JSON.stringify({ ...form, page }),
       })
-      setSent(true)
-      setForm(EMPTY)
+      setSent({ email: form.email, demo: form.category === 'demo' })
+      setForm({ ...EMPTY, name, email, category: initialCategory })
     } catch (err) {
       setError(problem(err))
     } finally {
@@ -73,7 +76,29 @@ export function ContactForm({
     }
   }
 
-  if (sent) return <Notice tone="ok">Thanks, we'll be in touch.</Notice>
+  if (sent)
+    return (
+      <Card>
+        <div className="ad-sent" role="status">
+          <span className="ad-sent-mark">
+            <Icon name="check" size={28} />
+          </span>
+          <h2 className="ad-sent-title">{sent.demo ? 'Demo request sent' : 'Message sent'}</h2>
+          <p className="ad-sent-text">
+            Thanks for writing. We'll reply to <strong>{sent.email}</strong>
+            {sent.demo ? ' to set up a time that suits your team.' : '.'}
+          </p>
+          <div className="ad-sent-actions">
+            <Button onClick={() => setSent(null)}>Send another message</Button>
+            {signedIn && (
+              <Link className="ad-btn" to="/overview">
+                Back to overview
+              </Link>
+            )}
+          </div>
+        </div>
+      </Card>
+    )
   return (
     <Card>
       <form className="grid gap-4" onSubmit={submit}>
