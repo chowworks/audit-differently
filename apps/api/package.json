@@ -16,6 +16,8 @@
     "db:seed": "ts-node prisma/seed.ts",
     "role:create": "ts-node scripts/create-app-role.ts",
     "role:ensure": "ts-node scripts/ensure-app-role.ts",
+    "deploy:start": "prisma migrate deploy && npm run role:ensure && node dist/main.js",
+    "deploy:start:dev": "prisma migrate deploy && npm run role:ensure && npm run db:seed && node dist/main.js",
     "role:grant": "ts-node scripts/grant-role.ts",
     "demo:reset": "ts-node scripts/demo-reset.ts"
   },

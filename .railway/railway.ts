@@ -92,6 +92,7 @@ export default defineRailway((ctx) => {
     start: `${migrate} && node apps/api/dist/main.js`,
     deploy: { restartPolicyMaxRetries: 3 },
     replicas: { [REGION]: 1 },
+    domains: ['api.auditdifferently.tech'],
     env: { NODE_ENV: 'production', ...shared },
   })
   return project('audit-differently', { resources: [Postgres, PostgresPITR, api] })
