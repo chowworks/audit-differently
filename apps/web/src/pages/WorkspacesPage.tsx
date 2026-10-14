@@ -1,21 +1,17 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { ROLE_LABELS, type Role, type WorkspaceDetail, type WorkspaceDto } from '@ad/types'
-import { useApi, useLoad } from '@/hooks/useApi'
-import { Button, Empty, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
+import { Link } from 'react-router-dom'
+import { ROLE_LABELS, type Role, type WorkspaceDto } from '@ad/types'
+import { useLoad } from '@/hooks/useApi'
+import { Empty, ErrorNote } from '@/components/ui'
 import { DeleteModal } from '@/components/DeleteModal'
-import { TermsBox } from '@/components/TermsBox'
-import { useTermsVersion } from '@/auth/me'
 import { HandCard } from '@/components/HandCard'
 
 const roleLabel = (role: Role | null) => (role ? ROLE_LABELS[role] : null)
 
-/** Every workspace this person belongs to. */
+/** Every workspace this person belongs to. A platform admin creates workspaces, on the Admin tools page. */
 export function WorkspacesPage() {
   const { data, error, loading, reload } = useLoad<WorkspaceDto[]>('/workspaces')
-  const [creating, setCreating] = useState(false)
   const [deleting, setDeleting] = useState<WorkspaceDto | null>(null)
-  const navigate = useNavigate()
   return (
     <>
       <div className="ad-head">
@@ -26,17 +22,12 @@ export function WorkspacesPage() {
             the lists they share. What one person records, the whole team sees.
           </p>
         </div>
-        <div className="ad-actions">
-          <Button kind="primary" onClick={() => setCreating(true)}>
-            + New workspace
-          </Button>
-        </div>
       </div>
       <ErrorNote message={error} />
       {loading && !data && <Empty>Loading…</Empty>}
       <div className="grid gap-4 lg:grid-cols-5">
         <div className="grid content-start gap-4 lg:col-span-3">
-          {data?.length === 0 && <Empty>No workspace yet. Create the first one.</Empty>}
+          {data?.length === 0 && <Empty>No workspace yet.</Empty>}
           {data?.map((w) => (
             <section key={w.id} className="ad-card">
               <div className="ad-card-body ad-grant-card">
@@ -106,96 +97,6 @@ export function WorkspacesPage() {
           }}
         />
       )}
-      {creating && (
-        <NewWorkspaceModal
-          onClose={() => setCreating(false)}
-          onCreated={async (w) => {
-            setCreating(false)
-            await reload()
-            navigate(`/workspaces/${w.id}`)
-          }}
-        />
-      )}
     </>
-  )
-}
-
-function NewWorkspaceModal({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void
-  onCreated: (w: WorkspaceDetail) => void
-}) {
-  const api = useApi()
-  const termsVersion = useTermsVersion()
-  const [name, setName] = useState('')
-  const [accepted, setAccepted] = useState(false)
-  const [readAll, setReadAll] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const save = async (ev: React.FormEvent) => {
-    ev.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      onCreated(
-        await api.post<WorkspaceDetail>('/workspaces', {
-          name,
-          acceptedTermsVersion: termsVersion,
-        })
-      )
-    } catch (e) {
-      setError((e as Error).message)
-      setBusy(false)
-    }
-  }
-  return (
-    <Modal title="New workspace" onClose={onClose} wide>
-      <form onSubmit={save} className="grid gap-4">
-        <ErrorNote message={error} />
-        <Field label="Workspace name" hint="Usually your organization's name">
-          <input
-            className={inputClass}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            autoFocus
-          />
-        </Field>
-        <div className="grid gap-2">
-          <span className="text-sm font-semibold">Terms &amp; Conditions</span>
-          <TermsBox onReadAll={() => setReadAll(true)} />
-          {readAll ? (
-            <p className="ad-terms-done">
-              ✓ You have reached the end of the Terms &amp; Conditions.
-            </p>
-          ) : (
-            <p className="ad-terms-scroll" role="status">
-              ↓ Scroll to the bottom of the Terms &amp; Conditions to continue
-            </p>
-          )}
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={accepted}
-              disabled={!readAll}
-              onChange={(e) => setAccepted(e.target.checked)}
-              required
-            />
-            <span>I have read and accept the Terms &amp; Conditions</span>
-          </label>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button type="button" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" kind="primary" disabled={busy || !name.trim() || !accepted}>
-            Create workspace
-          </Button>
-        </div>
-      </form>
-    </Modal>
   )
 }

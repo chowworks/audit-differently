@@ -57,6 +57,19 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   participants and eligibility (step 5, from the day the program starts enrolling), monthly ledger and
   proof, signed report submitted by the due day, final audit package. Every record carries a `task` in
   plain words; the overview's "records to check" and "next up" show the task, never the record's name.
+- **Platform admin** = a person whose Clerk `publicMetadata.role` is `admin` (`PLATFORM_ADMIN`; same convention as
+  Interview Differently), not a `Membership` role. On the **Admin tools** page (`/admin`, from the account menu; an
+  admin in no workspace lands there) an admin lists every workspace with its people, creates one for a customer
+  with its first owner named by email (`POST /workspaces`, the only way a workspace is made), renames any
+  workspace and manages its people and lists, reads its suggestions (`/admin/workspaces/...`), and makes or unmakes
+  other admins (`/admin/users`, `/admin/admins`; never their own role; at most 20, `MAX_PLATFORM_ADMINS`; every
+  attempt that reaches Clerk is an append-only `PlatformRoleChange` row, shown as "Admin changes"). Workspace level
+  only: an admin reads no engagement, record, access log or deletion summary and deletes no workspace, and where they
+  are also a member they have exactly that membership's rights. An admin **may seat themself** in any workspace, in
+  any role (owner's decision, 2026-10-14), and then reads its records as that member; the log line says so ("…
+  (platform admin) added themself as owner"), an address that is one of the admin's own verified Clerk addresses
+  seats the admin's account, never a placeholder, and every other admin line ends "(by a platform admin)". An owner
+  renames their own workspace on its page.
 - **Funder** = text on the engagement (`funder`, `funderContact`). There is no funder table and no funder
   user: the bookkeeper records the funder's decision on a month (approved, denied, invoice number) from the
   email or the returned form. If a funder portal is ever wanted, it is a new line, not a revival of the old
@@ -101,9 +114,11 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   rule must exist before a real one is uploaded.
 - **Terms:** the version is the fingerprint of the wording itself (`apps/api/src/auth/terms-fingerprint.ts`, computed
   once at startup from `docs/terms/index.html`'s `#terms` section; startup refuses without it), so there is nothing to
-  bump. Creating a workspace needs `acceptedTermsVersion` equal to it (the web gets it from `GET /me`); the version, time
-  and person are kept on the `Workspace` (`termsVersion`, `termsAcceptedAt`, `termsAcceptedById`; null for a workspace
-  made before).
+  bump. The admin who creates a workspace accepts nothing for it: the first of its owners who has accepted the current
+  version is kept on the `Workspace` (`termsVersion`, `termsAcceptedAt`, `termsAcceptedById`), once, at `POST /me/terms`
+  or at `GET /me` if they had accepted already (`MeController`, with a line in its log; a failure there is logged and
+  never fails sign-in); null until then. Once on file it is never changed through the API (trigger
+  `Workspace_5_terms_kept`; the database owner may still correct it).
 - Every user accepts the Terms at first sign-in, and again whenever the wording changes (`TermsAcceptance`, append-only;
   the guard answers 403 `terms_required` until then, except `GET /me` and `POST /me/terms`, marked `@SkipTermsGate`).
 - Documents are private objects: stored under `<workspaceId>/<engagementId or workspace>/<period or
@@ -140,14 +155,25 @@ of two.
   trigger for what it belongs to, the policy set, its name in `apps/api/src/core/tenant-tables.ts`, and
   cases in `apps/api/src/core/tenant-rls.spec.ts`.
 - Code that runs without a signed-in caller (jobs, webhooks, startup) must say what it acts as:
-  `runAsSystem` from `apps/api/src/core/tenant-context.ts`, kept to short, reviewed paths (today: making
-  the creator of a workspace its owner, the placeholder User row of an invited person, and handing that
-  placeholder's memberships to the real account on first sign-in, `GET /me`). It sees every workspace and
-  marks the connection `app.system = on`; only the `User` and `Membership` write policies, the `User` and
-  `Workspace` read policies and the `Workspace` insert policy admit that mark, and trusted work deletes
-  `pending-` users only (migrations `20261011000400` to `..0600`). The invitation claim matches a verified
-  Clerk email only. The restricted role never bypasses a policy. A guard calls
-  `identifyCaller` right after it verifies the caller.
+  `runAsSystem` from `apps/api/src/core/tenant-context.ts`, kept to short, reviewed paths (today: the
+  placeholder User row of an owner's invitation, and handing that placeholder's memberships to the real account
+  on first sign-in, `GET /me`). It sees every workspace and marks the connection `app.system = on`; only the
+  `User` and `Membership` write policies and the `User` and `Workspace` read policies admit that mark (no longer
+  the `Workspace` insert policy, migration `20261013000200`), and trusted work deletes `pending-` users only
+  (migrations `20261011000400` to `..0600`). The invitation claim matches a verified Clerk email only. The
+  restricted role never bypasses a policy. A guard calls `identifyCaller` right after it verifies the caller.
+- **The platform admin is a database flag, not trusted work.** `AdminGuard` (always after `AuthenticatedGuard`,
+  so the Terms gate holds) asks Clerk's backend for the role on every admin request, never the browser, then
+  `identifyAdmin`; `PrismaService` sets `app.admin = on` beside the admin's own `app.user_id` and memberships.
+  Migration `20261013000200` admits it to read every `Workspace`, `Membership`, `User` and `Suggestion`, insert
+  a `Workspace`, change its lists only (trigger `Workspace_4_admin_lists`), give, change and remove memberships,
+  insert `pending-` users, and insert `DataAccessLog` lines in its own name in any workspace (no read: the API
+  writes them with `createMany`, which reads nothing back). No policy below the workspace admits it. Two triggers
+  keep it visible: a line written under the mark names the admin by their `User.email` (`DataAccessLog_1_admin_name`),
+  and a membership change under the mark fails at commit unless the same transaction wrote its line in that
+  workspace (`Membership_9_admin_logged`, deferred). Its name, lists and memberships change; nothing else of a
+  workspace (`Workspace_4_admin_lists`).
+  `route-gates.spec.ts` lists the admin routes; admin work never uses `runAsSystem`.
 - **The API connects as the restricted role in every environment, a laptop included:** `DATABASE_URL` is the
   role from `apps/api/scripts/create-app-role.ts`, kept in step on every Railway deploy by `role:ensure` after the
   migrations (never a superuser, `BYPASSRLS` or the owner), and

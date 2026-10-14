@@ -5,6 +5,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  Logger,
   Post,
   Req,
   UseGuards,
@@ -23,6 +24,8 @@ import { ROLE_FIELDS, roleWord } from '../workspaces/workspaces.service'
 @Controller('me')
 @UseGuards(AuthenticatedGuard)
 export class MeController {
+  private readonly logger = new Logger(MeController.name)
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly clerk: ClerkService,
@@ -109,6 +112,17 @@ export class MeController {
       orderBy: { createdAt: 'asc' },
     })
     const termsAccepted = await this.terms.hasAccepted(req.userId)
+    // An owner who had already accepted the current Terms, joining a workspace that has none on file (an admin made it).
+    // Sign-in never breaks over it: a failure is logged, and the next GET /me or POST /me/terms tries again.
+    if (
+      termsAccepted &&
+      memberships.some((m) => m.role === 'owner' && !m.workspace.termsAcceptedById)
+    )
+      await this.recordWorkspaceTerms(req.userId).catch((e: unknown) =>
+        this.logger.error(
+          `Could not record the Terms on a workspace of ${req.userId}: ${e instanceof Error ? e.message : 'unknown'}`
+        )
+      )
     return {
       userId: req.userId,
       termsVersion: this.terms.version,
@@ -136,5 +150,53 @@ export class MeController {
         `Those are not the current Terms (${this.terms.version}); reload the page and read them again.`
       )
     await this.terms.accept(req.userId)
+    await this.recordWorkspaceTerms(req.userId)
+  }
+
+  /**
+   * A workspace a platform admin created has no Terms on file: the admin accepts none for it. The first of its owners
+   * to have accepted the current Terms is recorded on it (version, time, person), once and never overwritten, with a
+   * line in its log. Runs as the person, whose ownership is what lets them write the workspace.
+   */
+  private async recordWorkspaceTerms(userId: string): Promise<void> {
+    const seats = await this.prisma.membership.findMany({
+      where: { userId, role: 'owner', workspace: { termsAcceptedById: null } },
+      include: { workspace: { select: { name: true } } },
+    })
+    if (!seats.length) return
+    const user = await this.prisma.user.findUnique({ where: { id: userId } })
+    const actor = { userId, email: user?.email ?? null }
+    for (const seat of seats) {
+      await this.log
+        .change(
+          actor,
+          async (tx) => {
+            // The condition makes it once: another owner recorded a moment ago leaves nothing to write, and no line.
+            const r = await tx.workspace.updateMany({
+              where: { id: seat.workspaceId, termsAcceptedById: null },
+              data: {
+                termsVersion: this.terms.version,
+                termsAcceptedAt: new Date(),
+                termsAcceptedById: userId,
+              },
+            })
+            if (!r.count) throw new AlreadyRecorded()
+            return r
+          },
+          {
+            workspaceId: seat.workspaceId,
+            resource: 'workspace',
+            subjectId: seat.workspaceId,
+            action: 'update',
+            description: `Accepted the Terms & Conditions as the first owner of ${seat.workspace.name}`,
+          }
+        )
+        .catch((e: unknown) => {
+          if (!(e instanceof AlreadyRecorded)) throw e
+        })
+    }
   }
 }
+
+/** Another owner's acceptance was recorded first. */
+class AlreadyRecorded extends Error {}

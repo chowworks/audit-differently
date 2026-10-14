@@ -12,15 +12,20 @@ suite('tenant isolation', () => {
 
   /** Runs `fn` as the restricted API role with the given request context. */
   async function as<T>(
-    ctx: { workspaces?: string[]; user?: string; system?: boolean },
+    ctx: { workspaces?: string[]; user?: string; system?: boolean; admin?: boolean },
     fn: () => Promise<T>
   ): Promise<T> {
     await db.exec('BEGIN')
     try {
       await db.exec('SET LOCAL ROLE ad_app')
       await db.query(
-        `SELECT set_config('app.workspace_ids', $1, true), set_config('app.user_id', $2, true), set_config('app.system', $3, true)`,
-        [(ctx.workspaces ?? []).join(','), ctx.user ?? '', ctx.system ? 'on' : '']
+        `SELECT set_config('app.workspace_ids', $1, true), set_config('app.user_id', $2, true), set_config('app.system', $3, true), set_config('app.admin', $4, true)`,
+        [
+          (ctx.workspaces ?? []).join(','),
+          ctx.user ?? '',
+          ctx.system ? 'on' : '',
+          ctx.admin ? 'on' : '',
+        ]
       )
       return await fn()
     } finally {
@@ -81,6 +86,19 @@ suite('tenant isolation', () => {
       await insert(db, 'Check', { id: `K-${w}`, monthlyReportId: `R-${w}` })
       await insert(db, 'DataAccessLog', { id: `L-${w}`, workspaceId: w, actorId: 'x' })
       await insert(db, 'Suggestion', { id: `S-${w}`, workspaceId: w, userId: 'x', text: 't' })
+      // So that "sees no row" of these means something: each workspace has a deletion record and its owner an
+      // acceptance of the Terms.
+      await insert(db, 'DeletionRecord', {
+        id: `DR-${w}`,
+        workspaceId: w,
+        engagementId: `E-${w}`,
+        exportKey: `retained/${w}/E-${w}-fixture.zip`,
+      })
+      await insert(db, 'TermsAcceptance', {
+        id: `TA-${w}`,
+        userId: `owner-${w}`,
+        fingerprint: 'v0',
+      })
     }
     for (const [u, w, role] of [
       ['owner-W1', 'W1', 'owner'],
@@ -293,9 +311,8 @@ suite('tenant isolation', () => {
       })
     })
 
-    it('leaves creating a workspace to trusted work, and only owners change one', async () => {
-      // The creator could not read it back or give themselves the first seat, so the API makes both as
-      // trusted work; a signed-in person inserting one directly is refused.
+    it('leaves creating a workspace to the platform admin, and only owners change one', async () => {
+      // A signed-in person inserting one directly is refused, and so is trusted work (migration 20261013000200).
       await as({ user: 'nobody' }, async () => {
         expect(
           (
@@ -320,6 +337,33 @@ suite('tenant isolation', () => {
       await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
         expect((await attempt(`UPDATE "Workspace" SET name = 'x' WHERE id = 'W1'`)).rows).toBe(1)
         expect((await attempt(`UPDATE "Workspace" SET name = 'x' WHERE id = 'W2'`)).rows).toBe(0)
+      })
+    })
+
+    it("keeps the first owner's Terms record once it is on file, and lets the owner rename around it", async () => {
+      const terms = (id: string, by: string) =>
+        `UPDATE "Workspace" SET "termsVersion" = 'v1', "termsAcceptedAt" = now(), "termsAcceptedById" = '${by}' WHERE id = '${id}'`
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        // The first acceptance is recorded (MeController), then kept.
+        expect((await attempt(terms('W1', 'owner-W1'))).rows).toBe(1)
+        expect((await attempt(terms('W1', 'book-W1'))).error).toMatch(
+          /Terms accepted by the first owner/
+        )
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "termsAcceptedById" = NULL WHERE id = 'W1'`)).error
+        ).toMatch(/Terms accepted by the first owner/)
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "termsVersion" = 'v2' WHERE id = 'W1'`)).error
+        ).toMatch(/Terms accepted by the first owner/)
+        // A rename touches none of it.
+        expect(
+          (await attempt(`UPDATE "Workspace" SET name = 'Riverbend' WHERE id = 'W1' RETURNING id`))
+            .rows
+        ).toBe(1)
+        // The database owner (migrations, scripts) may still correct it.
+        await db.exec('RESET ROLE')
+        expect((await attempt(terms('W1', 'book-W1'))).rows).toBe(1)
+        await db.exec('SET LOCAL ROLE ad_app')
       })
     })
 
@@ -383,13 +427,14 @@ suite('tenant isolation', () => {
             )
           ).rows
         ).toBe(1)
+        // Trusted work no longer creates a workspace: the platform admin does (migration 20261013000200).
         expect(
           (
             await attempt(
               `INSERT INTO "Workspace" ("id","name","updatedAt") VALUES ('W-sys','new',now()) RETURNING id`
             )
-          ).rows
-        ).toBe(1)
+          ).error
+        ).toMatch(/row-level security/)
         expect(
           (
             await attempt(
@@ -483,6 +528,371 @@ suite('tenant isolation', () => {
     })
   })
 
+  describe('the platform admin (app.admin)', () => {
+    /** Runs `fn` with the database owner's privileges (to set up rows), then goes back to the restricted role. */
+    const asOwner = async <T>(fn: () => Promise<T>): Promise<T> => {
+      await db.exec('RESET ROLE')
+      try {
+        return await fn()
+      } finally {
+        await db.exec('SET LOCAL ROLE ad_app')
+      }
+    }
+    // As PrismaService sets it: the admin's own id and memberships (none here), and the flag.
+    const admin = { user: 'admin', workspaces: [] as string[], admin: true }
+    /** Every table below the workspace, and the ones the admin is given no read of. */
+    const RECORD_TABLES = [
+      'Engagement',
+      'BudgetLine',
+      'MonthlyReport',
+      'Expense',
+      'Document',
+      'ExpenseDocument',
+      'Participant',
+      'ParticipantDocument',
+      'WexPayment',
+      'WexPaymentDocument',
+      'Check',
+      'DataAccessLog',
+      'DeletionRecord',
+      'TermsAcceptance',
+    ]
+    const line = (id: string, ws: string, actor = 'admin', returning = '') =>
+      `INSERT INTO "DataAccessLog" ("id","workspaceId","actorId","actorName","resource","action","description") VALUES ('${id}','${ws}','${actor}','admin@example.org','member','create','Invited sam@example.org as bookkeeper')${returning}`
+
+    it('sees every workspace, its people and its suggestions', async () => {
+      await as(admin, async () => {
+        expect(await ids('Workspace')).toEqual(['W1', 'W2'])
+        expect(await count('Membership')).toBe(4)
+        expect(await ids('User')).toEqual(['aud-W1', 'book-W1', 'nobody', 'owner-W1', 'owner-W2'])
+        expect(await ids('Suggestion')).toEqual(['S-W1', 'S-W2'])
+      })
+    })
+
+    it('creates a workspace, leaves a placeholder, and gives, changes and takes away memberships anywhere', async () => {
+      await as(admin, async () => {
+        // RETURNING, as Prisma writes it: each row must pass the read policy too.
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "Workspace" ("id","name","updatedAt") VALUES ('W-adm','new',now()) RETURNING id`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "User" ("id","email","updatedAt") VALUES ('pending-adm','pat@example.org',now()) RETURNING id`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "Membership" ("id","userId","workspaceId","role") VALUES ('a1','pending-adm','W-adm','owner') RETURNING id`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "Membership" ("id","userId","workspaceId","role") VALUES ('a2','nobody','W2','bookkeeper') RETURNING id`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "Membership" SET role = 'auditor' WHERE id = 'a2' RETURNING id`))
+            .rows
+        ).toBe(1)
+        expect((await attempt(`DELETE FROM "Membership" WHERE id = 'a2'`)).rows).toBe(1)
+        // A placeholder only: never a real account, and no person's row changed or removed.
+        expect(
+          (await attempt(`INSERT INTO "User" ("id","updatedAt") VALUES ('user_x', now())`)).error
+        ).toMatch(/row-level security/)
+        expect((await attempt(`UPDATE "User" SET email = 'x' WHERE id = 'nobody'`)).rows).toBe(0)
+        expect((await attempt(`DELETE FROM "User" WHERE id = 'pending-adm'`)).rows).toBe(0)
+      })
+    })
+
+    it("changes a workspace's name and lists and nothing else of it, and deletes none", async () => {
+      await as(admin, async () => {
+        expect(
+          (
+            await attempt(
+              `UPDATE "Workspace" SET "fundingSources" = '{"Youth Fund"}', "updatedAt" = now() WHERE id = 'W2'`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (
+            await attempt(
+              `UPDATE "Workspace" SET name = 'Harbor Tech' WHERE id = 'W2' RETURNING id`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "termsAcceptedById" = 'admin' WHERE id = 'W2'`))
+            .error
+        ).toMatch(/changes only the name and lists/)
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "createdAt" = now() WHERE id = 'W2'`)).error
+        ).toMatch(/changes only the name and lists/)
+        expect((await attempt(`DELETE FROM "Workspace" WHERE id = 'W2'`)).rows).toBe(0)
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "Suggestion" ("id","workspaceId","userId","kind","text") VALUES ('S-adm','W1','admin','list','x')`
+            )
+          ).error
+        ).toMatch(/row-level security/)
+      })
+    })
+
+    it('sees no row of any table below the workspace, and changes none', async () => {
+      await as(admin, async () => {
+        for (const t of RECORD_TABLES) expect([t, await count(t)]).toEqual([t, 0])
+        for (const sql of [
+          `UPDATE "Engagement" SET name = 'x'`,
+          `DELETE FROM "Expense"`,
+          `UPDATE "Document" SET "fileName" = 'x'`,
+          `DELETE FROM "Participant"`,
+          `UPDATE "Check" SET message = 'x'`,
+          `UPDATE "DataAccessLog" SET description = 'x'`,
+        ])
+          expect([sql, (await attempt(sql)).rows]).toEqual([sql, 0])
+      })
+    })
+
+    it('inserts no row in any table below the workspace', async () => {
+      // A row of W1 for each, with real parents; the joins name rows that exist, so only the policy can refuse.
+      const rows: Record<string, Record<string, string>> = {
+        Engagement: { workspaceId: 'W1', name: 'p', number: 'N-adm' },
+        BudgetLine: { engagementId: 'E-W1', category: 'wex' },
+        MonthlyReport: { engagementId: 'E-W1', period: '2026-09' },
+        Expense: {
+          engagementId: 'E-W1',
+          monthlyReportId: 'R-W1',
+          itemNumber: '9',
+          reportLine: 'wex',
+        },
+        Document: { workspaceId: 'W1', storageKey: 'W1/workspace/adm' },
+        ExpenseDocument: { expenseId: 'X-W1', documentId: 'D-W1' },
+        Participant: { engagementId: 'E-W1', participantId: '99' },
+        ParticipantDocument: { participantId: 'P-W1', documentId: 'D-W1' },
+        WexPayment: { monthlyReportId: 'R-W1', participantId: 'P-W1' },
+        WexPaymentDocument: { wexPaymentId: 'WX-W1', documentId: 'D-W1' },
+        Check: { monthlyReportId: 'R-W1' },
+        // A line in its own name is allowed (below); in anyone else's, not.
+        DataAccessLog: { workspaceId: 'W1', actorId: 'owner-W1' },
+        DeletionRecord: { workspaceId: 'W1', exportKey: 'retained/W1/adm.zip' },
+        TermsAcceptance: { userId: 'owner-W1', fingerprint: 'v9' },
+      }
+      expect(Object.keys(rows).sort()).toEqual([...RECORD_TABLES].sort())
+      await as(admin, async () => {
+        for (const [t, values] of Object.entries(rows)) {
+          await db.exec('SAVEPOINT attempt')
+          const error = await insert(db, t, values).then(
+            () => 'inserted',
+            (e: Error) => e.message
+          )
+          await db.exec('ROLLBACK TO SAVEPOINT attempt')
+          expect([t, error]).toEqual([t, expect.stringMatching(/row-level security/)])
+        }
+      })
+    })
+
+    it('writes an access-log line in any workspace, in its own name, and reads none back', async () => {
+      await as(admin, async () => {
+        expect((await attempt(line('L-adm', 'W2'))).rows).toBe(1)
+        expect(await count('DataAccessLog')).toBe(0)
+        // Reading back what it wrote (Prisma's create) is a read, and refused.
+        expect((await attempt(line('L-adm2', 'W2', 'admin', ' RETURNING id'))).error).toMatch(
+          /row-level security/
+        )
+        // A line in someone else's name is refused.
+        expect((await attempt(line('L-adm3', 'W2', 'owner-W2'))).error).toMatch(
+          /row-level security/
+        )
+        await asOwner(async () => {
+          expect(await ids('DataAccessLog')).toContain('L-adm')
+        })
+      })
+    })
+
+    it("names the admin in its lines by its own account's email, whatever the API passed", async () => {
+      await as(admin, async () => {
+        await asOwner(async () => {
+          await insert(db, 'User', { id: 'admin', email: 'admin@example.org' })
+        })
+        await db.exec(
+          `INSERT INTO "DataAccessLog" ("id","workspaceId","actorId","actorName","resource","action") VALUES ('L-pin','W2','admin','someone-else@example.org','member','create')`
+        )
+        await asOwner(async () => {
+          expect(await one(`SELECT "actorName" FROM "DataAccessLog" WHERE id = 'L-pin'`)).toEqual({
+            actorName: 'admin@example.org',
+          })
+        })
+      })
+      // Without the mark the name is the API's, as before.
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        await db.exec(
+          `INSERT INTO "DataAccessLog" ("id","workspaceId","actorId","actorName","resource","action") VALUES ('L-own','W1','book-W1','book@example.org','document','read')`
+        )
+        expect(await one(`SELECT "actorName" FROM "DataAccessLog" WHERE id = 'L-own'`)).toEqual({
+          actorName: 'book@example.org',
+        })
+      })
+    })
+
+    describe('membership changes need their line, at commit', () => {
+      /** One real transaction as `ctx`, committed: the error COMMIT gives, or null. */
+      const committed = async (
+        ctx: { workspaces?: string[]; user?: string; admin?: boolean },
+        statements: string[]
+      ): Promise<string | null> => {
+        await db.exec('BEGIN')
+        try {
+          await db.exec('SET LOCAL ROLE ad_app')
+          await db.query(
+            `SELECT set_config('app.workspace_ids', $1, true), set_config('app.user_id', $2, true), set_config('app.admin', $3, true)`,
+            [(ctx.workspaces ?? []).join(','), ctx.user ?? '', ctx.admin ? 'on' : '']
+          )
+          for (const sql of statements) await db.exec(sql)
+          await db.exec('COMMIT')
+          return null
+        } catch (e) {
+          await db.exec('ROLLBACK')
+          return (e as Error).message
+        }
+      }
+      const seat = (id: string, ws = 'W1') =>
+        `INSERT INTO "Membership" ("id","userId","workspaceId","role") VALUES ('${id}','nobody','${ws}','auditor')`
+      const seats = async () =>
+        (
+          await db.query<{ id: string }>(
+            `SELECT id FROM "Membership" WHERE "userId" = 'nobody' ORDER BY id`
+          )
+        ).rows.map((r) => r.id)
+      afterEach(async () => {
+        await db.exec(`DELETE FROM "Membership" WHERE "userId" = 'nobody'`)
+        await db.exec(`DELETE FROM "DataAccessLog" WHERE id LIKE 'L-bk%'`)
+      })
+
+      it('refuses an admin membership insert with no line', async () => {
+        expect(await committed(admin, [seat('bk1')])).toMatch(/without a line in its access log/)
+        expect(await seats()).toEqual([])
+      })
+
+      it('keeps one written with its line', async () => {
+        expect(await committed(admin, [seat('bk2'), line('L-bk2', 'W1')])).toBeNull()
+        expect(await seats()).toEqual(['bk2'])
+      })
+
+      it('does not count a line in another workspace, or one written by an earlier transaction', async () => {
+        expect(await committed(admin, [seat('bk3'), line('L-bk3', 'W2')])).toMatch(/without a line/)
+        expect(await committed(admin, [line('L-bk4', 'W1')])).toBeNull()
+        expect(await committed(admin, [seat('bk4')])).toMatch(/without a line/)
+        expect(await seats()).toEqual([])
+      })
+
+      it('holds for a change and a removal too', async () => {
+        expect(await committed(admin, [seat('bk5'), line('L-bk5', 'W1')])).toBeNull()
+        expect(
+          await committed(admin, [`UPDATE "Membership" SET role = 'owner' WHERE id = 'bk5'`])
+        ).toMatch(/without a line/)
+        expect(await committed(admin, [`DELETE FROM "Membership" WHERE id = 'bk5'`])).toMatch(
+          /without a line/
+        )
+        expect(
+          await committed(admin, [`DELETE FROM "Membership" WHERE id = 'bk5'`, line('L-bk6', 'W1')])
+        ).toBeNull()
+        expect(await seats()).toEqual([])
+      })
+
+      it('leaves an owner, without the mark, to the policies alone', async () => {
+        expect(await committed({ workspaces: ['W1'], user: 'owner-W1' }, [seat('bk7')])).toBeNull()
+        expect(await seats()).toEqual(['bk7'])
+      })
+    })
+
+    it('keeps the platform role changes: the mark adds and reads them, in its own name; nobody alters one', async () => {
+      const change = (id: string, actor = 'admin') =>
+        `INSERT INTO "PlatformRoleChange" ("id","actorId","actorEmail","targetId","targetEmail","oldRole","newRole","outcome") VALUES ('${id}','${actor}','admin@example.org','user_pat','pat@example.org',NULL,'admin','done')`
+      await as(admin, async () => {
+        expect((await attempt(`${change('PRC-1')} RETURNING id`)).rows).toBe(1)
+        expect(await ids('PlatformRoleChange')).toEqual(['PRC-1'])
+        expect((await attempt(change('PRC-2', 'owner-W1'))).error).toMatch(/row-level security/)
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "PlatformRoleChange" ("id","actorId","targetId","outcome") VALUES ('PRC-3','admin','user_pat','maybe')`
+            )
+          ).error
+        ).toMatch(/outcome_check/)
+        expect((await attempt(`UPDATE "PlatformRoleChange" SET outcome = 'failed'`)).rows).toBe(0)
+        expect((await attempt(`DELETE FROM "PlatformRoleChange"`)).rows).toBe(0)
+        await asOwner(async () => {
+          expect(await ids('PlatformRoleChange')).toEqual(['PRC-1'])
+        })
+      })
+      await as({ user: 'admin' }, async () => {
+        await asOwner(async () => {
+          await db.exec(change('PRC-4'))
+        })
+        expect(await count('PlatformRoleChange')).toBe(0)
+        expect((await attempt(change('PRC-5'))).error).toMatch(/row-level security/)
+      })
+      await as({ workspaces: ['W1', 'W2'], system: true }, async () => {
+        expect((await attempt(change('PRC-6'))).error).toMatch(/row-level security/)
+      })
+    })
+
+    it('without the flag, the same person is nobody special', async () => {
+      await as({ user: 'admin' }, async () => {
+        expect(await count('Workspace')).toBe(0)
+        expect(await count('Membership')).toBe(0)
+        expect(await count('Suggestion')).toBe(0)
+        for (const sql of [
+          `INSERT INTO "Workspace" ("id","name","updatedAt") VALUES ('W-x','new',now())`,
+          `INSERT INTO "Membership" ("id","userId","workspaceId","role") VALUES ('x1','nobody','W2','owner')`,
+          `INSERT INTO "User" ("id","updatedAt") VALUES ('pending-x2', now())`,
+          line('L-x', 'W2'),
+        ])
+          expect((await attempt(sql)).error).toMatch(/row-level security/)
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "fundingSources" = '{}' WHERE id = 'W2'`)).rows
+        ).toBe(0)
+      })
+      // A flag with no person is nothing either: it never stands in for trusted work.
+      await as({ admin: true }, async () => {
+        expect(await count('Workspace')).toBe(0)
+        expect(
+          (await attempt(`INSERT INTO "User" ("id","updatedAt") VALUES ('pending-x3', now())`))
+            .error
+        ).toMatch(/row-level security/)
+      })
+    })
+
+    it('leaves an admin who is a member of a workspace exactly its member rights there', async () => {
+      await as({ user: 'adm-W1', workspaces: ['W1'], admin: true }, async () => {
+        await asOwner(async () => {
+          await insert(db, 'User', { id: 'adm-W1' })
+          await insert(db, 'Membership', { userId: 'adm-W1', workspaceId: 'W1', role: 'auditor' })
+        })
+        // Its own workspace's records, through its membership; none of the workspace next door.
+        expect(await ids('Engagement')).toEqual(['E-W1'])
+        expect(await ids('Document')).toEqual(['D-W1'])
+        expect(await ids('Participant')).toEqual(['P-W1'])
+        expect(await ids('DataAccessLog')).toEqual(['L-W1'])
+        expect(await count('DeletionRecord')).toBe(0)
+        // It is an auditor there, not an owner: the flag lets it change the name and lists only.
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "termsVersion" = 'x' WHERE id = 'W1'`)).error
+        ).toMatch(/changes only the name and lists/)
+      })
+    })
+  })
+
   describe('deleting', () => {
     /** Runs `fn` with the database owner's privileges (to set up rows), then goes back to the restricted role. */
     const asOwner = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -505,7 +915,7 @@ suite('tenant isolation', () => {
       await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
         expect((await attempt(record('R1', 'W1'))).rows).toBe(1)
         expect((await attempt(record('R-bad', 'W2'))).error).toMatch(/row-level security/)
-        expect(await ids('DeletionRecord')).toEqual(['R1'])
+        expect(await ids('DeletionRecord')).toEqual(['DR-W1', 'R1'])
         expect(
           (await attempt(`UPDATE "DeletionRecord" SET status = 'downloaded' WHERE id = 'R1'`)).rows
         ).toBe(1)
@@ -515,7 +925,7 @@ suite('tenant isolation', () => {
         await db.exec(record('R-W2', 'W2'))
       })
       await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
-        expect(await ids('DeletionRecord')).toEqual([])
+        expect(await ids('DeletionRecord')).toEqual(['DR-W1'])
         expect(
           (await attempt(`UPDATE "DeletionRecord" SET status = 'downloaded' WHERE id = 'R-W2'`))
             .rows
@@ -704,7 +1114,7 @@ suite('tenant isolation', () => {
         await db.exec('RESET ROLE')
         await db.exec(accept('book-W1'))
         await db.exec('SET LOCAL ROLE ad_app')
-        expect(await ids('TermsAcceptance')).toEqual(['owner-W1-v1'])
+        expect(await ids('TermsAcceptance')).toEqual(['TA-W1', 'owner-W1-v1'])
       })
       await as({ user: 'nobody', workspaces: ['W1', 'W2'] }, async () => {
         expect(await count('TermsAcceptance')).toBe(0)
@@ -720,7 +1130,7 @@ suite('tenant isolation', () => {
           if (!ctx.system) {
             expect((await attempt(`UPDATE "TermsAcceptance" SET fingerprint = 'v9'`)).rows).toBe(0)
             expect((await attempt(`DELETE FROM "TermsAcceptance"`)).rows).toBe(0)
-            expect(await count('TermsAcceptance')).toBe(1)
+            expect(await count('TermsAcceptance')).toBe(2)
           } else {
             expect((await attempt(`UPDATE "TermsAcceptance" SET fingerprint = 'v9'`)).rows).toBe(0)
             expect((await attempt(`DELETE FROM "TermsAcceptance"`)).rows).toBe(0)

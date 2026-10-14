@@ -76,10 +76,10 @@ export function fakeLog(db: unknown) {
     trusted: jest.fn(
       async (
         actor: unknown,
-        write: (tx: unknown, refresh: () => Promise<void>) => Promise<unknown>,
+        write: (tx: unknown) => Promise<unknown>,
         lines: (result: unknown) => LogEntry[]
       ) => {
-        const result = await inTransaction(db, (tx) => write(tx, async () => undefined))
+        const result = await inTransaction(db, write)
         for (const e of lines(result)) {
           entries.push(e)
           actors.push(actor)

@@ -15,6 +15,9 @@ export class ApiError extends Error {
 /** Fired on `window` when the API refuses a call because the Terms changed since this tab loaded; the app then asks /me again. */
 export const TERMS_REQUIRED_EVENT = 'ad:terms-required'
 
+/** Fired on `window` after a change to the caller's own memberships (an admin named themself an owner); the app asks /me again. */
+export const ME_CHANGED_EVENT = 'ad:me-changed'
+
 /** Hashing reads the whole file into memory; above this the tab could freeze, so only the size is checked. */
 const HASH_LIMIT_BYTES = 500 * 1024 * 1024
 
@@ -91,13 +94,16 @@ export async function apiFetch<T>(
     } catch {
       /* no body */
     }
+    // The rate limit's own text ("ThrottlerException: Too Many Requests") is not for people.
     const message =
-      (body &&
-      typeof body === 'object' &&
-      'message' in body &&
-      typeof (body as { message: unknown }).message === 'string'
-        ? (body as { message: string }).message
-        : null) ?? `${init.method ?? 'GET'} ${path} failed (${response.status})`
+      response.status === 429
+        ? 'Too many requests just now. Wait a minute, then try again.'
+        : ((body &&
+          typeof body === 'object' &&
+          'message' in body &&
+          typeof (body as { message: unknown }).message === 'string'
+            ? (body as { message: string }).message
+            : null) ?? `${init.method ?? 'GET'} ${path} failed (${response.status})`)
     if (
       response.status === 403 &&
       (body as { code?: unknown } | null)?.code === TERMS_REQUIRED_CODE

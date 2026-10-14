@@ -183,11 +183,7 @@ export function NewEngagementPage() {
   }
 
   if (workspaces && workspaces.length === 0)
-    return (
-      <Empty>
-        No workspace yet. <Link to="/workspaces">Create one</Link> first.
-      </Empty>
-    )
+    return <Empty>No workspace yet. Ask a platform admin to set one up.</Empty>
 
   const fileField = (kind: keyof Files, label: string, hint: string) => (
     <Field label={label} hint={hint} className="sm:col-span-2">

@@ -1,5 +1,13 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common'
-import type { ActivityEntry, Role, WorkspaceDetail, WorkspaceDto } from '@ad/types'
+import type {
+  ActivityEntry,
+  AdminWorkspaceDetail,
+  CreateWorkspaceRequest,
+  Role,
+  WorkspaceDetail,
+  WorkspaceDto,
+} from '@ad/types'
+import { AdminGuard } from '../auth/admin.guard'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
 import { WorkspacesService } from './workspaces.service'
@@ -17,21 +25,31 @@ export class WorkspacesController {
     return this.workspaces.list(await this.callers.load(userId))
   }
 
+  /** Platform admins only (Admin tools): a workspace for a customer, with its first owner invited by email. */
   @Post()
+  @UseGuards(AdminGuard)
   async create(
     @UserId() userId: string,
-    @Body() body: { name: string; acceptedTermsVersion?: string }
-  ): Promise<WorkspaceDetail> {
-    return this.workspaces.create(
-      await this.callers.load(userId),
-      body.name,
-      body.acceptedTermsVersion
-    )
+    @Body() body: CreateWorkspaceRequest
+  ): Promise<AdminWorkspaceDetail> {
+    return this.workspaces.create(await this.callers.loadAdmin(userId), body)
   }
 
   @Get(':id')
   async get(@UserId() userId: string, @Param('id') id: string): Promise<WorkspaceDetail> {
     return this.workspaces.get(await this.callers.load(userId), id)
+  }
+
+  /** An owner renames their workspace. */
+  @Patch(':id')
+  async rename(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Body() body: { name?: unknown }
+  ): Promise<WorkspaceDetail> {
+    const caller = await this.callers.load(userId)
+    await this.workspaces.rename(caller, id, body?.name)
+    return this.workspaces.get(caller, id)
   }
 
   @Patch(':id/lists')
@@ -40,7 +58,9 @@ export class WorkspacesController {
     @Param('id') id: string,
     @Body() body: { fundingSources: string[] }
   ): Promise<WorkspaceDetail> {
-    return this.workspaces.setLists(await this.callers.load(userId), id, body.fundingSources)
+    const caller = await this.callers.load(userId)
+    await this.workspaces.setLists(caller, id, body.fundingSources)
+    return this.workspaces.get(caller, id)
   }
 
   @Get(':id/activity')
@@ -63,7 +83,9 @@ export class WorkspacesController {
     @Param('id') id: string,
     @Body() body: { email: string; displayName?: string; role: Role }
   ): Promise<WorkspaceDetail> {
-    return this.workspaces.addMember(await this.callers.load(userId), id, body)
+    const caller = await this.callers.load(userId)
+    await this.workspaces.addMember(caller, id, body)
+    return this.workspaces.get(caller, id)
   }
 
   @Patch(':id/members/:userId')
@@ -73,7 +95,9 @@ export class WorkspacesController {
     @Param('userId') member: string,
     @Body() body: { role: Role }
   ): Promise<WorkspaceDetail> {
-    return this.workspaces.setRole(await this.callers.load(userId), id, member, body.role)
+    const caller = await this.callers.load(userId)
+    await this.workspaces.setRole(caller, id, member, body.role)
+    return this.workspaces.get(caller, id)
   }
 
   @Delete(':id/members/:userId')
@@ -82,6 +106,8 @@ export class WorkspacesController {
     @Param('id') id: string,
     @Param('userId') member: string
   ): Promise<WorkspaceDetail> {
-    return this.workspaces.removeMember(await this.callers.load(userId), id, member)
+    const caller = await this.callers.load(userId)
+    await this.workspaces.removeMember(caller, id, member)
+    return this.workspaces.get(caller, id)
   }
 }

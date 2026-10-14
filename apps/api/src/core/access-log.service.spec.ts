@@ -143,9 +143,11 @@ describe('AccessLogService.trusted', () => {
       order.push('membership')
       return { workspaceId: W }
     })
+    const statements: string[] = []
     tx.$executeRaw.mockImplementation(
       async (strings: TemplateStringsArray, ...values: unknown[]) => {
-        order.push(`context ${values.join(',') || 'system'}`)
+        statements.push(strings.join('?'))
+        order.push(`context ${values.join(',')}`)
       }
     )
     tx.dataAccessLog.create.mockImplementation(async () => void order.push('line'))
@@ -153,15 +155,15 @@ describe('AccessLogService.trusted', () => {
     await runAsSystem(() =>
       log.trusted(
         who,
-        async (t, refresh) => {
-          await refresh()
-          return t.membership.create({ data: {} as never })
-        },
+        (t) => t.membership.create({ data: {} as never }),
         (seat) => [{ ...line, workspaceId: seat.workspaceId }]
       )
     )
     expect(prisma.$transaction).toHaveBeenCalledTimes(1)
-    expect(order).toEqual(['context system', 'membership', 'context user_1,user_1', 'line'])
+    expect(order).toEqual(['membership', 'context user_1,user_1', 'line'])
+    // The lines are the person's own: the system mark and the admin mark are both cleared before them.
+    expect(statements).toEqual([expect.stringContaining("set_config('app.system', '', true)")])
+    expect(statements[0]).toContain("set_config('app.admin', '', true)")
     expect(tx.dataAccessLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         workspaceId: W,

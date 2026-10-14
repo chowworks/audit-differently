@@ -12,6 +12,7 @@ export const APP_ROLE_FUNCTIONS: readonly string[] = [
   'workspaces_of_user(text)',
   'all_workspace_ids()',
   'app_is_system()',
+  'app_is_admin()',
 ]
 
 /** SQL that gives `role` its table access and exactly the functions above, and nothing else. `role` is a plain identifier. */

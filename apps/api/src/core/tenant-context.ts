@@ -12,6 +12,8 @@ export interface TenantContext {
   allWorkspaces?: boolean
   /** Workspaces the caller is limited to when it is not a membership lookup. */
   fixedWorkspaceIds?: string[]
+  /** The platform admin, on a route AdminGuard let through after checking the Clerk role: workspace level only. */
+  admin?: boolean
 }
 
 const store = new AsyncLocalStorage<TenantContext>()
@@ -36,6 +38,18 @@ export function identifyCaller(who: { userId: string }): void {
   ctx.userId = who.userId
   ctx.allWorkspaces = false
   ctx.fixedWorkspaceIds = undefined
+  ctx.admin = false
+}
+
+/**
+ * Marks the current request as the platform admin's. Only AdminGuard calls it, after identifyCaller and after
+ * Clerk's backend said the caller's role is admin. PrismaService then sets app.admin = 'on' beside the admin's own
+ * user id and workspaces (migration 20261013000200): workspaces, memberships, users and suggestions, never records.
+ */
+export function identifyAdmin(): void {
+  const ctx = store.getStore()
+  if (!ctx?.userId) return
+  ctx.admin = true
 }
 
 /** Runs `fn` seeing every workspace. For audited, trusted code paths only (jobs, webhooks, startup). */

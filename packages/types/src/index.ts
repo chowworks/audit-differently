@@ -673,6 +673,64 @@ export interface WorkspaceDetail extends WorkspaceDto {
   suggestions: SuggestionDto[]
 }
 
+/**
+ * A workspace as the platform admin sees it (Admin tools): workspace level only, nothing of its engagements,
+ * records or access log.
+ */
+export interface AdminWorkspaceDto {
+  id: string
+  name: string
+  createdAt: string
+  memberCount: number
+  members: WorkspaceMemberDto[]
+  /** When its first owner accepted the Terms; null until then. */
+  termsAcceptedAt: string | null
+}
+
+export interface AdminWorkspaceDetail extends AdminWorkspaceDto {
+  fundingSources: string[]
+  suggestions: SuggestionDto[]
+}
+
+/** Body of POST /workspaces (platform admins only): the workspace and its first owner, invited by email. */
+export interface CreateWorkspaceRequest {
+  name: string
+  ownerEmail: string
+  ownerName?: string
+}
+
+/** The one role an account carries (Clerk publicMetadata.role): the platform admin. Every other role is a membership. */
+export const PLATFORM_ADMIN = 'admin'
+
+/** A person of the sign-in instance, as the Admin tools page shows them. */
+export interface AdminUserDto {
+  id: string
+  email: string | null
+  displayName: string | null
+  role: string | null
+}
+
+/** The platform admins; `complete` is false when there were too many accounts to read them all. */
+export interface AdminListDto {
+  admins: AdminUserDto[]
+  complete: boolean
+}
+
+/** At most this many platform admins at once (owner's decision, 2026-10-14). */
+export const MAX_PLATFORM_ADMINS = 20
+
+/** One attempt to make or unmake a platform admin, as the Admin tools page lists them (PlatformRoleChange). */
+export interface PlatformRoleChangeDto {
+  id: string
+  at: string
+  actorEmail: string | null
+  targetEmail: string | null
+  oldRole: string | null
+  newRole: string | null
+  outcome: 'done' | 'failed'
+  error: string | null
+}
+
 /** The funder's review section of the monthly report form, as it came back. */
 export interface ReportReview {
   receivedOn?: string

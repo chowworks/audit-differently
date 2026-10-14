@@ -4,9 +4,8 @@ import { SignIn, useClerk } from '@clerk/clerk-react'
 import type { Me } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
 import { useSession } from '@/auth/session'
-import { TermsVersionProvider } from '@/auth/me'
 import { TermsGate } from '@/components/TermsGate'
-import { TERMS_REQUIRED_EVENT } from '@/services/api'
+import { ME_CHANGED_EVENT, TERMS_REQUIRED_EVENT } from '@/services/api'
 import { Shell } from '@/components/Shell'
 import { SiteFooter } from '@/components/SiteFooter'
 import { OverviewPage } from '@/pages/OverviewPage'
@@ -19,6 +18,9 @@ import { ReportFormPage } from '@/pages/ReportFormPage'
 import { HomePage } from '@/home/HomePage'
 import { ContactPage } from '@/pages/ContactPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
+import { AdminPage } from '@/pages/AdminPage'
+import { AdminWorkspacePage } from '@/pages/AdminWorkspacePage'
+import { useRole } from '@/hooks/useRole'
 import { Mark } from '@/components/Mark'
 import { Button, Empty, ErrorNote } from '@/components/ui'
 
@@ -31,6 +33,9 @@ const APP_ROUTES: { path: string; element: ReactNode }[] = [
   { path: '/engagements/:id', element: <EngagementPage /> },
   { path: '/reports/:id', element: <ReportPage /> },
   { path: '/reports/:id/form', element: <ReportFormPage /> },
+  // The platform admin's (Admin tools); anyone else is shown "not found" there.
+  { path: '/admin', element: <AdminOnly page={<AdminPage />} /> },
+  { path: '/admin/workspaces/:id', element: <AdminOnly page={<AdminWorkspacePage />} /> },
   // Older links.
   { path: '/contracts', element: <Navigate to="/workspaces" replace /> },
   { path: '/contracts/:id', element: <ToEngagement /> },
@@ -94,15 +99,33 @@ function SignedIn() {
   const { data: me, error, reload } = useLoad<Me>('/me')
   const { signOut } = useClerk()
   const { displayName } = useSession()
-  // The Terms changed while this tab was open: any call the API refused says so, and /me then shows the gate.
+  const { isAdmin } = useRole()
+  // The Terms changed while this tab was open (any call the API refused says so, and /me then shows the gate), or the
+  // caller's own memberships did (an admin who named themself an owner leaves the admin-only frame).
   useEffect(() => {
     const again = () => void reload()
     window.addEventListener(TERMS_REQUIRED_EVENT, again)
-    return () => window.removeEventListener(TERMS_REQUIRED_EVENT, again)
+    window.addEventListener(ME_CHANGED_EVENT, again)
+    return () => {
+      window.removeEventListener(TERMS_REQUIRED_EVENT, again)
+      window.removeEventListener(ME_CHANGED_EVENT, again)
+    }
   }, [reload])
   if (error) return <ErrorNote message={error} />
   if (!me) return <Empty>Loading…</Empty>
   if (!me.termsAccepted) return <TermsGate me={me} onAccepted={reload} />
+  // A platform admin in no workspace lands on Admin tools.
+  if (me.memberships.length === 0 && isAdmin)
+    return (
+      <Shell adminOnly>
+        <Routes>
+          <Route path="/admin" element={<AdminPage />} />
+          <Route path="/admin/workspaces/:id" element={<AdminWorkspacePage />} />
+          <Route path="/contact" element={<ContactPage />} />
+          <Route path="*" element={<Navigate to="/admin" replace />} />
+        </Routes>
+      </Shell>
+    )
   if (me.memberships.length === 0)
     return (
       <div className="ad-wrap ad-main">
@@ -121,19 +144,23 @@ function SignedIn() {
       </div>
     )
   return (
-    <TermsVersionProvider value={me.termsVersion}>
-      <Shell>
-        <Routes>
-          {APP_ROUTES.map(({ path, element }) => (
-            <Route key={path} path={path} element={element} />
-          ))}
-          <Route path="/sign-in/*" element={<Navigate to="/overview" replace />} />
-          <Route path="/contact" element={<ContactPage />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </Shell>
-    </TermsVersionProvider>
+    <Shell>
+      <Routes>
+        {APP_ROUTES.map(({ path, element }) => (
+          <Route key={path} path={path} element={element} />
+        ))}
+        <Route path="/sign-in/*" element={<Navigate to="/overview" replace />} />
+        <Route path="/contact" element={<ContactPage />} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </Shell>
   )
+}
+
+/** A page for the platform admin only. What it shows is decided here; what it may do, by the API. */
+function AdminOnly({ page }: { page: ReactNode }) {
+  const { isAdmin } = useRole()
+  return isAdmin ? page : <NotFoundPage />
 }
 
 function ToEngagement() {

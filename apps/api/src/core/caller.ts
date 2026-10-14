@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common'
 import type { Role } from '@ad/types'
 import { PrismaService } from '../prisma/prisma.service'
+import { tenantContext } from './tenant-context'
 
 /** Who is calling and what they may act for. The database's row-level security draws the same line; this
  * is the application's copy of it, for the role checks the database does not know about. */
@@ -17,6 +18,11 @@ export interface Caller {
   memberships: { workspaceId: string; workspaceName: string; role: Role }[]
   /** The workspaces the caller belongs to, in any role. */
   workspaceIds: string[]
+  /**
+   * The platform admin on an admin route (AdminGuard): runs any workspace's people and lists, and nothing below the
+   * workspace. Never set on any other route, where an admin is only what their memberships make them.
+   */
+  admin?: boolean
 }
 
 /** The verified user id the guard put on the request. */
@@ -47,6 +53,12 @@ export class CallerService {
       memberships: rows,
       workspaceIds: [...new Set(rows.map((m) => m.workspaceId))],
     }
+  }
+
+  /** The platform admin, on a route AdminGuard let through (it checked the Clerk role and marked the request). */
+  async loadAdmin(userId: string): Promise<Caller> {
+    if (!tenantContext()?.admin) throw new ForbiddenException('Platform admins only')
+    return { ...(await this.load(userId)), admin: true }
   }
 }
 

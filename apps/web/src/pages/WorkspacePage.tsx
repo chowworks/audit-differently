@@ -8,6 +8,7 @@ import {
   type EngagementSummary,
   type Role,
   type WorkspaceDetail,
+  type WorkspaceMemberDto,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { money, periodLabel, shortDate } from '@/lib/format'
@@ -21,6 +22,7 @@ import {
   Field,
   Modal,
   Notice,
+  SavedMark,
   inputClass,
 } from '@/components/ui'
 import { ActivityModal } from '@/components/ActivityModal'
@@ -293,6 +295,7 @@ export function WorkspacePage() {
         <section className="ad-section lg:col-span-2">
           <SectionHead icon="sliders" title="Settings" />
           <div className="grid gap-4">
+            {w.canManage && <Rename w={w} onChange={reload} />}
             <Lists w={w} onChange={reload} />
             <MoreLists w={w} onChange={reload} />
           </div>
@@ -302,7 +305,25 @@ export function WorkspacePage() {
   )
 }
 
-function People({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promise<void> }) {
+/** What People and Lists need of a workspace; the admin view (AdminWorkspacePage) passes its own. */
+type Managed = {
+  id: string
+  name: string
+  canManage: boolean
+  members: WorkspaceMemberDto[]
+  fundingSources: string[]
+}
+
+/** The people of a workspace; `base` is where their routes are (`/admin/workspaces` for the platform admin). */
+export function People({
+  w,
+  onChange,
+  base = '/workspaces',
+}: {
+  w: Managed
+  onChange: () => Promise<void>
+  base?: string
+}) {
   const api = useApi()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -361,7 +382,7 @@ function People({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promise<v
                       disabled={busy}
                       onChange={(e) =>
                         run(() =>
-                          api.patch(`/workspaces/${w.id}/members/${m.userId}`, {
+                          api.patch(`${base}/${w.id}/members/${m.userId}`, {
                             role: e.target.value,
                           })
                         )
@@ -386,7 +407,7 @@ function People({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promise<v
                     disabled={busy}
                     onClick={() => {
                       if (confirm(`Remove ${m.displayName} from ${w.name}?`))
-                        void run(() => api.del(`/workspaces/${w.id}/members/${m.userId}`))
+                        void run(() => api.del(`${base}/${w.id}/members/${m.userId}`))
                     }}
                   >
                     remove
@@ -402,7 +423,7 @@ function People({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promise<v
           w={w}
           onClose={() => setOpen(false)}
           onInvite={async (body) => {
-            const ok = await run(() => api.post(`/workspaces/${w.id}/members`, body))
+            const ok = await run(() => api.post(`${base}/${w.id}/members`, body))
             if (ok) setOpen(false)
             return ok
           }}
@@ -417,7 +438,7 @@ function InviteModal({
   onClose,
   onInvite,
 }: {
-  w: WorkspaceDetail
+  w: Managed
   onClose: () => void
   onInvite: (body: { email: string; displayName: string; role: Role }) => Promise<boolean>
 }) {
@@ -494,12 +515,73 @@ function InviteModal({
   )
 }
 
-function Lists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promise<void> }) {
+/** The workspace's name, for its owners and, from Admin tools, the platform admin. Up to 120 characters. */
+export function Rename({
+  w,
+  onChange,
+  base = '/workspaces',
+}: {
+  w: Managed
+  onChange: () => Promise<void>
+  base?: string
+}) {
+  const api = useApi()
+  const [name, setName] = useState(w.name)
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => setName(w.name), [w.name])
+  const clean = name.trim()
+  const dirty = clean !== w.name
+  const save = async (ev: React.FormEvent) => {
+    ev.preventDefault()
+    setBusy(true)
+    setError(null)
+    setSaved(null)
+    try {
+      await api.patch(`${base}/${w.id}`, { name: clean })
+      await onChange()
+      setSaved(Date.now())
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Card title="Workspace name">
+      <ErrorNote message={error} />
+      <form onSubmit={save} className="flex items-center gap-2">
+        <input
+          className={inputClass}
+          aria-label="Workspace name"
+          value={name}
+          maxLength={120}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <Button type="submit" kind="primary" disabled={busy || !clean || !dirty}>
+          Rename
+        </Button>
+        <SavedMark at={saved}>Renamed</SavedMark>
+      </form>
+    </Card>
+  )
+}
+
+export function Lists({
+  w,
+  onChange,
+  base = '/workspaces',
+}: {
+  w: Managed
+  onChange: () => Promise<void>
+  base?: string
+}) {
   const api = useApi()
   const [sources, setSources] = useState<string[]>(w.fundingSources)
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
+  const [saved, setSaved] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   useEffect(() => setSources(w.fundingSources), [w.fundingSources])
   const dirty = sources.join('\n') !== w.fundingSources.join('\n')
@@ -511,11 +593,11 @@ function Lists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promise<vo
   const save = async () => {
     setBusy(true)
     setError(null)
-    setSaved(false)
+    setSaved(null)
     try {
-      await api.patch(`/workspaces/${w.id}/lists`, { fundingSources: sources })
+      await api.patch(`${base}/${w.id}/lists`, { fundingSources: sources })
       await onChange()
-      setSaved(true)
+      setSaved(Date.now())
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -529,7 +611,6 @@ function Lists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promise<vo
         the monthly report form. Owners keep this list for the whole workspace.
       </p>
       <ErrorNote message={error} />
-      {saved && !dirty && <Notice tone="ok">Saved.</Notice>}
       <ul className="ad-taglist">
         {sources.map((s) => (
           <li key={s}>
@@ -553,6 +634,7 @@ function Lists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promise<vo
             <input
               className={inputClass}
               placeholder="Add a source"
+              aria-label="Add a source"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -566,7 +648,8 @@ function Lists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promise<vo
               Add
             </Button>
           </div>
-          <div className="mt-3 flex justify-end">
+          <div className="mt-3 flex items-center justify-end gap-3">
+            <SavedMark at={saved}>List saved</SavedMark>
             <Button kind="primary" size="sm" onClick={save} disabled={busy || !dirty}>
               Save list
             </Button>

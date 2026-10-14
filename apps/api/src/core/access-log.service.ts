@@ -38,7 +38,7 @@ export class AccessLogService {
   constructor(private readonly prisma: PrismaService) {}
 
   async log(caller: Caller, entry: LogEntry): Promise<void> {
-    await this.prisma.dataAccessLog.create({ data: row(caller, entry) })
+    await writeLine(this.prisma, caller, entry)
   }
 
   /**
@@ -49,7 +49,7 @@ export class AccessLogService {
    * wrong workspace.
    */
   async change<T>(
-    caller: Caller,
+    caller: Actor,
     write: (tx: Prisma.TransactionClient) => Promise<T>,
     entry: LogEntry | ((result: T) => LogEntry)
   ): Promise<T> {
@@ -57,28 +57,28 @@ export class AccessLogService {
       const result = await write(tx)
       const e = typeof entry === 'function' ? entry(result) : entry
       sameWorkspace(result, e)
-      await tx.dataAccessLog.create({ data: row(caller, e) })
+      await writeLine(tx, caller, e)
       return result
     })
   }
 
   /**
    * Trusted work and the lines it leaves, in one transaction: both are kept, or neither. Call it inside
-   * `runAsSystem`. `write` runs as trusted work; `refresh` re-reads the system context so a workspace `write` has
-   * just made counts for the statements after it. The lines are then written as `actor` themself: the transaction
-   * drops the system mark and takes the actor's own workspaces (memberships `write` gave them included), so the
-   * log's own policy decides, as it does for `change`. Trusted work never writes a line in its own name.
+   * `runAsSystem`. `write` runs as trusted work. The lines are then written as `actor` themself: the transaction
+   * drops the system mark (and any admin mark) and takes the actor's own workspaces (memberships `write` gave them
+   * included), so the log's own policy decides, as it does for `change`. Trusted work never writes a line in its own
+   * name.
    */
   async trusted<T>(
     actor: Actor,
-    write: (tx: Prisma.TransactionClient, refresh: () => Promise<void>) => Promise<T>,
+    write: (tx: Prisma.TransactionClient) => Promise<T>,
     entries: (result: T) => LogEntry[]
   ): Promise<T> {
     const ctx = tenantContext()
     if (!ctx?.allWorkspaces || ctx.userId)
       throw new Error('AccessLogService.trusted runs inside runAsSystem only')
     return this.prisma.$transaction(async (tx) => {
-      const result = await write(tx, () => actAs(tx, null))
+      const result = await write(tx)
       const lines = entries(result)
       if (lines.length) {
         await actAs(tx, actor.userId)
@@ -87,6 +87,16 @@ export class AccessLogService {
       return result
     })
   }
+}
+
+/**
+ * Writes one line. Prisma's `create` reads the row back (RETURNING), and Postgres applies the read policy to it; the
+ * platform admin may write a line in any workspace but read none (migration 20261013000200), so its lines go in with
+ * `createMany`, which reads nothing back.
+ */
+async function writeLine(db: Prisma.TransactionClient, actor: Actor, entry: LogEntry) {
+  if (tenantContext()?.admin) await db.dataAccessLog.createMany({ data: [row(actor, entry)] })
+  else await db.dataAccessLog.create({ data: row(actor, entry) })
 }
 
 /** Refuses a line whose workspace is not the one the written row belongs to. */
@@ -100,15 +110,12 @@ function sameWorkspace(result: unknown, entry: LogEntry) {
 }
 
 /**
- * Sets who the rest of this transaction acts as, the way PrismaService sets a query's context: `userId` for that
- * person in their own workspaces (worked out now, so memberships written earlier in the transaction count), or null
- * for trusted work (every workspace, the app.system mark). Parameterized; the values are never spliced into SQL.
+ * Sets who the rest of this transaction acts as, the way PrismaService sets a query's context: that person in their
+ * own workspaces (worked out now, so memberships written earlier in the transaction count), never the system or the
+ * admin mark. Parameterized; the values are never spliced into SQL.
  */
-async function actAs(tx: Prisma.TransactionClient, userId: string | null) {
-  if (userId)
-    await tx.$executeRaw`SELECT set_config('app.workspace_ids', array_to_string("workspaces_of_user"(${userId}), ','), true), set_config('app.user_id', ${userId}, true), set_config('app.system', '', true)`
-  else
-    await tx.$executeRaw`SELECT set_config('app.workspace_ids', array_to_string("all_workspace_ids"(), ','), true), set_config('app.user_id', '', true), set_config('app.system', 'on', true)`
+async function actAs(tx: Prisma.TransactionClient, userId: string) {
+  await tx.$executeRaw`SELECT set_config('app.workspace_ids', array_to_string("workspaces_of_user"(${userId}), ','), true), set_config('app.user_id', ${userId}, true), set_config('app.system', '', true), set_config('app.admin', '', true)`
 }
 
 function row(actor: Actor, entry: LogEntry): Prisma.DataAccessLogUncheckedCreateInput {

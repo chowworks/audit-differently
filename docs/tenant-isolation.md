@@ -40,8 +40,8 @@ personal document). Those stay in the API.
   cannot move to another person or workspace, an engagement cannot move to another workspace.
 - **Memberships are invitations.** A person's workspaces are the workspaces of their memberships. Only an
   owner gives, changes or removes a membership, and only in a workspace they own; a person with none can give
-  none, so nobody invites themselves. Two trusted steps run as system: the creator of a workspace is made its
-  owner, and an invited person who has not signed in gets a placeholder User row. The first owner of a
+  none, so nobody invites themselves. A workspace and its first owner are made by the platform admin (below);
+  an owner's invitation of a person who has not signed in leaves a placeholder User row as trusted work. The first owner of a
   workspace nobody belongs to is made by `scripts/grant-role.ts`, as the database owner.
 - **Everything the workspace accounts for is its members' to read and write.** Who may submit, record the
   funder's decision or open a personal document is the application's rule. The access log is written by
@@ -69,12 +69,44 @@ personal document). Those stay in the API.
 `app.workspace_ids` = every workspace and `app.system = on`. Only the `User` and `Membership` write policies
 admit the mark (so a workspace's creator can be made its owner, an invitation can leave a placeholder, and a
 first sign-in can take it over); every other policy treats trusted work like any member of every workspace.
-Keep the list short and reviewed. Trusted work is also the only writer of a `Workspace` row (the creator's
-first membership comes with it), the only deleter of a `Workspace` row (migration `20261012000100`; the API
+Keep the list short and reviewed. Trusted work is the only deleter of a `Workspace` row (migration `20261012000100`; the API
 checks first that the caller owns an empty workspace; memberships and suggestions go by foreign key, the access
 log has no foreign key and stays), and it deletes `pending-` users only. Prisma reads back every row it inserts
 (`RETURNING`), and Postgres applies the read policy to those rows too, which is why trusted work may read
 `User` and `Workspace`; the database spec inserts with `RETURNING` to keep that true.
+
+**The platform admin** (`app.admin`) is a person whose Clerk `publicMetadata.role` is `admin`, working at the
+workspace level only. `AdminGuard` runs after `AuthenticatedGuard` on the admin routes, asks Clerk's backend for
+the role on every request and calls `identifyAdmin`; `PrismaService` then sets `app.admin = on` beside the admin's
+own `app.user_id` and `app.workspace_ids` (their own memberships), never with `app.system`, and `app_is_admin()`
+counts the mark only beside a person. Migration `20261013000200` admits it to:
+
+| Table                | The admin may                                                                             |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| `Workspace`          | read every one, insert one, update its name and lists only (`Workspace_4_admin_lists`)    |
+| `Membership`         | read, insert, update and delete, in every workspace, each with its line (below)           |
+| `User`               | read everyone; insert `pending-` placeholders only                                        |
+| `Suggestion`         | read, in every workspace                                                                  |
+| `DataAccessLog`      | insert a line in its own name in any workspace; **no read** (written with `createMany`)   |
+| `PlatformRoleChange` | insert in its own name and read; nobody updates or deletes (no workspace, no foreign key) |
+
+Nothing else admits the mark: every engagement-level table, the log's reads, `DeletionRecord` and
+`TermsAcceptance` keep their policies, so there the admin sees only what its own memberships give it, and a member
+who is also an admin keeps exactly their member rights. Creating a workspace is the admin's alone (trusted work no
+longer inserts one). The admin accepts no Terms for the workspace it creates: the first owner who has accepted the
+current version is recorded on it (`MeController`), and from then on `Workspace_5_terms_kept` refuses any change to
+those three columns from anyone but the table's owner (migrations, scripts). A rename never touches them.
+
+An admin may seat itself in a workspace (owner's decision, 2026-10-14) and then read its records as that member, so
+the database makes sure it shows: `Membership_9_admin_logged` (a `DEFERRABLE INITIALLY DEFERRED` constraint trigger,
+`SECURITY DEFINER` because the admin cannot read the log) refuses at commit a membership insert, update or delete
+made under the mark unless this transaction wrote a `DataAccessLog` line in that workspace in the admin's name
+(`xmin` is the transaction's id; a line written inside a savepoint does not count, which fails closed), and
+`DataAccessLog_1_admin_name` sets a marked line's `actorName` from the admin's own `User.email`. The API's lines say
+"(platform admin) added themself as …" or end "(by a platform admin)".
+
+`PlatformRoleChange` belongs to no workspace, but its policies read the request's context, so it is in
+`TENANT_TABLES` with a `tenant_read` policy like the rest; the restricted role's grants cover it as every table.
 
 **Storage keys.** A `Document` row's `storageKey` is `<workspaceId>/<engagementId or workspace>/<period or
 general>/<uuid>.<ext>`; a trigger refuses a key whose first two segments disagree with the row, on insert or

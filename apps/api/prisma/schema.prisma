@@ -392,6 +392,24 @@ model TermsAcceptance {
 // at exportKey, under the top-level `retained/` prefix that one R2 lifecycle rule expires after 30 days (it is not a
 // Document). Owners write it; nobody reads or deletes it through the API.
 
+// Who made or unmade a platform admin (Clerk publicMetadata.role), one row per attempt that reached Clerk: kept or
+// failed. Append-only, no workspace and no foreign keys; only the platform admin's database flag reads or adds to it
+// (migration 20261013000200).
+model PlatformRoleChange {
+  id          String   @id @default(uuid())
+  at          DateTime @default(now())
+  actorId     String
+  actorEmail  String?
+  targetId    String
+  targetEmail String?
+  oldRole     String?
+  newRole     String?
+  outcome     String // 'done' | 'failed'
+  error       String?
+
+  @@index([at])
+}
+
 model DeletionRecord {
   id            String    @id @default(uuid())
   workspaceId   String

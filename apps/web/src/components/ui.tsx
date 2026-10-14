@@ -262,6 +262,32 @@ export function Notice({
   )
 }
 
+/**
+ * A short confirmation beside the button that did it ("Renamed", "List saved"): a green check that fades after a
+ * few seconds. `at` changes on every save (a timestamp), so saving twice shows it again.
+ */
+export function SavedMark({ at, children }: { at: number | null; children: React.ReactNode }) {
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    if (!at) return
+    setShown(true)
+    const t = setTimeout(() => setShown(false), 4000)
+    return () => clearTimeout(t)
+  }, [at])
+  return (
+    <span className={`ad-saved${shown ? ' ad-saved-on' : ''}`} role="status" aria-live="polite">
+      {shown && (
+        <>
+          <span className="ad-saved-check" aria-hidden="true">
+            ✓
+          </span>
+          {children}
+        </>
+      )}
+    </span>
+  )
+}
+
 export function ErrorNote({ message }: { message: string | null }) {
   if (!message) return null
   return <Notice tone="danger">{message}</Notice>

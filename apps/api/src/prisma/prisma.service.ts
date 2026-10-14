@@ -64,7 +64,20 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 }
 
 /**
- * The two settings Postgres policies read, as one statement. The caller's workspaces are worked out inside
+ * The two marks a context sets. app.system marks trusted work (runAsSystem) for the few policies that admit it
+ * (migration 20261011000400). app.admin marks the platform admin (AdminGuard verified the Clerk role) for the
+ * workspace-level policies that admit it (migration 20261013000200): always beside the admin's own user id, never
+ * with app.system.
+ */
+export function contextMarks(ctx: TenantContext): { system: '' | 'on'; admin: '' | 'on' } {
+  return {
+    system: ctx.allWorkspaces && !ctx.userId ? 'on' : '',
+    admin: ctx.admin && ctx.userId && !ctx.allWorkspaces ? 'on' : '',
+  }
+}
+
+/**
+ * The settings Postgres policies read, as one statement. The caller's workspaces are worked out inside
  * that statement by the database (from their memberships, or every workspace for system work), so there is no
  * separate lookup round trip and an invitation given or taken away applies to the next query.
  */
@@ -76,10 +89,9 @@ function setContext(db: PrismaClient, ctx: TenantContext) {
       : ctx.userId
         ? Prisma.sql`array_to_string("workspaces_of_user"(${ctx.userId}), ',')`
         : Prisma.sql`''`
-  // app.system marks trusted work (runAsSystem) for the few policies that admit it (migration 20261011000400).
-  const system = ctx.allWorkspaces && !ctx.userId ? 'on' : ''
+  const { system, admin } = contextMarks(ctx)
   return db.$executeRaw(
-    Prisma.sql`SELECT set_config('app.workspace_ids', ${workspaces}, true), set_config('app.user_id', ${ctx.userId ?? ''}, true), set_config('app.system', ${system}, true)`
+    Prisma.sql`SELECT set_config('app.workspace_ids', ${workspaces}, true), set_config('app.user_id', ${ctx.userId ?? ''}, true), set_config('app.system', ${system}, true), set_config('app.admin', ${admin}, true)`
   )
 }
 

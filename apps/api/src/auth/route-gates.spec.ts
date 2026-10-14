@@ -2,6 +2,7 @@ import 'reflect-metadata'
 import { RequestMethod } from '@nestjs/common'
 import { GUARDS_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { AppModule } from '../app.module'
+import { AdminGuard } from './admin.guard'
 import { AuthenticatedGuard } from './authenticated.guard'
 import { SKIP_TERMS_GATE } from './skip-terms-gate.decorator'
 
@@ -29,8 +30,8 @@ const join = (...parts: (string | undefined)[]) =>
     .join('/')
 
 /** Each route as "GET /api/path", with whether the guard runs for it (on the class or the handler). */
-function routes(): { route: string; gated: boolean; skipsTerms: boolean }[] {
-  const out: { route: string; gated: boolean; skipsTerms: boolean }[] = []
+function routes(): { route: string; gated: boolean; admin: boolean; skipsTerms: boolean }[] {
+  const out: { route: string; gated: boolean; admin: boolean; skipsTerms: boolean }[] = []
   for (const ctrl of controllersOf(AppModule as unknown as Ctor)) {
     const base = Reflect.getMetadata(PATH_METADATA, ctrl) as string | undefined
     const classGuards = (Reflect.getMetadata(GUARDS_METADATA, ctrl) ?? []) as unknown[]
@@ -47,6 +48,10 @@ function routes(): { route: string; gated: boolean; skipsTerms: boolean }[] {
       out.push({
         route: `${RequestMethod[method]} ${join('api', base, path)}`,
         gated: guards.includes(AuthenticatedGuard),
+        // AdminGuard reads the caller AuthenticatedGuard verified, so it must come after it.
+        admin:
+          guards.includes(AdminGuard) &&
+          guards.indexOf(AuthenticatedGuard) < guards.indexOf(AdminGuard),
         skipsTerms: !!(
           Reflect.getMetadata(SKIP_TERMS_GATE, handler) ??
           Reflect.getMetadata(SKIP_TERMS_GATE, ctrl)
@@ -71,13 +76,35 @@ const PUBLIC = [
 /** The gated routes a person who has not accepted the current Terms may still call: the Terms screen's own. */
 const OPEN_BEFORE_TERMS = ['GET /api/me', 'POST /api/me/terms']
 
+/**
+ * The platform admin's routes: AdminGuard after AuthenticatedGuard, which checks the Clerk role and sets the admin's
+ * database flag. Workspace level only: people, name, lists, suggestions, creating a workspace, and who is an admin. No
+ * route below the workspace (engagements, months, documents, participants, the access log, deletion) is here, so
+ * the flag is never set there and an admin is only what their memberships make them (404 elsewhere).
+ */
+const ADMIN = [
+  'POST /api/workspaces',
+  'GET /api/admin/workspaces',
+  'GET /api/admin/workspaces/:id',
+  'PATCH /api/admin/workspaces/:id',
+  'PATCH /api/admin/workspaces/:id/lists',
+  'POST /api/admin/workspaces/:id/members',
+  'PATCH /api/admin/workspaces/:id/members/:userId',
+  'DELETE /api/admin/workspaces/:id/members/:userId',
+  'GET /api/admin/users',
+  'GET /api/admin/admins',
+  'GET /api/admin/role-changes',
+  'PUT /api/admin/users/:id/role',
+]
+
 /** Every other route. A member of another workspace gets 404 from each; the role checks are in the specs beside each service. */
 const GATED = [
+  ...ADMIN,
   'GET /api/me',
   'POST /api/me/terms',
   'GET /api/workspaces',
-  'POST /api/workspaces',
   'GET /api/workspaces/:id',
+  'PATCH /api/workspaces/:id',
   'PATCH /api/workspaces/:id/lists',
   'GET /api/workspaces/:id/activity',
   'POST /api/workspaces/:id/suggestions',
@@ -138,6 +165,15 @@ describe('route gates', () => {
   it('guards each listed route', () => {
     const gated = new Set(all.filter((r) => r.gated).map((r) => r.route))
     for (const route of GATED) expect([route, gated.has(route)]).toEqual([route, true])
+  })
+
+  it('puts AdminGuard, after AuthenticatedGuard, on exactly the admin routes', () => {
+    expect(
+      all
+        .filter((r) => r.admin)
+        .map((r) => r.route)
+        .sort()
+    ).toEqual([...ADMIN].sort())
   })
 
   it('asks for accepted Terms on every gated route but the two the Terms screen needs', () => {

@@ -25,6 +25,9 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   'Suggestion',
   'DeletionRecord',
   'TermsAcceptance',
+  // No workspace: who made or unmade a platform admin. It is here because its policies read the request's context
+  // (app.admin, app.user_id), so a query on it must set that context like any other.
+  'PlatformRoleChange',
 ])
 
 type Fields = Map<string, string> // relation field name -> the model it points at

@@ -223,6 +223,7 @@
     padding: 0;
   }
   .ad-account-menu button,
+  .ad-account-menu .ad-account-link,
   .ad-account-option {
     display: flex;
     align-items: center;
@@ -239,8 +240,13 @@
     text-align: left;
     cursor: pointer;
   }
+  .ad-account-menu .ad-account-link {
+    text-decoration: none;
+  }
   .ad-account-menu button:hover,
   .ad-account-menu button:focus-visible,
+  .ad-account-menu .ad-account-link:hover,
+  .ad-account-menu .ad-account-link:focus-visible,
   .ad-account-option:hover,
   .ad-account-option:has(:focus-visible) {
     background: var(--paper);
@@ -695,6 +701,31 @@
     border-left-color: var(--warn);
     background: var(--warn-tint);
   }
+  /* A save confirmed beside its button (SavedMark): a green check, then it fades */
+  .ad-saved {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ok);
+    font-size: 13px;
+    font-weight: 700;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    white-space: nowrap;
+  }
+  .ad-saved-on {
+    opacity: 1;
+  }
+  .ad-saved-check {
+    display: inline-grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--ok);
+    color: var(--on-dark, #fff);
+    font-size: 11px;
+  }
   /* The contact form's confirmation */
   .ad-sent {
     display: flex;
@@ -792,7 +823,7 @@
   .ad-modal-wide {
     width: min(960px, 100%);
   }
-  /* The Terms, read in place in the New workspace form (components/TermsBox.tsx). */
+  /* The Terms, read in place (components/TermsBox.tsx). */
   .ad-terms-box {
     max-height: 260px;
     overflow-y: auto;

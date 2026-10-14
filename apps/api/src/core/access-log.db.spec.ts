@@ -1,4 +1,5 @@
 import type { PGlite } from '@electric-sql/pglite'
+import { randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import { AccessLogService, type LogEntry } from './access-log.service'
@@ -30,7 +31,10 @@ suite('AccessLogService on Postgres', () => {
     const q = sqlOf(args)
     return (await db.query(q.text, q.values as never[])).rows
   }
-  /** `tx.<model>.create({ data })` as one INSERT ... RETURNING, the way Prisma writes it. */
+  /**
+   * `tx.<model>.create({ data })` as one INSERT ... RETURNING, the way Prisma writes it; `createMany` as a plain INSERT
+   * that reads nothing back.
+   */
   const client = new Proxy(
     {
       $executeRaw: async (...args: unknown[]) => (await run(args), 1),
@@ -40,19 +44,31 @@ suite('AccessLogService on Postgres', () => {
       get(target, prop) {
         if (typeof prop !== 'string' || prop in target) return target[prop as string]
         const table = prop[0]!.toUpperCase() + prop.slice(1)
+        const toRow = (data: Record<string, unknown>) => {
+          const row: Row = {}
+          for (const [k, v] of Object.entries(data)) {
+            if (v === undefined) continue
+            row[k] =
+              v instanceof Date
+                ? v.toISOString()
+                : typeof v === 'object' && v !== null
+                  ? JSON.stringify(v)
+                  : (v as Row[string])
+          }
+          return row
+        }
         return {
-          create: ({ data }: { data: Record<string, unknown> }) => {
-            const row: Row = {}
-            for (const [k, v] of Object.entries(data)) {
-              if (v === undefined) continue
-              row[k] =
-                v instanceof Date
-                  ? v.toISOString()
-                  : typeof v === 'object' && v !== null
-                    ? JSON.stringify(v)
-                    : (v as Row[string])
+          create: ({ data }: { data: Record<string, unknown> }) => insert(db, table, toRow(data)),
+          createMany: async ({ data }: { data: Record<string, unknown>[] }) => {
+            for (const d of data) {
+              const row = { id: randomUUID(), ...toRow(d) }
+              const names = Object.keys(row)
+              await db.query(
+                `INSERT INTO "${table}" (${names.map((n) => `"${n}"`).join(', ')}) VALUES (${names.map((_, i) => `$${i + 1}`).join(', ')})`,
+                names.map((n) => row[n as keyof typeof row])
+              )
             }
-            return insert(db, table, row)
+            return { count: data.length }
           },
         }
       },
@@ -104,6 +120,7 @@ suite('AccessLogService on Postgres', () => {
       await insert(db, 'Membership', { userId: u, workspaceId: w, role })
     }
     await insert(db, 'User', { id: 'newbie', email: 'newbie@example.org' })
+    await insert(db, 'User', { id: 'admin-1', email: 'admin@example.org' })
 
     prisma = new PrismaService()
     const target = prisma as unknown as Record<string, unknown>
@@ -246,47 +263,106 @@ suite('AccessLogService on Postgres', () => {
         )
       ).toEqual([{ workspaceId: 'W1', actorId: 'newbie', actorName: 'newbie@example.org' }])
     })
+  })
 
-    it('creates a workspace, its owner and the line in one step; refresh lets the new workspace count', async () => {
-      const create = (id: string, refreshFirst: boolean) =>
-        runAsSystem(() =>
-          log.trusted(
-            newbie,
-            async (tx, refresh) => {
-              await tx.workspace.create({ data: { id, name: id } })
-              if (refreshFirst) await refresh()
-              return tx.membership.create({
-                data: { userId: 'newbie', workspaceId: id, role: 'owner' },
-              })
-            },
-            (seat) => [
-              {
-                workspaceId: seat.workspaceId,
-                resource: 'workspace',
-                subjectId: seat.workspaceId,
-                action: 'create',
-                description: `Created the workspace ${id} and accepted the Terms & Conditions`,
-              },
-            ]
-          )
+  describe('the platform admin', () => {
+    const admin = { userId: 'admin-1', email: 'admin@example.org' }
+    const asAdmin = <T>(fn: () => Promise<T>) =>
+      withTenantContext(fn, { userId: admin.userId, admin: true })
+
+    it('creates a workspace with its first owner and the line in one change, under its own flag', async () => {
+      let seen: Row | undefined
+      await asAdmin(() =>
+        log.change(
+          admin,
+          async (tx) => {
+            ;[seen] =
+              (await tx.$queryRaw`SELECT current_setting('app.user_id', true) AS "userId", current_setting('app.system', true) AS system, current_setting('app.admin', true) AS admin`) as Row[]
+            const w = await tx.workspace.create({ data: { id: 'W-adm', name: 'Riverbend' } })
+            await tx.user.create({ data: { id: 'pending-pat', email: 'pat@example.org' } })
+            await tx.membership.create({
+              data: { userId: 'pending-pat', workspaceId: 'W-adm', role: 'owner' },
+            })
+            return w
+          },
+          (w) => ({
+            workspaceId: w.id as string,
+            resource: 'workspace',
+            subjectId: w.id as string,
+            action: 'create',
+            description: 'Created the workspace Riverbend with first owner pat@example.org',
+          })
         )
-      // Without the refresh, the owner's membership cannot be read back: nothing is kept, the workspace included.
-      await expect(create('W-stale', false)).rejects.toThrow(/row-level security/)
-      expect(await rows(`SELECT 1 FROM "Workspace" WHERE id = 'W-stale'`)).toEqual([])
-      await create('W-new', true)
+      )
+      expect(seen).toEqual({ userId: 'admin-1', system: '', admin: 'on' })
       expect(
-        await rows(`SELECT "userId", role FROM "Membership" WHERE "workspaceId" = 'W-new'`)
-      ).toEqual([{ userId: 'newbie', role: 'owner' }])
+        await rows(`SELECT "termsVersion", "termsAcceptedById" FROM "Workspace" WHERE id = 'W-adm'`)
+      ).toEqual([{ termsVersion: null, termsAcceptedById: null }])
+      expect(
+        await rows(`SELECT "userId", role FROM "Membership" WHERE "workspaceId" = 'W-adm'`)
+      ).toEqual([{ userId: 'pending-pat', role: 'owner' }])
+      // The line is in the new workspace, in the admin's name, though the admin may not read it back.
       expect(
         await rows(
-          `SELECT "actorName", description FROM "DataAccessLog" WHERE "workspaceId" = 'W-new'`
+          `SELECT "actorId", "actorName", description FROM "DataAccessLog" WHERE "workspaceId" = 'W-adm'`
         )
       ).toEqual([
         {
-          actorName: 'newbie@example.org',
-          description: 'Created the workspace W-new and accepted the Terms & Conditions',
+          actorId: 'admin-1',
+          actorName: 'admin@example.org',
+          description: 'Created the workspace Riverbend with first owner pat@example.org',
         },
       ])
+    })
+
+    it('names itself by its account, and cannot commit a change to people whose line went elsewhere', async () => {
+      // The line says W1 while the seat is in W2; the write returns no workspace for `change` to compare, so only the
+      // database's commit-time check (Membership_9_admin_logged) stands between this and an unlogged seat.
+      await expect(
+        asAdmin(() =>
+          log.change(
+            { userId: admin.userId, email: 'not-me@example.org' },
+            async (tx) => {
+              await tx.membership.create({
+                data: { userId: 'newbie', workspaceId: 'W2', role: 'owner' },
+              })
+              return { ok: true }
+            },
+            {
+              workspaceId: 'W1',
+              resource: 'member',
+              action: 'create',
+              description: 'A line in the wrong workspace (by a platform admin)',
+            }
+          )
+        )
+      ).rejects.toThrow(/without a line in its access log/)
+      expect(
+        await rows(`SELECT 1 FROM "Membership" WHERE "userId" = 'newbie' AND "workspaceId" = 'W2'`)
+      ).toEqual([])
+      expect(
+        await rows(`SELECT 1 FROM "DataAccessLog" WHERE description LIKE 'A line in the wrong%'`)
+      ).toEqual([])
+    })
+
+    it('without its flag, the same person creates nothing', async () => {
+      await expect(
+        withTenantContext(
+          () =>
+            log.change(
+              admin,
+              (tx) => tx.workspace.create({ data: { id: 'W-noflag', name: 'x' } }),
+              (w) => ({
+                workspaceId: w.id as string,
+                resource: 'workspace',
+                action: 'create',
+                description: 'x',
+              })
+            ),
+          { userId: admin.userId }
+        )
+      ).rejects.toThrow(/row-level security/)
+      expect(await rows(`SELECT 1 FROM "Workspace" WHERE id = 'W-noflag'`)).toEqual([])
     })
   })
 })
