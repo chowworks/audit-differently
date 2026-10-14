@@ -32,10 +32,9 @@ export default defineRailway((ctx) => {
     buildEnvironment: 'V3',
     builder: 'NIXPACKS',
   } as const
-  // Then the restricted role is brought in step with DATABASE_URL (scripts/ensure-app-role.ts): after the migrations, so
-  // the functions it may execute exist, and before the API connects as it.
-  const migrate =
-    'npx prisma migrate deploy --schema apps/api/prisma/schema.prisma && npm run role:ensure -w @ad/api'
+  // The start sequence lives in apps/api/package.json (deploy:start), so it ships with the code: migrations, then the
+  // restricted role brought in step with DATABASE_URL (scripts/ensure-app-role.ts), then the API. A config apply that
+  // restarts a running deployment then never hands it a command its code does not have.
 
   // The variables every API environment carries; the ones that differ are set below.
   const shared = {
@@ -67,7 +66,7 @@ export default defineRailway((ctx) => {
     const apiDev = service('api-dev', {
       build,
       // The seed is fictional and idempotent; it keeps the dev data in its starting shape on every deploy.
-      start: `${migrate} && npm run db:seed -w @ad/api && node apps/api/dist/main.js`,
+      start: 'npm run deploy:start:dev -w @ad/api',
       deploy: { restartPolicyMaxRetries: 3 },
       replicas: { [REGION]: 1 },
       env: { NODE_ENV: 'development', ...shared },
@@ -89,7 +88,7 @@ export default defineRailway((ctx) => {
       ...build,
       watchPatterns: ['apps/api/**', 'packages/types/**', 'docs/terms/**', 'package*.json'],
     },
-    start: `${migrate} && node apps/api/dist/main.js`,
+    start: 'npm run deploy:start -w @ad/api',
     deploy: { restartPolicyMaxRetries: 3 },
     replicas: { [REGION]: 1 },
     domains: ['api.auditdifferently.tech'],
