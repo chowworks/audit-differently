@@ -141,7 +141,7 @@ export function OverviewPage() {
                   </span>
                 </div>
                 {group.map((c) => (
-                  <EngagementCard key={c.id} c={c} showWorkspace={workspaces > 1} />
+                  <EngagementCard key={c.id} c={c} showWorkspace />
                 ))}
               </div>
             )
