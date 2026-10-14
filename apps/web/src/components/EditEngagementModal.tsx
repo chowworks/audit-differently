@@ -40,7 +40,8 @@ export function EditEngagementModal({
   /** Which group to open on, e.g. 'award-letter' when the missing record was the award amount. */
   focus?: 'proposal' | 'award-letter' | 'contract' | 'reporting' | 'participants' | 'waivers'
   onClose: () => void
-  onSaved: () => Promise<void>
+  /** Gets the engagement as saved, so the page shows it without fetching it again. */
+  onSaved: (saved: EngagementDetail) => void
 }) {
   const api = useApi()
   const [form, setForm] = useState<Partial<EngagementInput>>({
@@ -84,13 +85,13 @@ export function EditEngagementModal({
     setBusy(true)
     setError(null)
     try {
-      await api.patch(`/engagements/${c.id}`, {
+      const saved = await api.patch<EngagementDetail>(`/engagements/${c.id}`, {
         ...form,
         requestedAmount: form.requestedAmount || null,
         awardAmount: form.awardAmount || null,
         reportDueDay: Number(form.reportDueDay),
       })
-      await onSaved()
+      onSaved(saved)
     } catch (e) {
       setError((e as Error).message)
       setBusy(false)

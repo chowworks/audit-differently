@@ -5,8 +5,10 @@ import {
   NotFoundException,
 } from '@nestjs/common'
 import {
+  ALLOCATION_TYPE_LABELS,
   ALLOCATION_TYPES,
   DOCUMENT_PURPOSES,
+  REPORT_LINE_LABELS,
   REPORT_LINES,
   type CheckDto,
   type DocumentPurpose,
@@ -17,20 +19,82 @@ import {
   type ReportStatus,
   type WexPaymentDto,
   type WexPaymentInput,
+  DOCUMENT_PURPOSE_LABELS,
   WRITE_ROLES,
 } from '@ad/types'
 import { ChecksService } from '../checks/checks.service'
 import { AccessLogService } from '../core/access-log.service'
 import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
+import { changesOf, howMany, monthName, type Fields } from '../core/changes'
 import { participantDto } from '../engagements/engagements.service'
 import { eligibilityItemsOf } from '../engagements/eligibility'
 import { documentDto } from '../documents/document.dto'
+import { linkDocument, NothingChanged, unlessUnchanged } from '../documents/link'
+import type { StagedFile } from '../documents/staged-file'
 import { PrismaService } from '../prisma/prisma.service'
 import { computeLines } from './report-lines'
 
 const iso = (d: Date) => d.toISOString()
 const isoDate = (d: Date) => d.toISOString().slice(0, 10)
 const SEVERITY_RANK = { blocker: 0, attention: 1, info: 2 } as const
+
+/**
+ * An expense in the access log, labelled as the expense form labels it: amounts, dates, categories and ID-like
+ * numbers by value; names and free text by name alone.
+ */
+const EXPENSE_FIELDS: Fields = {
+  itemNumber: { label: 'Item number', show: 'text' },
+  date: { label: 'Date', show: 'date' },
+  vendor: { label: 'Vendor' },
+  memo: { label: 'Memo' },
+  account: { label: 'Account (general ledger)', show: 'text' },
+  totalCost: { label: 'Total cost', show: 'money' },
+  allocatedAmount: { label: 'Amount charged to this program', show: 'money' },
+  allocationType: { label: 'Allocation', show: 'text', labels: ALLOCATION_TYPE_LABELS },
+  allocationNote: { label: 'Allocation note' },
+  reportLine: { label: 'Report line', show: 'text', labels: REPORT_LINE_LABELS },
+}
+
+/** A work-experience payment is a participant's pay: every field by name alone. */
+const WEX_FIELDS: Fields = {
+  participantId: { label: 'Participant' },
+  payPeriodStart: { label: 'Pay period start' },
+  payPeriodEnd: { label: 'Pay period end' },
+  hours: { label: 'Hours' },
+  grossAmount: { label: 'Gross pay' },
+}
+
+/**
+ * A month's report, labelled as the month's page and the funder's decision form label it: its status, dates and
+ * the funder's invoice number by value; the people who prepared and authorized it and the funder's words by name
+ * alone.
+ */
+const REPORT_FIELDS: Fields = {
+  status: { label: 'Status', show: 'text' },
+  submittedAt: { label: 'Submitted on', show: 'date' },
+  preparedByName: { label: 'Prepared by' },
+  authorizedByName: { label: 'Authorized by' },
+  authorizedAt: { label: 'Authorized on', show: 'date' },
+  invoiceNumber: { label: 'IV# for payment', show: 'text' },
+  review: { label: "Funder's review checklist" },
+  deniedReason: { label: 'If denied, why' },
+}
+
+/** Item numbers, general-ledger accounts and the funder's invoice number are logged by value, so they stay ID-like. */
+const ID_LIKE = /^[A-Za-z0-9#&./ -]{1,40}$/
+
+/** `value`, trimmed, if it is ID-like; a 400 in plain words if not. */
+export function idLike(label: string, value: string): string {
+  const v = value.trim()
+  if (!ID_LIKE.test(v))
+    throw new BadRequestException(
+      `${label} may use letters, digits, #, &, ., /, - and spaces, from 1 to 40 characters`
+    )
+  return v
+}
+
+const purposeLabel = (p: string) =>
+  (DOCUMENT_PURPOSE_LABELS[p as DocumentPurpose] ?? p).toLowerCase()
 
 type ReportRow = NonNullable<Awaited<ReturnType<ReportsService['find']>>>
 
@@ -75,8 +139,29 @@ export class ReportsService {
     return r
   }
 
+  /** The month's page, as the person opens it: one line names what it lists. */
   async get(caller: Caller, id: string): Promise<ReportDetail> {
     const r = await this.load(caller, id)
+    const detail = await this.detail(caller, r)
+    await this.log.log(caller, {
+      workspaceId: r.workspaceId!,
+      resource: 'report',
+      subjectId: r.id,
+      action: 'read',
+      description: `Viewed ${monthName(r.period)} of ${r.engagement.name}: ${howMany(detail.documents.length, 'document')}, ${howMany(detail.participants.length, 'participant')}`,
+    })
+    return detail
+  }
+
+  /**
+   * The month's page again, after a change the person just made on it. The open was logged; a change's answer
+   * is not another read, so this writes no line.
+   */
+  private async fresh(caller: Caller, id: string): Promise<ReportDetail> {
+    return this.detail(caller, await this.load(caller, id))
+  }
+
+  private async detail(caller: Caller, r: ReportRow): Promise<ReportDetail> {
     const earlier = await this.prisma.expense.findMany({
       where: { engagementId: r.engagementId, monthlyReport: { period: { lt: r.period } } },
       select: { reportLine: true, allocatedAmount: true },
@@ -88,21 +173,6 @@ export class ReportsService {
     })
     const c = r.engagement
     const writer = workspaceRole(caller, c.workspaceId, WRITE_ROLES)
-    // The month's page lists the workspace's documents and the engagement's participants: both are logged.
-    if (documents.length > 0)
-      await this.log.log(caller, {
-        workspaceId: r.workspaceId!,
-        resource: 'document',
-        action: 'list',
-        detail: `${documents.length} documents, ${r.period} report of ${c.name}`,
-      })
-    if (c.participants.length > 0)
-      await this.log.log(caller, {
-        workspaceId: r.workspaceId!,
-        resource: 'participant',
-        action: 'list',
-        detail: `${c.participants.length} participants, ${r.period} report of ${c.name}`,
-      })
     return {
       id: r.id,
       period: r.period,
@@ -178,6 +248,8 @@ export class ReportsService {
   private expenseData(input: ExpenseInput) {
     const bad = (m: string) => new BadRequestException(m)
     if (!input.itemNumber?.trim()) throw bad('itemNumber is required')
+    const itemNumber = idLike('Item number', input.itemNumber)
+    const account = input.account?.trim() ? idLike('Account (general ledger)', input.account) : null
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date ?? '')) throw bad('date must be YYYY-MM-DD')
     if (!input.vendor?.trim()) throw bad('vendor is required')
     const total = Number(input.totalCost)
@@ -191,11 +263,11 @@ export class ReportsService {
     if (!REPORT_LINES.includes(input.reportLine))
       throw bad('reportLine is not one of the seven lines')
     return {
-      itemNumber: input.itemNumber.trim(),
+      itemNumber,
       date: new Date(`${input.date}T00:00:00Z`),
       vendor: input.vendor.trim(),
       memo: input.memo?.trim() || null,
-      account: input.account?.trim() || null,
+      account,
       totalCost: total.toFixed(2),
       allocatedAmount: allocated.toFixed(2),
       allocationType: input.allocationType,
@@ -204,73 +276,99 @@ export class ReportsService {
     }
   }
 
-  async addExpense(caller: Caller, reportId: string, input: ExpenseInput): Promise<ExpenseDto> {
+  async addExpense(caller: Caller, reportId: string, input: ExpenseInput): Promise<ReportDetail> {
     const r = await this.editable(caller, reportId)
-    const e = await this.prisma.expense.create({
-      data: {
-        engagementId: r.engagementId,
-        monthlyReportId: r.id,
-        createdById: caller.userId,
-        ...this.expenseData(input),
-      },
-      include: { documents: { include: { document: true } } },
-    })
+    const data = this.expenseData(input)
+    await this.log.change(
+      caller,
+      (tx) =>
+        tx.expense.create({
+          data: {
+            engagementId: r.engagementId,
+            monthlyReportId: r.id,
+            createdById: caller.userId,
+            ...data,
+          },
+        }),
+      (e) => ({
+        workspaceId: r.workspaceId!,
+        resource: 'expense',
+        subjectId: e.id,
+        action: 'create',
+        description: `Added expense ${data.itemNumber} to ${monthName(r.period)}`,
+        changes: changesOf(null, data, EXPENSE_FIELDS),
+      })
+    )
     await this.checks.refresh(r.id)
-    await this.log.log(caller, {
-      workspaceId: r.workspaceId!,
-      resource: 'expense',
-      subjectId: e.id,
-      action: 'create',
-      detail: e.itemNumber,
-    })
-    return expenseDto(e)
+    return this.fresh(caller, r.id)
   }
 
-  async updateExpense(caller: Caller, expenseId: string, input: ExpenseInput): Promise<ExpenseDto> {
+  /** Saves an edited expense; a save with nothing edited writes nothing and logs nothing. */
+  async updateExpense(
+    caller: Caller,
+    expenseId: string,
+    input: ExpenseInput
+  ): Promise<ReportDetail> {
     const existing = await this.prisma.expense.findFirst({
       where: { id: expenseId, ...tenantWhere(caller) },
     })
     if (!existing) throw new NotFoundException()
     const r = await this.editable(caller, existing.monthlyReportId)
-    const e = await this.prisma.expense.update({
-      where: { id: expenseId },
-      data: this.expenseData(input),
-      include: { documents: { include: { document: true } } },
+    const data = this.expenseData(input)
+    await unlessUnchanged(async () => {
+      await this.log.change(
+        caller,
+        async (tx) => {
+          const before = await tx.expense.findFirst({ where: { id: expenseId } })
+          if (!before) throw new NotFoundException()
+          const changes = changesOf(before, data, EXPENSE_FIELDS)
+          if (!changes.length) throw new NothingChanged()
+          await tx.expense.update({ where: { id: expenseId }, data })
+          return { before, changes }
+        },
+        ({ before, changes }) => ({
+          workspaceId: r.workspaceId!,
+          resource: 'expense',
+          subjectId: expenseId,
+          action: 'update',
+          description: `Changed expense ${before.itemNumber} in ${monthName(r.period)}`,
+          changes,
+        })
+      )
+      await this.checks.refresh(r.id)
     })
-    await this.checks.refresh(r.id)
-    await this.log.log(caller, {
-      workspaceId: r.workspaceId!,
-      resource: 'expense',
-      subjectId: e.id,
-      action: 'update',
-      detail: e.itemNumber,
-    })
-    return expenseDto(e)
+    return this.fresh(caller, r.id)
   }
 
-  async deleteExpense(caller: Caller, expenseId: string): Promise<void> {
+  async deleteExpense(caller: Caller, expenseId: string): Promise<ReportDetail> {
     const existing = await this.prisma.expense.findFirst({
       where: { id: expenseId, ...tenantWhere(caller) },
     })
     if (!existing) throw new NotFoundException()
     const r = await this.editable(caller, existing.monthlyReportId)
-    await this.prisma.expense.delete({ where: { id: expenseId } })
-    await this.checks.refresh(r.id)
-    await this.log.log(caller, {
+    await this.log.change(caller, (tx) => tx.expense.delete({ where: { id: expenseId } }), {
       workspaceId: r.workspaceId!,
       resource: 'expense',
       subjectId: expenseId,
       action: 'delete',
-      detail: existing.itemNumber,
+      description: `Removed expense ${existing.itemNumber} from ${monthName(r.period)}`,
+      changes: changesOf(existing, null, EXPENSE_FIELDS),
     })
+    await this.checks.refresh(r.id)
+    return this.fresh(caller, r.id)
   }
 
+  /**
+   * Puts a document in one of an expense's proof slots: one the workspace holds (`source` is its id), or a new
+   * upload (`source` is the staged file from POST /documents). The same slot again changes nothing; another slot
+   * moves it there, and the line says so.
+   */
   async attachToExpense(
     caller: Caller,
     expenseId: string,
-    documentId: string,
-    purpose: DocumentPurpose
-  ): Promise<void> {
+    purpose: DocumentPurpose,
+    source: string | StagedFile
+  ): Promise<ReportDetail> {
     if (!DOCUMENT_PURPOSES.includes(purpose))
       throw new BadRequestException('purpose is not one of the allowed values')
     const existing = await this.prisma.expense.findFirst({
@@ -278,33 +376,62 @@ export class ReportsService {
     })
     if (!existing) throw new NotFoundException()
     const r = await this.editable(caller, existing.monthlyReportId)
-    const doc = await this.prisma.document.findFirst({
-      where: { id: documentId, workspaceId: r.workspaceId! },
-    })
-    if (!doc) throw new NotFoundException('No such document in this workspace')
-    await this.prisma.expenseDocument.upsert({
-      where: { expenseId_documentId: { expenseId, documentId } },
-      update: { purpose },
-      create: { expenseId, documentId, purpose },
-    })
+    const key = (documentId: string) => ({ expenseId_documentId: { expenseId, documentId } })
+    await linkDocument(
+      this.prisma,
+      this.log,
+      caller,
+      {
+        workspaceId: r.workspaceId!,
+        engagementId: r.engagementId,
+        resource: 'expense',
+        subjectId: expenseId,
+        subject: `expense ${existing.itemNumber}`,
+        purpose,
+        words: purposeLabel,
+        find: (tx, documentId) =>
+          tx.expenseDocument.findFirst({ where: { expenseId, documentId } }),
+        create: (tx, documentId) =>
+          tx.expenseDocument.create({ data: { expenseId, documentId, purpose } }),
+        move: (tx, documentId) =>
+          tx.expenseDocument.update({ where: key(documentId), data: { purpose } }),
+      },
+      source
+    )
     await this.checks.refresh(r.id)
-    await this.log.log(caller, {
-      workspaceId: r.workspaceId!,
-      resource: 'expense',
-      subjectId: expenseId,
-      action: 'update',
-      detail: `attached ${purpose}`,
-    })
+    return this.fresh(caller, r.id)
   }
 
-  async detachFromExpense(caller: Caller, expenseId: string, documentId: string): Promise<void> {
+  async detachFromExpense(
+    caller: Caller,
+    expenseId: string,
+    documentId: string
+  ): Promise<ReportDetail> {
     const existing = await this.prisma.expense.findFirst({
       where: { id: expenseId, ...tenantWhere(caller) },
     })
     if (!existing) throw new NotFoundException()
     const r = await this.editable(caller, existing.monthlyReportId)
-    await this.prisma.expenseDocument.deleteMany({ where: { expenseId, documentId } })
-    await this.checks.refresh(r.id)
+    await unlessUnchanged(async () => {
+      await this.log.change(
+        caller,
+        async (tx) => {
+          const link = await tx.expenseDocument.findFirst({ where: { expenseId, documentId } })
+          if (!link) throw new NothingChanged()
+          await tx.expenseDocument.deleteMany({ where: { expenseId, documentId } })
+          return link
+        },
+        (link) => ({
+          workspaceId: r.workspaceId!,
+          resource: 'expense',
+          subjectId: expenseId,
+          action: 'update',
+          description: `Detached ${purposeLabel(link.purpose)} from expense ${existing.itemNumber}`,
+        })
+      )
+      await this.checks.refresh(r.id)
+    })
+    return this.fresh(caller, r.id)
   }
 
   // ── Work experience payroll ───────────────────────────────────────────────
@@ -313,7 +440,7 @@ export class ReportsService {
     caller: Caller,
     reportId: string,
     input: WexPaymentInput
-  ): Promise<WexPaymentDto> {
+  ): Promise<ReportDetail> {
     const r = await this.editable(caller, reportId)
     const participant = r.engagement.participants.find((p) => p.id === input.participantId)
     if (!participant)
@@ -325,27 +452,37 @@ export class ReportsService {
     if (!Number.isFinite(gross) || gross < 0)
       throw new BadRequestException('grossAmount must be a positive amount')
     if (gross >= 1e10) throw new BadRequestException('grossAmount must be under $10,000,000,000')
-    const w = await this.prisma.wexPayment.create({
-      data: {
-        monthlyReportId: r.id,
-        participantId: participant.id,
-        payPeriodStart: new Date(`${input.payPeriodStart}T00:00:00Z`),
-        payPeriodEnd: new Date(`${input.payPeriodEnd}T00:00:00Z`),
-        hours: input.hours == null ? null : Number(input.hours).toFixed(2),
-        grossAmount: gross.toFixed(2),
-      },
-      include: { participant: true, documents: { include: { document: true } } },
-    })
+    const data = {
+      monthlyReportId: r.id,
+      participantId: participant.id,
+      payPeriodStart: new Date(`${input.payPeriodStart}T00:00:00Z`),
+      payPeriodEnd: new Date(`${input.payPeriodEnd}T00:00:00Z`),
+      hours: input.hours == null ? null : Number(input.hours).toFixed(2),
+      grossAmount: gross.toFixed(2),
+    }
+    await this.log.change(
+      caller,
+      (tx) => tx.wexPayment.create({ data }),
+      (w) => ({
+        workspaceId: r.workspaceId!,
+        resource: 'report',
+        subjectId: w.id,
+        action: 'create',
+        description: `Added a work-experience payment to ${monthName(r.period)}`,
+        changes: changesOf(null, data, WEX_FIELDS),
+      })
+    )
     await this.checks.refresh(r.id)
-    return wexDto(w)
+    return this.fresh(caller, r.id)
   }
 
+  /** As `attachToExpense`, for a work-experience payment's proof. */
   async attachToWex(
     caller: Caller,
     wexId: string,
-    documentId: string,
-    purpose: DocumentPurpose
-  ): Promise<void> {
+    purpose: DocumentPurpose,
+    source: string | StagedFile
+  ): Promise<ReportDetail> {
     if (!DOCUMENT_PURPOSES.includes(purpose))
       throw new BadRequestException('purpose is not one of the allowed values')
     const w = await this.prisma.wexPayment.findFirst({
@@ -353,21 +490,69 @@ export class ReportsService {
     })
     if (!w) throw new NotFoundException()
     const r = await this.editable(caller, w.monthlyReportId)
-    const doc = await this.prisma.document.findFirst({
-      where: { id: documentId, workspaceId: r.workspaceId! },
+    const key = (documentId: string) => ({
+      wexPaymentId_documentId: { wexPaymentId: wexId, documentId },
     })
-    if (!doc) throw new NotFoundException('No such document in this workspace')
-    await this.prisma.wexPaymentDocument.upsert({
-      where: { wexPaymentId_documentId: { wexPaymentId: wexId, documentId } },
-      update: { purpose },
-      create: { wexPaymentId: wexId, documentId, purpose },
-    })
+    await linkDocument(
+      this.prisma,
+      this.log,
+      caller,
+      {
+        workspaceId: r.workspaceId!,
+        engagementId: r.engagementId,
+        resource: 'report',
+        subjectId: wexId,
+        subject: `a work-experience payment in ${monthName(r.period)}`,
+        purpose,
+        words: purposeLabel,
+        find: (tx, documentId) =>
+          tx.wexPaymentDocument.findFirst({ where: { wexPaymentId: wexId, documentId } }),
+        create: (tx, documentId) =>
+          tx.wexPaymentDocument.create({ data: { wexPaymentId: wexId, documentId, purpose } }),
+        move: (tx, documentId) =>
+          tx.wexPaymentDocument.update({ where: key(documentId), data: { purpose } }),
+      },
+      source
+    )
     await this.checks.refresh(r.id)
+    return this.fresh(caller, r.id)
   }
 
   // ── Submission and review ─────────────────────────────────────────────────
 
-  async submit(caller: Caller, reportId: string): Promise<{ blockers: CheckDto[] }> {
+  /**
+   * Changes the month's own row from `from` statuses, reading the row as it stands inside the transaction so the
+   * logged before is the real one.
+   */
+  private async changeReport(
+    caller: Caller,
+    r: ReportRow,
+    from: string[],
+    data: Record<string, unknown>,
+    entry: { action: 'submit' | 'review' | 'update'; description: string },
+    loggable: (row: Record<string, unknown>) => Record<string, unknown> = (row) => row
+  ): Promise<void> {
+    await this.log.change(
+      caller,
+      async (tx) => {
+        const before = await tx.monthlyReport.findFirst({ where: { id: r.id } })
+        if (!before) throw new NotFoundException()
+        if (!from.includes(before.status))
+          throw new ConflictException(`The ${r.period} report is ${before.status}`)
+        await tx.monthlyReport.update({ where: { id: r.id }, data })
+        return before
+      },
+      (before) => ({
+        workspaceId: r.workspaceId!,
+        resource: 'report',
+        subjectId: r.id,
+        ...entry,
+        changes: changesOf(loggable(before), loggable(data), REPORT_FIELDS),
+      })
+    )
+  }
+
+  async submit(caller: Caller, reportId: string): Promise<ReportDetail> {
     const r = await this.load(caller, reportId)
     allow(
       workspaceRole(caller, r.engagement.workspaceId, WRITE_ROLES),
@@ -385,34 +570,29 @@ export class ReportsService {
         blockers: blockers.map(checkDto),
       })
     const isOwner = workspaceRole(caller, r.engagement.workspaceId, ['owner'])
-    await this.prisma.monthlyReport.update({
-      where: { id: r.id },
-      data: {
-        status: 'submitted',
-        submittedAt: new Date(),
-        preparedByName: r.preparedByName ?? r.engagement.preparerName ?? caller.displayName,
-        authorizedByName: isOwner
-          ? (r.engagement.authorizerName ?? caller.displayName)
-          : r.authorizedByName,
-        authorizedAt: isOwner ? new Date() : r.authorizedAt,
-      },
+    const data = {
+      status: 'submitted',
+      submittedAt: new Date(),
+      preparedByName: r.preparedByName ?? r.engagement.preparerName ?? caller.displayName,
+      authorizedByName: isOwner
+        ? (r.engagement.authorizerName ?? caller.displayName)
+        : r.authorizedByName,
+      authorizedAt: isOwner ? new Date() : r.authorizedAt,
+    }
+    // As the month's page says it once submitted: "September 2026 submitted to the funder."
+    await this.changeReport(caller, r, ['draft'], data, {
+      action: 'submit',
+      description: `Submitted ${monthName(r.period)} of ${r.engagement.name} to ${r.engagement.funder ?? 'the funder'}`,
     })
     await this.checks.refresh(r.id)
-    await this.log.log(caller, {
-      workspaceId: r.workspaceId!,
-      resource: 'report',
-      subjectId: r.id,
-      action: 'submit',
-      detail: r.period,
-    })
-    return { blockers: [] }
+    return this.fresh(caller, r.id)
   }
 
   async review(
     caller: Caller,
     reportId: string,
     body: { decision: 'approve' | 'deny'; reason?: string; review?: ReportReview }
-  ): Promise<void> {
+  ): Promise<ReportDetail> {
     const r = await this.load(caller, reportId)
     // The funder does not sign in: the bookkeeper records its decision from the email or the returned form.
     allow(
@@ -425,44 +605,50 @@ export class ReportsService {
       throw new BadRequestException('decision must be approve or deny')
     if (body.decision === 'deny' && !body.reason?.trim())
       throw new BadRequestException('A denial needs a reason')
-    await this.prisma.monthlyReport.update({
-      where: { id: r.id },
-      data: {
-        status: body.decision === 'approve' ? 'approved' : 'denied',
-        review: body.review ? JSON.parse(JSON.stringify(body.review)) : (r.review ?? undefined),
-        reviewedById: caller.userId,
-        reviewedAt: new Date(),
-        deniedReason: body.decision === 'deny' ? body.reason!.trim() : null,
+    let review = body.review ? JSON.parse(JSON.stringify(body.review)) : (r.review ?? undefined)
+    if (body.review?.invoiceNumber?.trim())
+      review = { ...review, invoiceNumber: idLike('IV# for payment', body.review.invoiceNumber) }
+    const data = {
+      status: body.decision === 'approve' ? 'approved' : 'denied',
+      review,
+      reviewedById: caller.userId,
+      reviewedAt: new Date(),
+      deniedReason: body.decision === 'deny' ? body.reason!.trim() : null,
+    }
+    const invoice = (v: unknown) => (v as ReportReview | null)?.invoiceNumber ?? null
+    await this.changeReport(
+      caller,
+      r,
+      ['submitted', 'under-review'],
+      data,
+      {
+        action: 'review',
+        description: `Recorded the funder's ${body.decision === 'approve' ? 'approval' : 'denial'} of ${monthName(r.period)} of ${r.engagement.name}`,
       },
-    })
-    await this.log.log(caller, {
-      workspaceId: r.workspaceId!,
-      resource: 'report',
-      subjectId: r.id,
-      action: 'review',
-      detail: `${body.decision} ${r.period}`,
-    })
+      (row) => ({ ...row, invoiceNumber: invoice(row.review) })
+    )
+    return this.fresh(caller, r.id)
   }
 
-  async reopen(caller: Caller, reportId: string): Promise<void> {
+  async reopen(caller: Caller, reportId: string): Promise<ReportDetail> {
     const r = await this.load(caller, reportId)
     allow(
       workspaceRole(caller, r.engagement.workspaceId, WRITE_ROLES),
       'Only an owner or bookkeeper reopens'
     )
     if (r.status !== 'denied') throw new ConflictException('Only a denied report can be reopened')
-    await this.prisma.monthlyReport.update({
-      where: { id: r.id },
-      data: { status: 'draft', submittedAt: null },
-    })
+    await this.changeReport(
+      caller,
+      r,
+      ['denied'],
+      { status: 'draft', submittedAt: null },
+      {
+        action: 'update',
+        description: `Reopened ${monthName(r.period)} of ${r.engagement.name} to correct it`,
+      }
+    )
     await this.checks.refresh(r.id)
-    await this.log.log(caller, {
-      workspaceId: r.workspaceId!,
-      resource: 'report',
-      subjectId: r.id,
-      action: 'update',
-      detail: `reopened ${r.period}`,
-    })
+    return this.fresh(caller, r.id)
   }
 }
 

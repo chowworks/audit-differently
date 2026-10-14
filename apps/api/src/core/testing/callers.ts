@@ -14,6 +14,7 @@ export const OTHER = 'ws-2'
 export const member = (role: Role, workspaceId = W): Caller => ({
   userId: `u-${role}-${workspaceId}`,
   displayName: `The ${role}`,
+  email: `${role}@${workspaceId}.example.org`,
   memberships: [{ workspaceId, workspaceName: workspaceId, role }],
   workspaceIds: [workspaceId],
 })

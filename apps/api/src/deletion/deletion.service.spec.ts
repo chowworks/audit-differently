@@ -24,6 +24,7 @@ const record = (extra: Record<string, unknown> = {}) => ({
   id: 'del-1',
   workspaceId: W,
   engagementId: E,
+  subjectName: 'Coding Pathway',
   status: 'downloaded',
   createdAt: new Date(),
   ...extra,
@@ -218,6 +219,7 @@ describe('DeletionService: deleting an engagement', () => {
         resource: 'engagement',
         action: 'delete',
         subjectId: E,
+        description: 'Deleted the engagement Coding Pathway permanently, after its full export',
       })
     )
     expect(s.calls).toEqual([
@@ -288,7 +290,13 @@ describe('DeletionService: deleting a workspace', () => {
     expect(s.calls).toEqual(['log', `files ${W}/`, 'tx documents', 'workspace', `files ${W}/`])
     expect(s.log.log).toHaveBeenCalledWith(
       owner,
-      expect.objectContaining({ resource: 'workspace', action: 'delete', subjectId: W })
+      expect.objectContaining({
+        resource: 'workspace',
+        action: 'delete',
+        subjectId: W,
+        description:
+          'Deleted the workspace Riverbend Youth Services permanently, with no documents to export',
+      })
     )
   })
 
@@ -308,11 +316,15 @@ describe('DeletionService: deleting a workspace', () => {
 
 describe('DeletionService: the export', () => {
   const owner = member('owner')
-  const planOf = (objects: [string, string, number][] = [['pkg/a.pdf', 'key-a', 7]]) => ({
+  const planOf = (
+    objects: [string, string, number][] = [['pkg/a.pdf', 'key-a', 7]],
+    personal: string[] = []
+  ) => ({
     name: 'Coding Pathway - audit package.zip',
     files: objects.length,
     text: { 'pkg/Index.csv': strToU8('"a"') },
     objects,
+    personalPaths: new Set(personal),
   })
   const part = (n: number, paths: string[], status = 'pending') => ({
     n,
@@ -337,9 +349,13 @@ describe('DeletionService: the export', () => {
     return { res, bytes: () => Buffer.concat(chunks) }
   }
 
-  function exporting(parts = [part(1, ['pkg/a.pdf'])], objects?: [string, string, number][]) {
+  function exporting(
+    parts = [part(1, ['pkg/a.pdf'])],
+    objects?: [string, string, number][],
+    personal: string[] = []
+  ) {
     const s = setup({ records: [record({ status: 'exported', parts })] })
-    s.audit.plan.mockResolvedValue(planOf(objects))
+    s.audit.plan.mockResolvedValue(planOf(objects, personal))
     s.storage.read.mockImplementation(async (key: string) => Buffer.from(`%PDF- ${key}`))
     return s
   }
@@ -369,6 +385,8 @@ describe('DeletionService: the export', () => {
       engagementId: E,
       subjectName: 'Coding Pathway',
       deletedById: owner.userId,
+      // Staff are named by email, never by display name.
+      deletedByName: 'owner@ws-1.example.org',
     })
     expect(created.parts.map((p) => p.status)).toEqual(['pending', 'pending'])
     expect(created.parts[1]!.key).toMatch(
@@ -377,10 +395,46 @@ describe('DeletionService: the export', () => {
     const days = (created.expiresAt.getTime() - Date.now()) / 86_400_000
     expect(Math.round(days)).toBe(RETAINED_COPY_DAYS)
     expect(s.storage.putFile).not.toHaveBeenCalled()
-    expect(s.log.log).toHaveBeenCalledWith(
+    // Nothing has left yet: the line is written when a part is downloaded, so one click is one line.
+    expect(s.log.log).not.toHaveBeenCalled()
+  })
+
+  it('logs each part download before a byte is built, in the words of the Download export button', async () => {
+    const lines = (s: ReturnType<typeof setup>) =>
+      (s.log.log.mock.calls as unknown as [unknown, { description: string }][]).map(
+        ([, e]) => e.description
+      )
+    const one = exporting()
+    one.storage.putFile.mockImplementation(async () => void one.calls.push('our copy'))
+    await one.service.downloadEngagementPart(owner, E, 'del-1', 1)
+    expect(lines(one)).toEqual([
+      'Started downloading the full export of Coding Pathway before deleting it: 1 file',
+    ])
+    expect(one.log.log).toHaveBeenCalledWith(
       owner,
-      expect.objectContaining({ resource: 'export', action: 'export' })
+      expect.objectContaining({ workspaceId: W, resource: 'export', action: 'export' })
     )
+    expect(one.calls).toEqual(['log', 'our copy'])
+    // Personal records are named only when the part holds one; each part counts its own files.
+    const two = exporting(
+      [part(1, ['pkg/a.pdf']), part(2, ['pkg/b.pdf', 'pkg/c.pdf'])],
+      [
+        ['pkg/a.pdf', 'key-a', 7],
+        ['pkg/b.pdf', 'key-b', 7],
+        ['pkg/c.pdf', 'key-c', 7],
+      ],
+      ['pkg/c.pdf']
+    )
+    await two.service.downloadEngagementPart(owner, E, 'del-1', 1)
+    await two.service.downloadEngagementPart(owner, E, 'del-1', 2)
+    // A retry is a fresh line: each one says only that the download started.
+    await two.service.downloadEngagementPart(owner, E, 'del-1', 2)
+    expect(lines(two)).toEqual([
+      'Started downloading part 1 of 2 of the full export of Coding Pathway before deleting it: 1 file',
+      'Started downloading part 2 of 2 of the full export of Coding Pathway before deleting it: 2 files, personal records included',
+      'Started downloading part 2 of 2 of the full export of Coding Pathway before deleting it: 2 files, personal records included',
+    ])
+    expect(JSON.stringify(two.log.log.mock.calls)).not.toContain('Downloaded')
   })
 
   it('builds a part, keeps our copy, reports the exact bytes, and marks the record when all parts are done', async () => {
@@ -505,7 +559,7 @@ describe('DeletionService: the export', () => {
       s.prisma.deletionRecord.create.mock.calls as unknown as [{ data: { parts: unknown } }][]
     )[0][0].data.parts
     s.prisma.deletionRecord.findFirst.mockResolvedValue(
-      record({ engagementId: null, status: 'exported', parts })
+      record({ engagementId: null, subjectName: workspace.name, status: 'exported', parts })
     )
     const file = await s.service.downloadWorkspacePart(owner, W, 'del-1', 1)
     const { res, bytes } = response()
@@ -516,5 +570,16 @@ describe('DeletionService: the export', () => {
       'Riverbend Youth Services - workspace records/Insurance.pdf',
       'Riverbend Youth Services - workspace records/README.txt',
     ])
+    const readme = strFromU8(zip['Riverbend Youth Services - workspace records/README.txt']!)
+    expect(readme).toContain('by owner@ws-1.example.org from Audit Differently')
+    expect(readme).not.toContain(owner.displayName)
+    expect(s.log.log).toHaveBeenCalledTimes(1)
+    expect(s.log.log).toHaveBeenCalledWith(
+      owner,
+      expect.objectContaining({
+        description:
+          'Started downloading the full export of the workspace Riverbend Youth Services before deleting it: 1 file',
+      })
+    )
   })
 })

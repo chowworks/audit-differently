@@ -442,6 +442,22 @@ suite('tenant isolation', () => {
         expect(await ids('DataAccessLog')).toEqual(['L-W1', 'L-new'])
         expect((await attempt(`UPDATE "DataAccessLog" SET detail = 'x'`)).rows).toBe(0)
         expect((await attempt(`DELETE FROM "DataAccessLog"`)).rows).toBe(0)
+        // A change's line: what was done, and the fields it touched (migration 20261013000100); just as fixed.
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "DataAccessLog" ("id","workspaceId","actorId","actorName","resource","action","description","changes") VALUES ('L-change','W1','book-W1','n','expense','update','Changed ledger line RYS-1','[{"field":"Total cost","before":"100.00","after":"120.00"},{"field":"Vendor"}]')`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "DataAccessLog" SET changes = '[]', description = 'x'`)).rows
+        ).toBe(0)
+        expect(
+          await one<{ n: number }>(
+            `SELECT jsonb_array_length(changes) AS n FROM "DataAccessLog" WHERE id = 'L-change'`
+          )
+        ).toEqual({ n: 2 })
       })
     })
 

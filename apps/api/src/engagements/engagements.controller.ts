@@ -87,7 +87,7 @@ export class EngagementsController {
     await this.audit.logExport(
       caller,
       plan,
-      layouts.length > 1 ? `part ${n} of ${layouts.length}` : undefined
+      layouts.length > 1 ? { layout: layouts[n - 1]!, total: layouts.length } : undefined
     )
     res.setHeader('Content-Type', 'application/zip')
     res.setHeader(

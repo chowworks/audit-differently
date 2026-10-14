@@ -14,8 +14,11 @@ import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { ClerkService } from '../auth/clerk.service'
 import { SkipTermsGate } from '../auth/skip-terms-gate.decorator'
 import { TermsService } from '../auth/terms.service'
+import { AccessLogService } from '../core/access-log.service'
+import { changesOf } from '../core/changes'
 import { runAsSystem } from '../core/tenant-context'
 import { PrismaService } from '../prisma/prisma.service'
+import { ROLE_FIELDS, roleWord } from '../workspaces/workspaces.service'
 
 @Controller('me')
 @UseGuards(AuthenticatedGuard)
@@ -23,7 +26,8 @@ export class MeController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly clerk: ClerkService,
-    private readonly terms: TermsService
+    private readonly terms: TermsService,
+    private readonly log: AccessLogService
   ) {}
 
   /**
@@ -42,41 +46,62 @@ export class MeController {
     })
     if (!existing || existing.memberships.length === 0) {
       const profile = await this.clerk.profile(req.userId)
-      // An invitation made a placeholder row under this email; the real account takes its memberships.
-      await runAsSystem(async () => {
-        const pending = profile.email
-          ? await this.prisma.user.findFirst({
-              where: {
-                id: { startsWith: 'pending-' },
-                email: { equals: profile.email, mode: 'insensitive' },
-              },
-              include: { memberships: true },
-            })
-          : null
-        // The placeholder goes first: its email is unique, and this account takes it over.
-        const seats = pending?.memberships ?? []
-        if (pending) await this.prisma.user.delete({ where: { id: pending.id } })
-        if (existing)
-          await this.prisma.user.update({
-            where: { id: req.userId },
-            data: {
-              email: profile.email ?? existing.email,
-              displayName: profile.displayName ?? pending?.displayName ?? existing.displayName,
-            },
-          })
-        else
-          await this.prisma.user.create({
-            data: {
-              id: req.userId,
-              email: profile.email,
-              displayName: profile.displayName ?? pending?.displayName ?? null,
-            },
-          })
-        for (const m of seats)
-          await this.prisma.membership.create({
-            data: { userId: req.userId, workspaceId: m.workspaceId, role: m.role },
-          })
-      })
+      const email = profile.email ?? existing?.email ?? null
+      // An invitation made a placeholder row under this email; the real account takes its memberships. The claim
+      // and a "Joined" line for each workspace are one transaction: both are kept, or neither (and the placeholder
+      // stays for the next sign-in). The lines are written as the person, now a member (AccessLogService.trusted).
+      await runAsSystem(() =>
+        this.log.trusted(
+          { userId: req.userId, email },
+          async (tx) => {
+            const pending = profile.email
+              ? await tx.user.findFirst({
+                  where: {
+                    id: { startsWith: 'pending-' },
+                    email: { equals: profile.email, mode: 'insensitive' },
+                  },
+                  include: { memberships: { include: { workspace: { select: { name: true } } } } },
+                })
+              : null
+            // The placeholder goes first: its email is unique, and this account takes it over.
+            const seats = pending?.memberships ?? []
+            if (pending) await tx.user.delete({ where: { id: pending.id } })
+            if (existing)
+              await tx.user.update({
+                where: { id: req.userId },
+                data: {
+                  email,
+                  displayName: profile.displayName ?? pending?.displayName ?? existing.displayName,
+                },
+              })
+            else
+              await tx.user.create({
+                data: {
+                  id: req.userId,
+                  email,
+                  displayName: profile.displayName ?? pending?.displayName ?? null,
+                },
+              })
+            const joined = []
+            for (const m of seats) {
+              const seat = await tx.membership.create({
+                data: { userId: req.userId, workspaceId: m.workspaceId, role: m.role },
+              })
+              joined.push({ seat, workspaceName: m.workspace.name })
+            }
+            return joined
+          },
+          (joined) =>
+            joined.map(({ seat, workspaceName }) => ({
+              workspaceId: seat.workspaceId,
+              resource: 'member' as const,
+              subjectId: req.userId,
+              action: 'create' as const,
+              description: `Joined ${workspaceName} as ${roleWord(seat.role)}`,
+              changes: changesOf(null, { role: seat.role }, ROLE_FIELDS),
+            }))
+        )
+      )
     }
     const memberships = await this.prisma.membership.findMany({
       where: { userId: req.userId },

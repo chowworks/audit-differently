@@ -1,8 +1,19 @@
 import { useState } from 'react'
-import type { DocumentDto, DocumentKind } from '@ad/types'
+import {
+  DOCUMENT_KIND_LABELS,
+  type DocumentDto,
+  type DocumentKind,
+  type EngagementDetail,
+} from '@ad/types'
 import { useApi } from '@/hooks/useApi'
-import { titleCase } from '@/lib/format'
 import { Button, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
+import { kindLabel } from '@/components/AttachModal'
+
+/**
+ * What a RecordModal action changed: the engagement as a reason's save answered it, or the uploaded file (which, the
+ * same call, ends any reason the kind was missing).
+ */
+export type RecordChange = { engagement: EngagementDetail } | { added: DocumentDto }
 
 /**
  * One record of an engagement (the proposal, the award letter, the narrative, the contract): upload the
@@ -23,7 +34,7 @@ export function RecordModal({
   engagementId: string
   waivers: Partial<Record<DocumentKind, string>>
   onClose: () => void
-  onDone: () => Promise<void>
+  onDone: (change: RecordChange) => void
 }) {
   const api = useApi()
   const existing = waivers[kind] ?? ''
@@ -33,12 +44,13 @@ export function RecordModal({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const run = async (fn: () => Promise<void>) => {
+  const run = async (fn: () => Promise<RecordChange | null>) => {
     setBusy(true)
     setError(null)
     try {
-      await fn()
-      await onDone()
+      const change = await fn()
+      if (change) onDone(change)
+      else setBusy(false)
     } catch (e) {
       setError((e as Error).message)
       setBusy(false)
@@ -46,26 +58,29 @@ export function RecordModal({
   }
   const upload = () =>
     run(async () => {
-      if (!file) return
+      if (!file) return null
       const form = new FormData()
       form.append('file', file)
       form.append('workspaceId', workspaceId)
       form.append('engagementId', engagementId)
       form.append('kind', kind)
-      await api.upload<DocumentDto>('/documents', form)
-      // A file on hand means the record exists after all.
-      if (existing)
-        await api.patch(`/engagements/${engagementId}`, { waivers: { ...waivers, [kind]: '' } })
+      // A file on hand means the record exists after all: the reason goes in the same call.
+      if (existing) form.append('clearsWaiver', 'true')
+      return { added: await api.upload<DocumentDto>('/documents', form) }
     })
   const saveReason = () =>
     run(async () => {
-      await api.patch(`/engagements/${engagementId}`, {
+      const engagement = await api.patch<EngagementDetail>(`/engagements/${engagementId}`, {
         waivers: { ...waivers, [kind]: reason.trim() },
       })
+      return { engagement }
     })
   const clearReason = () =>
     run(async () => {
-      await api.patch(`/engagements/${engagementId}`, { waivers: { ...waivers, [kind]: '' } })
+      const engagement = await api.patch<EngagementDetail>(`/engagements/${engagementId}`, {
+        waivers: { ...waivers, [kind]: '' },
+      })
+      return { engagement }
     })
 
   return (
@@ -80,7 +95,7 @@ export function RecordModal({
             onChange={() => setMode('upload')}
           />
           <b>I have the file</b>
-          <span>Upload the {titleCase(kind).toLowerCase()} as it was sent or received.</span>
+          <span>Upload the {DOCUMENT_KIND_LABELS[kind]} as it was sent or received.</span>
         </label>
         <label className="ad-kind">
           <input
@@ -96,7 +111,7 @@ export function RecordModal({
       {mode === 'upload' ? (
         <div className="grid gap-4">
           <p className="text-sm">
-            <span className="font-bold">Document type:</span> {titleCase(kind)}
+            <span className="font-bold">Document type:</span> {kindLabel(kind)}
           </p>
           <Field label="File" hint="PDF, PNG, JPG, XLSX or DOCX, up to 25 MB" required>
             <input

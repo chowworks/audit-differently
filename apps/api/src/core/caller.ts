@@ -12,6 +12,8 @@ import { PrismaService } from '../prisma/prisma.service'
 export interface Caller {
   userId: string
   displayName: string
+  /** The User row's email: how the access log and every staff-facing record name this person. */
+  email?: string | null
   memberships: { workspaceId: string; workspaceName: string; role: Role }[]
   /** The workspaces the caller belongs to, in any role. */
   workspaceIds: string[]
@@ -41,11 +43,18 @@ export class CallerService {
     return {
       userId,
       displayName: user?.displayName ?? user?.email ?? userId,
+      email: user?.email ?? null,
       memberships: rows,
       workspaceIds: [...new Set(rows.map((m) => m.workspaceId))],
     }
   }
 }
+
+/**
+ * How staff are named in the access log, an export's README and a deletion record: by email (owner's decision,
+ * 2026-10-13), never a display name. A person with no email on file is named by their account id.
+ */
+export const staffName = (c: { userId: string; email?: string | null }) => c.email || c.userId
 
 /** A Prisma `where` that keeps a list to what the caller may see. */
 export function tenantWhere(c: Caller) {

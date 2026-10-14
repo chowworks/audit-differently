@@ -8,6 +8,7 @@ import {
   type DocumentDto,
   type DocumentKind,
   type EngagementDetail,
+  type ParticipantDto,
   type ReportSummary,
   type WorkspaceDto,
 } from '@ad/types'
@@ -56,7 +57,9 @@ export function EngagementPage() {
   const { id } = useParams()
   const navigate = useNavigate()
   const api = useApi()
-  const { data: c, error, reload } = useLoad<EngagementDetail>(id ? `/engagements/${id}` : null)
+  // Opening the page is the one read the access log records. After an action here, the page shows what that action
+  // returned (setData) and never fetches the engagement again: a re-fetch would log a read nobody made.
+  const { data: c, error, setData } = useLoad<EngagementDetail>(id ? `/engagements/${id}` : null)
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null)
   const [upload, setUpload] = useState<Upload | null>(null)
@@ -90,7 +93,6 @@ export function EngagementPage() {
     setNotice(null)
     try {
       await fn()
-      await reload()
       if (ok) setNotice({ tone: 'ok', text: ok })
     } catch (e) {
       setNotice({ tone: 'danger', text: (e as Error).message })
@@ -100,8 +102,29 @@ export function EngagementPage() {
   }
   const addMonth = () =>
     run(async () => {
-      await api.post<ReportSummary>(`/engagements/${c.id}/reports`, { period: next })
+      const report = await api.post<ReportSummary>(`/engagements/${c.id}/reports`, { period: next })
+      setData((d) =>
+        d
+          ? {
+              ...d,
+              reports: [...d.reports, report].sort((a, b) => a.period.localeCompare(b.period)),
+            }
+          : d
+      )
     })
+  // A new file is the newest (the list is newest first); a replaced or removed one leaves the list.
+  const changeDocuments = (added?: DocumentDto, removedId?: string) =>
+    setData((d) =>
+      d
+        ? {
+            ...d,
+            documents: [
+              ...(added ? [added] : []),
+              ...d.documents.filter((x) => x.id !== removedId),
+            ],
+          }
+        : d
+    )
   const openMenu = (doc: DocumentDto, kind: DocumentKind, period: string | null = null) =>
     setMenu({ doc, kind, period })
   const downloadPackage = () =>
@@ -462,9 +485,9 @@ export function EngagementPage() {
             period: menu.period,
           }}
           onClose={() => setMenu(null)}
-          onChanged={async () => {
+          onChanged={({ added, removedId }) => {
             setMenu(null)
-            await reload()
+            changeDocuments(added, removedId)
           }}
         />
       )}
@@ -476,9 +499,17 @@ export function EngagementPage() {
           engagementId={c.id}
           waivers={c.waivers}
           onClose={() => setRecord(null)}
-          onDone={async () => {
+          onDone={(change) => {
             setRecord(null)
-            await reload()
+            if ('engagement' in change) setData(change.engagement)
+            // An upload here also ended any reason this kind was missing (clearsWaiver), as the server did.
+            else
+              setData((d) => {
+                if (!d) return d
+                const waivers = { ...d.waivers }
+                delete waivers[change.added.kind]
+                return { ...d, waivers, documents: [change.added, ...d.documents] }
+              })
           }}
         />
       )}
@@ -492,9 +523,9 @@ export function EngagementPage() {
           kinds={[upload.kind]}
           uploadOnly
           onClose={() => setUpload(null)}
-          onPick={async () => {
+          onPick={async (doc) => {
             setUpload(null)
-            await reload()
+            changeDocuments(doc)
           }}
         />
       )}
@@ -508,9 +539,9 @@ export function EngagementPage() {
           kinds={OTHER_KINDS}
           uploadOnly
           onClose={() => setAddingOther(false)}
-          onPick={async () => {
+          onPick={async (doc) => {
             setAddingOther(false)
-            await reload()
+            changeDocuments(doc)
           }}
         />
       )}
@@ -518,9 +549,9 @@ export function EngagementPage() {
         <AddParticipantModal
           engagementId={c.id}
           onClose={() => setAddingParticipant(false)}
-          onAdded={async () => {
+          onAdded={(p) => {
             setAddingParticipant(false)
-            await reload()
+            setData((d) => (d ? withParticipant(d, p) : d))
           }}
         />
       )}
@@ -529,9 +560,9 @@ export function EngagementPage() {
           engagement={c}
           focus={editing === 'all' ? undefined : editing}
           onClose={() => setEditing(null)}
-          onSaved={async () => {
+          onSaved={(saved) => {
             setEditing(null)
-            await reload()
+            setData(saved)
           }}
         />
       )}
@@ -542,7 +573,7 @@ export function EngagementPage() {
           initialFileFor={participantsOpen.fileFor}
           onClose={() => setParticipantsOpen(null)}
           onAdd={() => setAddingParticipant(true)}
-          onChanged={reload}
+          onChanged={setData}
         />
       )}
       {monthsOpen && (
@@ -569,6 +600,21 @@ export function EngagementPage() {
       )}
     </>
   )
+}
+
+/**
+ * The engagement with a participant just added, as the server would load it: in the list by name, and in the counts
+ * (complete when every required item is on file, as `EngagementsService.summary` counts it).
+ */
+function withParticipant(d: EngagementDetail, p: ParticipantDto): EngagementDetail {
+  const have = new Set(p.documents.map((x) => x.purpose))
+  const complete = d.eligibilityItems.filter((i) => i.required).every((i) => have.has(i.key))
+  return {
+    ...d,
+    participants: [...d.participants, p].sort((a, b) => a.displayName.localeCompare(b.displayName)),
+    participantCount: d.participantCount + 1,
+    participantsComplete: d.participantsComplete + (complete ? 1 : 0),
+  }
 }
 
 /** Owners only: delete this engagement for good (the role comes from the workspace list; nothing for anyone else). */

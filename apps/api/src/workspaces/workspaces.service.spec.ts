@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
 import type { Role } from '@ad/types'
 import { member, OTHER, scoped, stranger, W } from '../core/testing/callers'
+import { expectNoneOf, fakeLog } from '../core/testing/log'
 import { WorkspacesService } from './workspaces.service'
 
 const TERMS_VERSION = 'abcdef0123456789'
@@ -32,17 +33,31 @@ function service() {
     membership: {
       // An invited person (a pending placeholder) is not a member yet; the people in the fixture are.
       findFirst: jest.fn(async ({ where }: { where: { userId: string } }) =>
-        where.userId.startsWith('pending-') ? null : { id: 'm-1' }
+        where.userId.startsWith('pending-')
+          ? null
+          : {
+              id: 'm-1',
+              role: 'bookkeeper',
+              user: { displayName: 'Dana', email: 'dana@example.org' },
+            }
       ),
       // keepAnOwner asks first whether the person is an owner (yes), then how many other owners there are.
       count: jest.fn(async ({ where }: { where: { userId: unknown } }) =>
         typeof where.userId === 'string' ? 1 : 0
       ),
-      create: jest.fn(),
-      update: jest.fn(),
+      create: jest.fn(async ({ data }: { data: { workspaceId: string } }) => ({
+        id: 'm-2',
+        ...data,
+      })),
+      update: jest.fn().mockResolvedValue({ id: 'm-1', workspaceId: W }),
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
-    suggestion: { create: jest.fn() },
+    suggestion: {
+      create: jest.fn(async ({ data }: { data: { workspaceId: string } }) => ({
+        id: 's-1',
+        ...data,
+      })),
+    },
     dataAccessLog: { findMany: jest.fn().mockResolvedValue([]) },
     user: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -57,9 +72,15 @@ function service() {
     prisma.suggestion.create,
     prisma.user.create,
   ]
+  const log = fakeLog(prisma)
   return {
-    service: new WorkspacesService(prisma as never, { version: TERMS_VERSION } as never),
+    service: new WorkspacesService(
+      prisma as never,
+      { version: TERMS_VERSION } as never,
+      log as never
+    ),
     prisma,
+    log,
     writes,
   }
 }
@@ -68,7 +89,7 @@ const invite = { email: 'jules@example.org', role: 'auditor' as Role }
 
 describe('WorkspacesService', () => {
   it('shows a member of another workspace nothing: 404 from every route, no query, no write', async () => {
-    const { service: s, prisma, writes } = service()
+    const { service: s, prisma, log, writes } = service()
     const who = stranger()
     await expect(s.get(who, W)).rejects.toThrow(NotFoundException)
     await expect(s.activity(who, W)).rejects.toThrow(NotFoundException)
@@ -78,6 +99,7 @@ describe('WorkspacesService', () => {
     await expect(s.setRole(who, W, 'u-bookkeeper-ws-1', 'owner')).rejects.toThrow(NotFoundException)
     await expect(s.removeMember(who, W, 'u-bookkeeper-ws-1')).rejects.toThrow(NotFoundException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
     expect(prisma.dataAccessLog.findMany).not.toHaveBeenCalled()
     expect(await s.list(who)).toEqual([])
     expect(prisma.workspace.findMany).toHaveBeenCalledWith(
@@ -168,5 +190,58 @@ describe('WorkspacesService', () => {
         termsAcceptedById: who.userId,
       }),
     })
+  })
+
+  it("logs each change to people and lists in the screen's words", async () => {
+    const { service: s, prisma, log } = service()
+    const owner = member('owner')
+    await s.setLists(owner, W, ['Youth Fund'])
+    await s.suggest(member('bookkeeper'), W, 'Call Jordan Sample about the fund')
+    await s.addMember(owner, W, { ...invite, displayName: 'Jules' })
+    await s.setRole(owner, W, 'u-bookkeeper-ws-1', 'owner')
+    // The count fake says everyone is the last owner; here the person removed is not one.
+    prisma.membership.count.mockResolvedValueOnce(0)
+    await s.removeMember(owner, W, 'u-bookkeeper-ws-1')
+    prisma.workspace.create.mockResolvedValue({ id: W })
+    await s.create(owner, 'New team', TERMS_VERSION)
+    expect(log.entries.map((e) => [e.workspaceId, e.resource, e.action, e.description])).toEqual([
+      [W, 'workspace', 'update', 'Changed the sources of funds'],
+      [W, 'workspace', 'create', 'Suggested an addition to the lists'],
+      [W, 'member', 'create', 'Invited jules@example.org as auditor'],
+      [W, 'member', 'update', 'Changed the role of dana@example.org from bookkeeper to owner'],
+      [W, 'member', 'delete', 'Removed dana@example.org from the workspace'],
+      [
+        W,
+        'workspace',
+        'create',
+        'Created the workspace New team and accepted the Terms & Conditions',
+      ],
+    ])
+    expect(log.entries.map((e) => e.changes)).toEqual([
+      [{ field: 'Sources of funds', before: null, after: 'Youth Fund' }],
+      [{ field: 'Suggestion' }],
+      [{ field: 'Role', after: 'Auditor' }],
+      [{ field: 'Role', before: 'Bookkeeper', after: 'Owner' }],
+      [{ field: 'Role', before: 'Bookkeeper' }],
+      undefined,
+    ])
+    // People are named by email: the display names given (Jules) or on file (Dana, Sam) never appear.
+    expectNoneOf(log.entries, ['Jordan', 'Jules', 'Dana', 'Sam'])
+  })
+
+  it('creates the workspace, its owner and its line as one trusted step, every write through it', async () => {
+    const { service: s, prisma, log } = service()
+    prisma.workspace.create.mockResolvedValue({ id: W })
+    const owner = member('owner')
+    await s.create(owner, 'New team', TERMS_VERSION)
+    expect(log.trusted).toHaveBeenCalledTimes(1)
+    expect(log.log).not.toHaveBeenCalled()
+    expect(log.actors).toEqual([owner])
+    expect(prisma.membership.create).toHaveBeenCalledWith({
+      data: { userId: owner.userId, workspaceId: W, role: 'owner' },
+    })
+    // A failed line is a failed create (the real `trusted` rolls the workspace back): nothing to clean up after.
+    log.trusted.mockRejectedValueOnce(new Error('log down'))
+    await expect(s.create(owner, 'New team', TERMS_VERSION)).rejects.toThrow('log down')
   })
 })

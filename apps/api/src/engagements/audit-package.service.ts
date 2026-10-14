@@ -11,7 +11,8 @@ import { keyInWorkspace } from '../documents/documents.service'
 import { eligibilityItemsOf } from './eligibility'
 import { zipEntries, type ZipSource } from './zip-stream'
 import { splitParts, streamPart, type ExportObject, type PartLayout } from './export-parts'
-import { tenantWhere, workspaceRole, type Caller } from '../core/caller'
+import { staffName, tenantWhere, workspaceRole, type Caller } from '../core/caller'
+import { howMany } from '../core/changes'
 import { PrismaService } from '../prisma/prisma.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
 
@@ -74,6 +75,7 @@ type Doc = {
   size: number
   workspaceId: string
   engagementId: string | null
+  sensitivity?: string
 }
 
 /**
@@ -134,6 +136,7 @@ export class AuditPackageService {
     const files: Record<string, Uint8Array> = {}
     const objects: ExportObject[] = []
     const placedDocs = new Set<string>()
+    const personalPaths = new Set<string>()
     const index: (string | number)[][] = [
       [
         'Step',
@@ -169,6 +172,7 @@ export class AuditPackageService {
       if (!keyInWorkspace(doc)) throw new NotFoundException()
       objects.push([path, doc.storageKey, doc.size ?? 0])
       placedDocs.add(doc.id)
+      if (doc.sensitivity === 'personal') personalPaths.add(path)
       count++
       index.push([
         meta.step,
@@ -436,7 +440,7 @@ export class AuditPackageService {
       `Award: ${c.awardAmount == null ? 'not received' : money(Number(c.awardAmount))}`,
       `Prepared by: ${c.preparerName ?? '?'}${c.preparerOrganization ? `, ${c.preparerOrganization}` : ''}`,
       `Authorized by: ${c.authorizerName ?? '?'}${c.authorizerOrganization ? `, ${c.authorizerOrganization}` : ''}`,
-      `Generated ${new Date().toISOString()} by ${caller.displayName} from Audit Differently.`,
+      `Generated ${new Date().toISOString()} by ${staffName(caller)} from Audit Differently.`,
       '',
       'WHAT IS INSIDE',
       '  Letter to the auditors   the cover letter for this audit, if one was added',
@@ -486,6 +490,7 @@ export class AuditPackageService {
       objects,
       files: count,
       personal,
+      personalPaths,
     }
   }
 
@@ -503,7 +508,7 @@ export class AuditPackageService {
       resource: 'export',
       subjectId: p.engagementId,
       action: 'export',
-      detail: `audit package, ${p.files} files${p.personal ? ', personal records included' : ''}`,
+      description: exportWords(p.subject, p.files, p.personalPaths.size > 0),
     })
     return { name: p.name, bytes: Buffer.from(bytes), files: p.files, personal: p.personal }
   }
@@ -530,17 +535,34 @@ export class AuditPackageService {
     return streamPart(plan, layouts, n, async (key) => new Uint8Array(await this.storage.read(key)))
   }
 
-  /** The audit package download is logged as an export, once per part. */
-  async logExport(caller: Caller, plan: PackagePlan, part?: string): Promise<void> {
+  /**
+   * The audit package download is logged as an export, once per part. A part's line counts that part's own files,
+   * and says "personal records included" only when that part holds one.
+   */
+  async logExport(
+    caller: Caller,
+    plan: PackagePlan,
+    part?: { layout: PartLayout; total: number }
+  ): Promise<void> {
+    const paths = part ? part.layout.paths : plan.objects.map(([path]) => path)
     await this.log.log(caller, {
       workspaceId: plan.workspaceId,
       resource: 'export',
       subjectId: plan.engagementId,
       action: 'export',
-      detail: `audit package${part ? ` (${part})` : ''}, ${plan.files} files${plan.personal ? ', personal records included' : ''}`,
+      description: exportWords(
+        plan.subject,
+        paths.length,
+        paths.some((p) => plan.personalPaths.has(p)),
+        part && `part ${part.layout.n} of ${part.total}`
+      ),
     })
   }
 }
+
+/** The export's line: whose package, which part, how many files, and whether a personal record is among them. */
+const exportWords = (subject: string, files: number, personal: boolean, part?: string) =>
+  `Downloaded the audit package of ${subject}${part ? ` (${part})` : ''}: ${howMany(files, 'file')}${personal ? ', personal records included' : ''}`
 
 /** What `plan` works out: the text files made, and the stored objects to fetch, each at its path in the zip. */
 export interface PackagePlan {
@@ -551,5 +573,8 @@ export interface PackagePlan {
   text: Record<string, Uint8Array>
   objects: ExportObject[]
   files: number
+  /** Whether the caller's role may see personal records (the README says which copy this is). */
   personal: boolean
+  /** The paths of the personal records the package actually holds. */
+  personalPaths: Set<string>
 }

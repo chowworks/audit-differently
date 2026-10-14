@@ -321,6 +321,58 @@ describe('AuditPackageService', () => {
     expect(text('README.txt')).toContain('are personal records and are not in this copy')
   })
 
+  it('says "personal records included" only when the copy holds one', async () => {
+    const description = async (role: Role, e = engagement()) => {
+      const prisma = { engagement: { findFirst: jest.fn().mockResolvedValue(e) } }
+      const log = { log: jest.fn().mockResolvedValue(undefined) }
+      const service = new AuditPackageService(prisma as never, log as never, {} as never)
+      const plan = await service.plan(caller(role), 'e-1')
+      await service.logExport(caller(role), plan)
+      expect(log.log).toHaveBeenCalledTimes(1)
+      return {
+        plan,
+        text: (log.log.mock.calls[0] as [unknown, { description: string }])[1].description,
+      }
+    }
+    const owner = await description('owner')
+    expect(owner.text).toBe(
+      `Downloaded the audit package of Coding Pathway: ${owner.plan.objects.length} files, personal records included`
+    )
+    expect((await description('bookkeeper')).text).not.toContain('personal')
+    // An owner's copy of an engagement with no personal record says nothing of them.
+    const none = engagement()
+    const noPersonal = {
+      ...none,
+      participants: none.participants.map((p) => ({ ...p, documents: [] })),
+      monthlyReports: none.monthlyReports.map((r) => ({
+        ...r,
+        wexPayments: r.wexPayments.map((w) => ({ ...w, documents: [] })),
+      })),
+    }
+    const plain = await description('owner', noPersonal as never)
+    expect(plain.plan.personal).toBe(true)
+    expect(plain.text).not.toContain('personal')
+  })
+
+  it("words a part's line from that part's own files", async () => {
+    const prisma = { engagement: { findFirst: jest.fn().mockResolvedValue(engagement()) } }
+    const log = { log: jest.fn().mockResolvedValue(undefined) }
+    const service = new AuditPackageService(prisma as never, log as never, {} as never)
+    const plan = await service.plan(caller('owner'), 'e-1')
+    const personal = [...plan.personalPaths]
+    const financial = plan.objects.map(([p]) => p).filter((p) => !plan.personalPaths.has(p))
+    expect(personal.length).toBeGreaterThan(0)
+    const layout = (n: number, paths: string[]) => ({ n, fileName: 'x', sourceBytes: 0, paths })
+    await service.logExport(caller('owner'), plan, { layout: layout(1, financial), total: 2 })
+    await service.logExport(caller('owner'), plan, { layout: layout(2, personal), total: 2 })
+    expect(
+      log.log.mock.calls.map((c) => (c as [unknown, { description: string }])[1].description)
+    ).toEqual([
+      `Downloaded the audit package of Coding Pathway (part 1 of 2): ${financial.length} files`,
+      `Downloaded the audit package of Coding Pathway (part 2 of 2): ${personal.length} file${personal.length === 1 ? '' : 's'}, personal records included`,
+    ])
+  })
+
   it('gives an auditor the personal records', async () => {
     const { out, paths } = await build('auditor')
     expect(out.personal).toBe(true)

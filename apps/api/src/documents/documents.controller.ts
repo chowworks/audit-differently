@@ -8,6 +8,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
   Res,
   UploadedFile,
   UseGuards,
@@ -15,13 +16,14 @@ import {
 } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
 import type { Response } from 'express'
-import type { DocumentDto, DocumentKind } from '@ad/types'
+import type { DocumentDto } from '@ad/types'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
 import { runAsSystem } from '../core/tenant-context'
 import { PrismaService } from '../prisma/prisma.service'
 import { LocalDiskStorage } from '../storage/local-disk-storage'
-import { DocumentsService, MAX_UPLOAD_BYTES } from './documents.service'
+import type { UploadResult } from './document.dto'
+import { DocumentsService, MAX_UPLOAD_BYTES, type UploadBody } from './documents.service'
 
 @Controller('documents')
 export class DocumentsController {
@@ -39,21 +41,28 @@ export class DocumentsController {
   async upload(
     @UserId() userId: string,
     @UploadedFile() file: Express.Multer.File | undefined,
-    @Body()
-    body: { workspaceId: string; kind: DocumentKind; period?: string; engagementId?: string }
-  ): Promise<DocumentDto> {
+    @Body() body: UploadBody
+  ): Promise<UploadResult> {
     if (!file) throw new NotFoundException('No file in the upload')
     return this.documents.upload(await this.callers.load(userId), file, body)
   }
 
-  /** The workspace's documents, newest first, for attaching. */
+  /**
+   * The workspace's documents, newest first, for attaching. `for` and `id` (`?for=expense&id=…`) say which record
+   * the proof is for; they word the access log line and never decide whether it is written.
+   */
   @Get('/of-workspace/:workspaceId')
   @UseGuards(AuthenticatedGuard)
   async ofWorkspace(
     @UserId() userId: string,
-    @Param('workspaceId') workspaceId: string
+    @Param('workspaceId') workspaceId: string,
+    @Query('for') purposeFor?: string,
+    @Query('id') id?: string
   ): Promise<DocumentDto[]> {
-    return this.documents.list(await this.callers.load(userId), workspaceId)
+    return this.documents.list(await this.callers.load(userId), workspaceId, {
+      for: purposeFor,
+      id,
+    })
   }
 
   @Delete(':id')

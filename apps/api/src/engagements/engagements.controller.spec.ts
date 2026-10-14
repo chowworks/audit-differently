@@ -41,6 +41,7 @@ describe('GET audit-package', () => {
       'p/f1.pdf',
     ])
     expect(audit.logExport).toHaveBeenCalledTimes(1)
+    expect(audit.logExport).toHaveBeenCalledWith({}, expect.anything(), undefined)
     expect(res.json).not.toHaveBeenCalled()
   })
 
@@ -59,6 +60,12 @@ describe('GET audit-package', () => {
       'PART.txt',
       'p/f2.pdf',
     ])
+    // The part's own line: that part's layout, so it counts that part's files.
+    expect(big.audit.logExport).toHaveBeenCalledTimes(1)
+    expect(big.audit.logExport).toHaveBeenCalledWith({}, expect.anything(), {
+      layout: expect.objectContaining({ n: 2, paths: ['p/f2.pdf'] }),
+      total: 2,
+    })
   })
 
   it.each(['0', '3', 'x', '1.5'])('answers 404 for part %s', async (part) => {

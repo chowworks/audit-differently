@@ -1,6 +1,7 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common'
-import type { EngagementInput, Role } from '@ad/types'
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
+import { DEFAULT_ELIGIBILITY_ITEMS, type EngagementInput, type Role } from '@ad/types'
 import { member, OTHER, scoped, stranger, W } from '../core/testing/callers'
+import { expectNoneOf, fakeLog } from '../core/testing/log'
 import { EngagementsService } from './engagements.service'
 
 /** Who may read and change an engagement, and that a foreign one is a 404 and nothing more. */
@@ -73,7 +74,7 @@ function service() {
     },
   }
   const checks = { refresh: jest.fn().mockResolvedValue([]) }
-  const log = { log: jest.fn().mockResolvedValue(undefined) }
+  const log = fakeLog(prisma)
   const writes = [
     prisma.engagement.create,
     prisma.engagement.update,
@@ -106,7 +107,7 @@ describe('EngagementsService', () => {
     await expect(s.createReport(who, 'e-1', '2026-09')).rejects.toThrow(NotFoundException)
     await expect(s.createParticipant(who, 'e-1', newcomer)).rejects.toThrow(NotFoundException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
-    expect(log.log).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
   })
 
   it('scopes the list to the caller workspaces', async () => {
@@ -123,11 +124,16 @@ describe('EngagementsService', () => {
     const detail = await s.get(who, 'e-1')
     expect(detail.canManage).toBe(false)
     expect(detail.participants).toHaveLength(1)
-    // The participant rows it returns are logged.
-    expect(log.log).toHaveBeenCalledWith(
-      who,
-      expect.objectContaining({ workspaceId: W, resource: 'participant', action: 'list' })
-    )
+    // Opening it writes one line, with the participant rows it lists counted.
+    expect(log.entries).toEqual([
+      {
+        workspaceId: W,
+        resource: 'engagement',
+        subjectId: 'e-1',
+        action: 'read',
+        description: 'Viewed Coding Pathway: 0 records, 1 participant',
+      },
+    ])
     await expect(s.create(who, input)).rejects.toThrow(ForbiddenException)
     await expect(s.update(who, 'e-1', { name: 'x' })).rejects.toThrow(ForbiddenException)
     await expect(s.createReport(who, 'e-1', '2026-09')).rejects.toThrow(ForbiddenException)
@@ -172,5 +178,232 @@ describe('EngagementsService', () => {
     expect(prisma.participant.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ engagementId: 'e-1' }) })
     )
+  })
+
+  it("logs each change in the screen's words, with amounts and dates but no names, reasons or participants", async () => {
+    const { service: s, log } = service()
+    const who = member('bookkeeper')
+    await s.create(who, { ...input, awardAmount: 90000, preparerName: 'Pat Preparer' })
+    await s.update(who, 'e-1', { waivers: { 'award-letter': 'Issued by phone to Pat' } })
+    await s.update(who, 'e-1', { awardAmount: 130000, funderContact: 'casey@funder.example' })
+    await s.createReport(who, 'e-1', '2026-09')
+    await s.createParticipant(who, 'e-1', newcomer)
+    // One line per action, and none for the engagement each change hands back: that is not the page being opened.
+    expect(log.log).not.toHaveBeenCalled()
+    expect(log.entries.map((e) => [e.resource, e.action, e.subjectId, e.description])).toEqual([
+      ['engagement', 'create', 'e-1', 'Created the engagement Coding Pathway'],
+      ['engagement', 'update', 'e-1', 'Recorded that Coding Pathway has no award letter'],
+      ['engagement', 'update', 'e-1', 'Changed the details of Coding Pathway'],
+      ['report', 'create', 'r-1', 'Started September 2026 of Coding Pathway'],
+      ['participant', 'create', 'p-2', 'Added a participant to Coding Pathway'],
+    ])
+    const changes = log.entries
+    expect(changes[0]!.changes).toEqual(
+      expect.arrayContaining([
+        { field: 'Kind', after: 'Grant' },
+        { field: 'Status', after: 'awarded' },
+        { field: 'Award amount', after: '90000.00' },
+        { field: 'Prepared by' },
+        { field: 'Participant files' },
+      ])
+    )
+    expect(changes[1]!.changes).toEqual([{ field: 'No award letter' }])
+    expect(changes[2]!.changes).toEqual([
+      { field: 'Funding organization contact' },
+      { field: 'Award amount', before: '125000.00', after: '130000.00' },
+    ])
+    expect(changes[4]!.changes).toEqual([
+      { field: 'Name' },
+      { field: 'Participant number' },
+      { field: 'Enrollment' },
+    ])
+    expectNoneOf(log.entries, ['Pat Preparer', 'to Pat', 'casey@', 'Riley', '900002'])
+  })
+
+  it('answers a waiver change with the engagement and a new participant with itself, each with one line', async () => {
+    const { service: s, log } = service()
+    const who = member('bookkeeper')
+    const saved = await s.update(who, 'e-1', { waivers: { proposal: 'invited directly' } })
+    expect(saved).toMatchObject({ id: 'e-1', participantCount: 1, canManage: true })
+    const added = await s.createParticipant(who, 'e-1', newcomer)
+    expect(added).toEqual({
+      id: 'p-2',
+      participantId: '900002',
+      displayName: 'Riley Example',
+      enrollmentStatus: 'new',
+      currentStatus: 'active',
+      documents: [],
+    })
+    expect(log.log).not.toHaveBeenCalled()
+    expect(log.entries.map((e) => [e.resource, e.action])).toEqual([
+      ['engagement', 'update'],
+      ['participant', 'create'],
+    ])
+  })
+
+  it('returns the new month with the checks its first run opened', async () => {
+    const { service: s, prisma } = service()
+    const checks = { refresh: jest.fn().mockResolvedValue([{ severity: 'blocker' }]) }
+    const s2 = new EngagementsService(prisma as never, checks as never, fakeLog(prisma) as never)
+    expect((await s.createReport(member('owner'), 'e-1', '2026-09')).openBlockers).toBe(0)
+    expect((await s2.createReport(member('owner'), 'e-1', '2026-10')).openBlockers).toBe(1)
+  })
+
+  it('names a waiver as RecordModal does: recorded, reason changed, reason removed', async () => {
+    const { service: s, log, prisma } = service()
+    const who = member('owner')
+    prisma.engagement.findFirst.mockResolvedValue({
+      ...engagement(),
+      waivers: { 'award-letter': 'none issued', proposal: 'invited directly' },
+    })
+    await s.update(who, 'e-1', { waivers: { proposal: 'invited directly' } })
+    await s.update(who, 'e-1', {
+      waivers: { 'award-letter': 'a new reason', proposal: 'invited directly' },
+    })
+    await s.update(who, 'e-1', {
+      waivers: {
+        'award-letter': 'none issued',
+        proposal: 'invited directly',
+        contract: 'by letter',
+      },
+    })
+    expect(log.entries.map((e) => e.description)).toEqual([
+      'Removed the reason Coding Pathway has no award letter',
+      'Changed why Coding Pathway has no award letter',
+      'Recorded that Coding Pathway has no signed contract',
+    ])
+    expect(log.entries[2]!.changes).toEqual([{ field: 'No signed contract' }])
+  })
+
+  /** What the Details modal sends on Save: every field, as the form holds it. */
+  const detailsForm = (): Partial<EngagementInput> => ({
+    kind: 'grant',
+    name: 'Coding Pathway',
+    solicitation: '',
+    funder: 'Demo Workforce Board',
+    funderContact: '',
+    fundingSources: [],
+    requestedAmount: null,
+    proposalSubmittedOn: '',
+    awardedOn: '',
+    awardAmount: 125000,
+    number: 'DEMO-1',
+    periodStart: '2026-07-01',
+    periodEnd: '2027-06-30',
+    reportDueDay: 12,
+    reportTo: '',
+    submissionMethod: '',
+    preparerName: '',
+    preparerOrganization: '',
+    authorizerName: '',
+    authorizerOrganization: '',
+    // The engagement holds no checklist of its own, so the modal shows (and sends back) the defaults.
+    eligibilityItems: DEFAULT_ELIGIBILITY_ITEMS.map((i) => ({ ...i })),
+    waivers: {},
+  })
+
+  it('writes nothing and logs nothing for a Save that changes nothing', async () => {
+    const { service: s, log, prisma } = service()
+    const detail = await s.update(member('owner'), 'e-1', detailsForm())
+    expect(detail.id).toBe('e-1')
+    expect(prisma.engagement.update).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
+  })
+
+  it('keeps an unchanged default checklist out of the row and out of the line', async () => {
+    const { service: s, log, prisma } = service()
+    await s.update(member('owner'), 'e-1', { ...detailsForm(), awardAmount: 130000 })
+    const [{ data }] = prisma.engagement.update.mock.calls[0] as [{ data: Record<string, unknown> }]
+    expect(data).not.toHaveProperty('eligibilityItems')
+    expect(log.entries.map((e) => [e.description, e.changes])).toEqual([
+      [
+        'Changed the details of Coding Pathway',
+        [{ field: 'Award amount', before: '125000.00', after: '130000.00' }],
+      ],
+    ])
+  })
+
+  it('words a Details Save that only ticks "No signed contract" as the waiver', async () => {
+    const { service: s, log } = service()
+    await s.update(member('owner'), 'e-1', {
+      ...detailsForm(),
+      waivers: { contract: 'the award letter is the agreement', proposal: '' },
+    })
+    expect(log.entries.map((e) => e.description)).toEqual([
+      'Recorded that Coding Pathway has no signed contract',
+    ])
+  })
+
+  it('logs a changed checklist by name alone', async () => {
+    const { service: s, log } = service()
+    const items = DEFAULT_ELIGIBILITY_ITEMS.map((i) => ({ ...i, required: true }))
+    await s.update(member('owner'), 'e-1', { ...detailsForm(), eligibilityItems: items })
+    expect(log.entries.map((e) => [e.description, e.changes])).toEqual([
+      ['Changed the details of Coding Pathway', [{ field: 'Participant files' }]],
+    ])
+  })
+
+  it('logs nothing on a refused or invalid change', async () => {
+    const { service: s, log, writes } = service()
+    await expect(s.update(member('auditor'), 'e-1', { awardAmount: 1 })).rejects.toThrow(
+      ForbiddenException
+    )
+    await expect(
+      s.update(member('owner'), 'e-1', { periodStart: '2028-01-01', periodEnd: '2027-01-01' })
+    ).rejects.toThrow(BadRequestException)
+    await expect(s.create(member('owner'), { ...input, name: ' ' })).rejects.toThrow(
+      BadRequestException
+    )
+    await expect(s.createReport(member('owner'), 'e-1', '2030-01')).rejects.toThrow(
+      BadRequestException
+    )
+    await expect(
+      s.createParticipant(member('owner'), 'e-1', { participantId: '', displayName: '' })
+    ).rejects.toThrow(BadRequestException)
+    for (const w of writes) expect(w).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
+  })
+
+  it('logs the list once per workspace, each with its own counts', async () => {
+    const { service: s, prisma, log } = service()
+    const row = (id: string, workspaceId: string, documents: number) => ({
+      ...engagement(),
+      id,
+      workspaceId,
+      participants: [],
+      documents: Array.from({ length: documents }, (_, i) => ({
+        id: `${id}-d${i}`,
+        workspaceId,
+        engagementId: id,
+        storageKey: `${workspaceId}/${id}/general/${i}.pdf`,
+        fileName: `${i}.pdf`,
+        kind: 'invoice',
+        sensitivity: 'financial',
+        period: null,
+        size: 1,
+        sha256: 'x',
+        contentType: 'application/pdf',
+        uploadedAt: new Date('2026-10-01T00:00:00Z'),
+        uploadedById: 'u',
+      })),
+    })
+    prisma.engagement.findMany.mockResolvedValue([
+      row('e-1', W, 2),
+      row('e-2', W, 1),
+      row('e-3', OTHER, 0),
+    ] as never)
+    const both = {
+      ...member('owner'),
+      memberships: [
+        { workspaceId: W, workspaceName: W, role: 'owner' as const },
+        { workspaceId: OTHER, workspaceName: OTHER, role: 'auditor' as const },
+      ],
+      workspaceIds: [W, OTHER],
+    }
+    expect(await s.list(both)).toHaveLength(3)
+    expect(log.entries.map((e) => [e.workspaceId, e.resource, e.action, e.description])).toEqual([
+      [W, 'engagement', 'list', 'Viewed the list of engagements: 2 engagements, 3 records'],
+      [OTHER, 'engagement', 'list', 'Viewed the list of engagements: 1 engagement, 0 records'],
+    ])
   })
 })

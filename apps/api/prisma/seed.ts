@@ -798,7 +798,7 @@ async function main() {
     },
   ])
 
-  // Checks for every report, and a little access history.
+  // Checks for every report, and a little access history (people named by email, as the API writes them).
   for (const r of await prisma.monthlyReport.findMany({ select: { id: true } }))
     await refreshChecks(prisma, r.id)
   if ((await prisma.dataAccessLog.count()) === 0) {
@@ -807,31 +807,34 @@ async function main() {
         {
           workspaceId: riverbend.id,
           actorId: 'demo-dana',
-          actorName: 'Dana Okafor',
+          actorName: 'dana.okafor@riverbend.example',
           resource: 'report',
           subjectId: july.report.id,
           action: 'submit',
-          detail: '2026-07',
+          description: 'Submitted July 2026 of In-School Youth Coding Pathway, signed',
+          changes: [{ field: 'Status', before: 'draft', after: 'submitted' }],
           createdAt: d('2026-08-10'),
         },
         {
           workspaceId: riverbend.id,
           actorId: 'demo-sam',
-          actorName: 'Morgan Reyes',
+          actorName: ownerEmail,
           resource: 'document',
           subjectId: july.statement.id,
           action: 'read',
-          detail: 'bank-statement 2026-07 Bank Statement.pdf',
+          description: 'Opened a bank statement for July 2026',
           createdAt: d('2026-08-13'),
         },
         {
           workspaceId: riverbend.id,
           actorId: 'demo-sam',
-          actorName: 'Morgan Reyes',
+          actorName: ownerEmail,
           resource: 'report',
           subjectId: july.report.id,
           action: 'review',
-          detail: 'approve 2026-07',
+          description:
+            "Recorded the funder's approval of July 2026 of In-School Youth Coding Pathway",
+          changes: [{ field: 'Status', before: 'submitted', after: 'approved' }],
           createdAt: d('2026-08-14'),
         },
       ],

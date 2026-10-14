@@ -1,22 +1,9 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  Param,
-  Patch,
-  Post,
-  UseGuards,
-} from '@nestjs/common'
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common'
 import type {
-  CheckDto,
   DocumentPurpose,
-  ExpenseDto,
   ExpenseInput,
   ReportDetail,
   ReportReview,
-  WexPaymentDto,
   WexPaymentInput,
 } from '@ad/types'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
@@ -41,7 +28,7 @@ export class ReportsController {
     @UserId() userId: string,
     @Param('id') id: string,
     @Body() body: ExpenseInput
-  ): Promise<ExpenseDto> {
+  ): Promise<ReportDetail> {
     return this.reports.addExpense(await this.callers.load(userId), id, body)
   }
 
@@ -50,39 +37,36 @@ export class ReportsController {
     @UserId() userId: string,
     @Param('id') id: string,
     @Body() body: ExpenseInput
-  ): Promise<ExpenseDto> {
+  ): Promise<ReportDetail> {
     return this.reports.updateExpense(await this.callers.load(userId), id, body)
   }
 
   @Delete('expenses/:id')
-  @HttpCode(204)
-  async deleteExpense(@UserId() userId: string, @Param('id') id: string): Promise<void> {
-    await this.reports.deleteExpense(await this.callers.load(userId), id)
+  async deleteExpense(@UserId() userId: string, @Param('id') id: string): Promise<ReportDetail> {
+    return this.reports.deleteExpense(await this.callers.load(userId), id)
   }
 
   @Post('expenses/:id/documents')
-  @HttpCode(204)
   async attach(
     @UserId() userId: string,
     @Param('id') id: string,
     @Body() body: { documentId: string; purpose: DocumentPurpose }
-  ): Promise<void> {
-    await this.reports.attachToExpense(
+  ): Promise<ReportDetail> {
+    return this.reports.attachToExpense(
       await this.callers.load(userId),
       id,
-      body.documentId,
-      body.purpose
+      body.purpose,
+      body.documentId
     )
   }
 
   @Delete('expenses/:id/documents/:documentId')
-  @HttpCode(204)
   async detach(
     @UserId() userId: string,
     @Param('id') id: string,
     @Param('documentId') documentId: string
-  ): Promise<void> {
-    await this.reports.detachFromExpense(await this.callers.load(userId), id, documentId)
+  ): Promise<ReportDetail> {
+    return this.reports.detachFromExpense(await this.callers.load(userId), id, documentId)
   }
 
   @Post('reports/:id/wex')
@@ -90,46 +74,40 @@ export class ReportsController {
     @UserId() userId: string,
     @Param('id') id: string,
     @Body() body: WexPaymentInput
-  ): Promise<WexPaymentDto> {
+  ): Promise<ReportDetail> {
     return this.reports.addWexPayment(await this.callers.load(userId), id, body)
   }
 
   @Post('wex/:id/documents')
-  @HttpCode(204)
   async attachWex(
     @UserId() userId: string,
     @Param('id') id: string,
     @Body() body: { documentId: string; purpose: DocumentPurpose }
-  ): Promise<void> {
-    await this.reports.attachToWex(
+  ): Promise<ReportDetail> {
+    return this.reports.attachToWex(
       await this.callers.load(userId),
       id,
-      body.documentId,
-      body.purpose
+      body.purpose,
+      body.documentId
     )
   }
 
   @Post('reports/:id/submit')
-  async submit(
-    @UserId() userId: string,
-    @Param('id') id: string
-  ): Promise<{ blockers: CheckDto[] }> {
+  async submit(@UserId() userId: string, @Param('id') id: string): Promise<ReportDetail> {
     return this.reports.submit(await this.callers.load(userId), id)
   }
 
   @Post('reports/:id/review')
-  @HttpCode(204)
   async review(
     @UserId() userId: string,
     @Param('id') id: string,
     @Body() body: { decision: 'approve' | 'deny'; reason?: string; review?: ReportReview }
-  ): Promise<void> {
-    await this.reports.review(await this.callers.load(userId), id, body)
+  ): Promise<ReportDetail> {
+    return this.reports.review(await this.callers.load(userId), id, body)
   }
 
   @Post('reports/:id/reopen')
-  @HttpCode(204)
-  async reopen(@UserId() userId: string, @Param('id') id: string): Promise<void> {
-    await this.reports.reopen(await this.callers.load(userId), id)
+  async reopen(@UserId() userId: string, @Param('id') id: string): Promise<ReportDetail> {
+    return this.reports.reopen(await this.callers.load(userId), id)
   }
 }

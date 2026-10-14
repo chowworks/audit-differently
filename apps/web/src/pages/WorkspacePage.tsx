@@ -258,8 +258,8 @@ export function WorkspacePage() {
                 Access log
               </Button>
               <span className="text-xs text-soft">
-                Who opened, downloaded or exported what, and when. Searchable, exportable, never
-                editable.
+                Who opened, downloaded, exported or changed what, and when. Searchable, exportable,
+                never editable.
               </span>
             </div>
           )}
@@ -638,4 +638,4 @@ function MoreLists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promis
   )
 }
 
-/** The access log, newest first: every read, download and export leaves a line here. */
+/** The access log, newest first: every read, download, export and change leaves a line here. */

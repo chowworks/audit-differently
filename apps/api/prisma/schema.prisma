@@ -350,8 +350,9 @@ model Check {
 }
 
 // ── Access log ──────────────────────────────────────────────────────────────
-// Every read, list, download and export of a document or participant row, and every write to a report. Written
-// by the API in the caller's own context; readable inside the workspace; never updated or deleted by the API.
+// Every read, list, download and export of a document or participant row, and every change to the workspace's
+// data. Written by the API in the caller's own context, a change in the same transaction as the change itself
+// (AccessLogService.change); readable inside the workspace; never updated or deleted by the API.
 
 model DataAccessLog {
   id          String   @id @default(uuid())
@@ -361,7 +362,9 @@ model DataAccessLog {
   resource    String // 'workspace' | 'engagement' | 'document' | 'expense' | 'report' | 'participant' | 'export'
   subjectId   String?
   action      String // 'read' | 'list' | 'download' | 'create' | 'update' | 'delete' | 'export'
-  detail      String? // short, non-sensitive context, e.g. 'audit package, 3 months, 41 files'
+  detail      String? // short, non-sensitive context; lines before 20261013000100 only
+  description String? // what the person did, in the screen's words; never a personal value
+  changes     Json? // [{ field, before?, after? }]; a personal field is its name alone, see src/core/changes.ts
   createdAt   DateTime @default(now())
 
   @@index([workspaceId, createdAt])

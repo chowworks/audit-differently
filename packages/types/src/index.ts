@@ -89,6 +89,12 @@ export const BUDGET_CATEGORY_TO_LINE: Record<BudgetCategory, ReportLine> = {
 
 export const ALLOCATION_TYPES = ['direct', 'payroll', 'usage'] as const
 export type AllocationType = (typeof ALLOCATION_TYPES)[number]
+/** How the expense form and the access log name each allocation type. */
+export const ALLOCATION_TYPE_LABELS: Record<AllocationType, string> = {
+  direct: 'Direct (all of it)',
+  payroll: 'Shared, by payroll hours',
+  usage: 'Shared, by usage',
+}
 
 export const DOCUMENT_KINDS = [
   'invoice',
@@ -114,6 +120,31 @@ export const DOCUMENT_KINDS = [
   'other',
 ] as const
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number]
+
+/** A document kind in plain words, as the access log says it. */
+export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
+  invoice: 'invoice',
+  receipt: 'receipt',
+  'purchase-order': 'purchase order',
+  'bank-statement': 'bank statement',
+  'card-statement': 'card statement',
+  'eft-confirmation': 'EFT confirmation',
+  'cancelled-check': 'cancelled check',
+  'allocation-calculation': 'allocation worksheet',
+  'payroll-register': 'payroll register',
+  timesheet: 'timesheet',
+  paystub: 'pay stub',
+  'enrollment-form': 'enrollment form',
+  'eligibility-record': 'eligibility record',
+  proposal: 'proposal',
+  'award-letter': 'award letter',
+  'budget-narrative': 'budget narrative',
+  contract: 'contract',
+  mou: 'MOU',
+  'signed-report': 'signed report',
+  'audit-letter': 'letter to the auditors',
+  other: 'document',
+}
 
 /**
  * How a document may be served (CLAUDE.md, "Data rules"). 'personal' documents identify a participant: they
@@ -604,13 +635,28 @@ export interface WorkspaceMemberDto {
   pending: boolean
 }
 
+/**
+ * One field of a logged change. A value appears only where it is safe to keep (amounts, dates, statuses on
+ * financial records); a personal or free-text field carries its name alone, and no value at all.
+ */
+export interface LoggedChange {
+  field: string
+  before?: string | null
+  after?: string | null
+}
+
 /** One line of the workspace's access log. */
 export interface ActivityEntry {
   id: string
   at: string
+  /** Who did it: their email (lines written before 2026-10-13 may carry a display name). */
   actorName: string
   action: string
   resource: string
+  /** What the person did, in the words of the screen they did it on. Null on lines written before it existed. */
+  description: string | null
+  /** The fields a change touched. Null on a read, list, download or export. */
+  changes: LoggedChange[] | null
   detail: string | null
 }
 

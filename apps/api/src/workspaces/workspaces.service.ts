@@ -4,7 +4,9 @@ import {
   WRITE_ROLES,
   DEFAULT_FUNDING_SOURCES,
   ROLES,
+  ROLE_LABELS,
   type ActivityEntry,
+  type LoggedChange,
   type Role,
   type SuggestionDto,
   type WorkspaceDetail,
@@ -12,9 +14,21 @@ import {
   type WorkspaceMemberDto,
 } from '@ad/types'
 import { TermsService } from '../auth/terms.service'
+import { AccessLogService } from '../core/access-log.service'
 import { allow, workspaceRole, type Caller } from '../core/caller'
+import { changesOf, type Fields } from '../core/changes'
 import { runAsSystem } from '../core/tenant-context'
 import { PrismaService } from '../prisma/prisma.service'
+
+const LIST_FIELDS: Fields = { fundingSources: { label: 'Sources of funds', show: 'list' } }
+/** A membership's role, in the words of the people list and the invite form (Owner, Bookkeeper, Auditor). */
+export const ROLE_FIELDS: Fields = { role: { label: 'Role', show: 'text', labels: ROLE_LABELS } }
+
+/** A role inside a sentence of the log: "as auditor". */
+export const roleWord = (role: string) => (ROLE_LABELS[role as Role] ?? role).toLowerCase()
+
+/** A member as the access log names them: by email (`staffName` in core/caller.ts), never a display name. */
+const personEmail = (u: { email: string | null } | null, id: string) => u?.email || id
 
 /**
  * A workspace is the team's container: the engagements it accounts for, the people who work in it and the
@@ -25,7 +39,8 @@ import { PrismaService } from '../prisma/prisma.service'
 export class WorkspacesService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly terms: TermsService
+    private readonly terms: TermsService,
+    private readonly log: AccessLogService
   ) {}
 
   private readonly include = {
@@ -90,7 +105,7 @@ export class WorkspacesService {
     return { ...this.dto(caller, w), members, suggestions }
   }
 
-  /** The newest lines of the workspace's access log: who read, listed, downloaded or exported what. */
+  /** The newest lines of the workspace's access log: who read, listed, downloaded, exported or changed what. */
   async activity(caller: Caller, id: string): Promise<ActivityEntry[]> {
     await this.load(caller, id)
     allow(
@@ -108,6 +123,8 @@ export class WorkspacesService {
       actorName: r.actorName,
       action: r.action,
       resource: r.resource,
+      description: r.description,
+      changes: (r.changes as LoggedChange[] | null) ?? null,
       detail: r.detail,
     }))
   }
@@ -119,9 +136,22 @@ export class WorkspacesService {
     const clean = text?.trim()
     if (!clean) throw new BadRequestException('Say what to add')
     if (clean.length > 300) throw new BadRequestException('Keep it under 300 characters')
-    await this.prisma.suggestion.create({
-      data: { workspaceId: id, userId: caller.userId, kind: 'list', text: clean },
-    })
+    await this.log.change(
+      caller,
+      (tx) =>
+        tx.suggestion.create({
+          data: { workspaceId: id, userId: caller.userId, kind: 'list', text: clean },
+        }),
+      (made) => ({
+        workspaceId: made.workspaceId,
+        resource: 'workspace',
+        subjectId: made.id,
+        action: 'create',
+        // The form sits in the "More lists" card, under "Missing something today? Say so."
+        description: 'Suggested an addition to the lists',
+        changes: [{ field: 'Suggestion' }],
+      })
+    )
     return this.get(caller, id)
   }
 
@@ -136,22 +166,40 @@ export class WorkspacesService {
     if (acceptedTermsVersion !== this.terms.version)
       throw new BadRequestException('Accept the current terms to create a workspace')
     // The creator is not a member yet, so they could neither read the workspace back nor give themselves the
-    // first membership; both are the one trusted step (migrations 20261011000400 and ..0500).
-    const w = await runAsSystem(async () => {
-      const made = await this.prisma.workspace.create({
-        data: {
-          name: clean,
-          fundingSources: DEFAULT_FUNDING_SOURCES,
-          termsVersion: this.terms.version,
-          termsAcceptedAt: new Date(),
-          termsAcceptedById: caller.userId,
+    // first membership; both are the one trusted step (migrations 20261011000400 and ..0500). The line goes in the
+    // same transaction, written as the new owner once the membership exists: if it cannot be written, there is no
+    // workspace either, and trying again does not leave a duplicate behind.
+    const { made: w } = await runAsSystem(() =>
+      this.log.trusted(
+        caller,
+        async (tx, refresh) => {
+          const made = await tx.workspace.create({
+            data: {
+              name: clean,
+              fundingSources: DEFAULT_FUNDING_SOURCES,
+              termsVersion: this.terms.version,
+              termsAcceptedAt: new Date(),
+              termsAcceptedById: caller.userId,
+            },
+          })
+          // The new workspace joins the system context, so the membership can be read back as it is written.
+          await refresh()
+          const seat = await tx.membership.create({
+            data: { userId: caller.userId, workspaceId: made.id, role: 'owner' },
+          })
+          return { made, seat }
         },
-      })
-      await this.prisma.membership.create({
-        data: { userId: caller.userId, workspaceId: made.id, role: 'owner' },
-      })
-      return made
-    })
+        ({ seat }) => [
+          {
+            workspaceId: seat.workspaceId,
+            resource: 'workspace',
+            subjectId: seat.workspaceId,
+            action: 'create',
+            description: `Created the workspace ${clean} and accepted the Terms & Conditions`,
+          },
+        ]
+      )
+    )
     const fresh: Caller = {
       ...caller,
       memberships: [
@@ -164,12 +212,23 @@ export class WorkspacesService {
   }
 
   async setLists(caller: Caller, id: string, fundingSources: string[]): Promise<WorkspaceDetail> {
-    await this.load(caller, id)
+    const w = await this.load(caller, id)
     allow(workspaceRole(caller, id, ['owner']), 'Only an owner edits the lists')
     const clean = [...new Set((fundingSources ?? []).map((f) => String(f).trim()).filter(Boolean))]
     if (clean.length > 40 || clean.some((f) => f.length > 60))
       throw new BadRequestException('Up to 40 sources of 60 characters each')
-    await this.prisma.workspace.update({ where: { id }, data: { fundingSources: clean } })
+    await this.log.change(
+      caller,
+      (tx) => tx.workspace.update({ where: { id }, data: { fundingSources: clean } }),
+      {
+        workspaceId: id,
+        resource: 'workspace',
+        subjectId: id,
+        action: 'update',
+        description: 'Changed the sources of funds',
+        changes: changesOf(w, { fundingSources: clean }, LIST_FIELDS),
+      }
+    )
     return this.get(caller, id)
   }
 
@@ -203,9 +262,19 @@ export class WorkspacesService {
       where: { userId: user.id, workspaceId: id },
     })
     if (already) throw new BadRequestException(`${email} is already in this workspace`)
-    await this.prisma.membership.create({
-      data: { userId: user.id, workspaceId: id, role: input.role },
-    })
+    await this.log.change(
+      caller,
+      (tx) =>
+        tx.membership.create({ data: { userId: user.id, workspaceId: id, role: input.role } }),
+      (seat) => ({
+        workspaceId: seat.workspaceId,
+        resource: 'member',
+        subjectId: user.id,
+        action: 'create',
+        description: `Invited ${email} as ${roleWord(input.role)}`,
+        changes: changesOf(null, { role: input.role }, ROLE_FIELDS),
+      })
+    )
     return this.get(caller, id)
   }
 
@@ -214,10 +283,24 @@ export class WorkspacesService {
     allow(workspaceRole(caller, id, ['owner']), 'Only an owner changes roles')
     if (!(ROLES as readonly string[]).includes(role))
       throw new BadRequestException('role must be owner, bookkeeper or auditor')
-    const m = await this.prisma.membership.findFirst({ where: { userId, workspaceId: id } })
+    const m = await this.prisma.membership.findFirst({
+      where: { userId, workspaceId: id },
+      include: { user: true },
+    })
     if (!m) throw new NotFoundException('Not a member of this workspace')
     if (role !== 'owner') await this.keepAnOwner(id, userId)
-    await this.prisma.membership.update({ where: { id: m.id }, data: { role } })
+    await this.log.change(
+      caller,
+      (tx) => tx.membership.update({ where: { id: m.id }, data: { role } }),
+      (seat) => ({
+        workspaceId: seat.workspaceId,
+        resource: 'member',
+        subjectId: userId,
+        action: 'update',
+        description: `Changed the role of ${personEmail(m.user, userId)} from ${roleWord(m.role)} to ${roleWord(role)}`,
+        changes: changesOf(m, { role }, ROLE_FIELDS),
+      })
+    )
     return this.get(caller, id)
   }
 
@@ -225,8 +308,23 @@ export class WorkspacesService {
     await this.load(caller, id)
     allow(workspaceRole(caller, id, ['owner']), 'Only an owner removes people')
     await this.keepAnOwner(id, userId)
-    const gone = await this.prisma.membership.deleteMany({ where: { userId, workspaceId: id } })
-    if (gone.count === 0) throw new NotFoundException('Not a member of this workspace')
+    const m = await this.prisma.membership.findFirst({
+      where: { userId, workspaceId: id },
+      include: { user: true },
+    })
+    if (!m) throw new NotFoundException('Not a member of this workspace')
+    await this.log.change(
+      caller,
+      (tx) => tx.membership.deleteMany({ where: { userId, workspaceId: id } }),
+      {
+        workspaceId: id,
+        resource: 'member',
+        subjectId: userId,
+        action: 'delete',
+        description: `Removed ${personEmail(m.user, userId)} from the workspace`,
+        changes: changesOf(m, null, ROLE_FIELDS),
+      }
+    )
     return this.get(caller, id)
   }
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   DOCUMENT_PURPOSE_LABELS,
+  ALLOCATION_TYPE_LABELS,
   ALLOCATION_TYPES,
   PAYROLL_REPORT_LINES,
   REPORT_LINES,
@@ -53,6 +54,16 @@ function requiredPurposes(e: ExpenseDto): DocumentPurpose[] {
   return e.allocationType === 'direct' ? base : [...base, 'allocation']
 }
 
+/**
+ * Item numbers, accounts and the funder's IV# are logged by value, so the API takes them as ID-like text only;
+ * the inputs say so before the person submits.
+ */
+const ID_LIKE = {
+  pattern: '[A-Za-z0-9#&.\\/ \\-]{1,40}',
+  maxLength: 40,
+  title: 'Letters, digits, #, &, ., /, - and spaces, up to 40 characters',
+}
+
 type Attach =
   | { kind: 'expense'; expense: ExpenseDto; purpose: DocumentPurpose }
   | { kind: 'wex'; payment: WexPaymentDto; purpose: DocumentPurpose }
@@ -60,7 +71,8 @@ type Attach =
 export function ReportPage() {
   const { id } = useParams()
   const api = useApi()
-  const { data: r, error, reload } = useLoad<ReportDetail>(id ? `/reports/${id}` : null)
+  // The open is the one logged read; each change answers with the page as it now stands, so nothing re-fetches.
+  const { data: r, error, setData } = useLoad<ReportDetail>(id ? `/reports/${id}` : null)
   const [editing, setEditing] = useState<ExpenseDto | 'new' | null>(null)
   const [attach, setAttach] = useState<Attach | null>(null)
   const [reviewing, setReviewing] = useState(false)
@@ -87,12 +99,11 @@ export function ReportPage() {
   const infos = r.checks.filter((k) => k.severity === 'info')
   const billed = r.lines.reduce((t, l) => t + l.billedThisPeriod, 0)
 
-  const run = async (fn: () => Promise<void>, ok?: string) => {
+  const run = async (fn: () => Promise<ReportDetail>, ok?: string) => {
     setBusy(true)
     setNotice(null)
     try {
-      await fn()
-      await reload()
+      setData(await fn())
       if (ok) setNotice({ tone: 'ok', text: ok })
     } catch (e) {
       setNotice({ tone: 'danger', text: (e as Error).message })
@@ -104,7 +115,7 @@ export function ReportPage() {
     run(
       async () => {
         try {
-          await api.post(`/reports/${r.id}/submit`)
+          return await api.post<ReportDetail>(`/reports/${r.id}/submit`)
         } catch (e) {
           if (e instanceof ApiError && e.status === 409) throw new Error(e.message)
           throw e
@@ -119,7 +130,7 @@ export function ReportPage() {
       )
     )
       return
-    void run(() => api.del(`/expenses/${e.id}`), `${e.itemNumber} removed.`)
+    void run(() => api.del<ReportDetail>(`/expenses/${e.id}`), `${e.itemNumber} removed.`)
   }
 
   return (
@@ -170,7 +181,9 @@ export function ReportPage() {
           </Link>
           {r.can.reopen && (
             <Button
-              onClick={() => run(() => api.post(`/reports/${r.id}/reopen`), 'Reopened as a draft.')}
+              onClick={() =>
+                run(() => api.post<ReportDetail>(`/reports/${r.id}/reopen`), 'Reopened as a draft.')
+              }
               disabled={busy}
             >
               Reopen as draft
@@ -352,8 +365,7 @@ export function ReportPage() {
                         {REPORT_LINE_LABELS[e.reportLine]}
                         {e.allocationType !== 'direct' && (
                           <span className="ad-table-sub">
-                            allocated by{' '}
-                            {e.allocationType === 'payroll' ? 'payroll hours' : 'usage'}
+                            {ALLOCATION_TYPE_LABELS[e.allocationType]}
                             {e.allocationNote ? `: ${e.allocationNote}` : ''}
                           </span>
                         )}
@@ -526,10 +538,12 @@ export function ReportPage() {
           period={r.period}
           onClose={() => setEditing(null)}
           onSave={async (input) => {
-            if (editing === 'new') await api.post(`/reports/${r.id}/expenses`, input)
-            else await api.patch(`/expenses/${editing.id}`, input)
+            setData(
+              editing === 'new'
+                ? await api.post<ReportDetail>(`/reports/${r.id}/expenses`, input)
+                : await api.patch<ReportDetail>(`/expenses/${editing.id}`, input)
+            )
             setEditing(null)
-            await reload()
           }}
         />
       )}
@@ -537,29 +551,27 @@ export function ReportPage() {
         <AttachModal
           title={
             attach.kind === 'expense'
-              ? `${attach.expense.itemNumber} ${attach.expense.vendor}: ${attach.purpose}`
-              : `${attach.payment.participantName}: ${attach.purpose}`
+              ? `${attach.expense.itemNumber} ${attach.expense.vendor}: ${DOCUMENT_PURPOSE_LABELS[attach.purpose]}`
+              : `${attach.payment.participantName}: ${DOCUMENT_PURPOSE_LABELS[attach.purpose]}`
           }
           workspaceId={r.engagement.workspace.id}
           engagementId={r.engagement.id}
           period={r.period}
           defaultKind={KINDS_FOR[attach.purpose][0]}
           kinds={KINDS_FOR[attach.purpose]}
+          attachTo={
+            attach.kind === 'expense'
+              ? { target: 'expense', id: attach.expense.id, purpose: attach.purpose }
+              : { target: 'wex', id: attach.payment.id, purpose: attach.purpose }
+          }
           onClose={() => setAttach(null)}
-          onPick={async (documentId) => {
-            if (attach.kind === 'expense')
-              await api.post(`/expenses/${attach.expense.id}/documents`, {
-                documentId,
-                purpose: attach.purpose,
-              })
-            else
-              await api.post(`/wex/${attach.payment.id}/documents`, {
-                documentId,
-                purpose: attach.purpose,
-              })
+          onAttached={async (report) => {
             setAttach(null)
-            await reload()
-            setNotice({ tone: 'ok', text: `Attached ${attach.purpose}.` })
+            setData(report)
+            setNotice({
+              tone: 'ok',
+              text: `Attached ${DOCUMENT_PURPOSE_LABELS[attach.purpose].toLowerCase()}.`,
+            })
           }}
         />
       )}
@@ -573,9 +585,10 @@ export function ReportPage() {
           kinds={['signed-report']}
           uploadOnly
           onClose={() => setSigning(false)}
-          onPick={async () => {
+          onPick={async (doc) => {
             setSigning(false)
-            await reload()
+            // The upload's answer is the new document; the page adds it without asking again.
+            setData({ ...r, documents: [doc, ...r.documents] })
             setNotice({ tone: 'ok', text: 'Signed copy on file.' })
           }}
         />
@@ -585,9 +598,8 @@ export function ReportPage() {
           report={r}
           onClose={() => setReviewing(false)}
           onDecide={async (body) => {
-            await api.post(`/reports/${r.id}/review`, body)
+            setData(await api.post<ReportDetail>(`/reports/${r.id}/review`, body))
             setReviewing(false)
-            await reload()
             setNotice({
               tone: 'ok',
               text:
@@ -687,6 +699,7 @@ function ExpenseModal({
             value={form.itemNumber}
             onChange={(e) => set('itemNumber', e.target.value)}
             required
+            {...ID_LIKE}
             data-testid="f-item"
           />
         </Field>
@@ -722,6 +735,7 @@ function ExpenseModal({
             className={inputClass}
             value={form.account ?? ''}
             onChange={(e) => set('account', e.target.value)}
+            {...ID_LIKE}
           />
         </Field>
         <Field label="Report line">
@@ -760,11 +774,7 @@ function ExpenseModal({
           >
             {ALLOCATION_TYPES.map((t) => (
               <option key={t} value={t}>
-                {t === 'direct'
-                  ? 'Direct (all of it)'
-                  : t === 'payroll'
-                    ? 'Shared, by payroll hours'
-                    : 'Shared, by usage'}
+                {ALLOCATION_TYPE_LABELS[t]}
               </option>
             ))}
           </select>
@@ -872,6 +882,7 @@ function ReviewModal({
             className={inputClass}
             value={review.invoiceNumber ?? ''}
             onChange={(e) => setReview({ ...review, invoiceNumber: e.target.value })}
+            {...ID_LIKE}
           />
         </Field>
       </div>

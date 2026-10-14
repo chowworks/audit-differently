@@ -4,8 +4,10 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common'
+import type { Prisma } from '@prisma/client'
 import { createHash, randomUUID } from 'node:crypto'
 
 /** Where an object is filed: by workspace, then by engagement (or 'workspace' for none), then by month or 'general'. */
@@ -30,19 +32,26 @@ export function keyInWorkspace(doc: {
 }
 import {
   ALLOWED_UPLOAD_TYPES,
+  DOCUMENT_KIND_LABELS,
   DOCUMENT_KINDS,
   DOCUMENT_SENSITIVITY,
   PERSONAL_DOCUMENT_ROLES,
   WRITE_ROLES,
   type DocumentDto,
   type DocumentKind,
+  type DocumentPurpose,
   type Role,
 } from '@ad/types'
 import { AccessLogService } from '../core/access-log.service'
 import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
+import { howMany, monthName } from '../core/changes'
+import { EngagementsService } from '../engagements/engagements.service'
+import { ParticipantsService } from '../participants/participants.service'
 import { PrismaService } from '../prisma/prisma.service'
+import { ReportsService } from '../reports/reports.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
-import { documentDto } from './document.dto'
+import { documentDto, type UploadResult } from './document.dto'
+import { describe, StagedFile } from './staged-file'
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
@@ -66,19 +75,46 @@ export function looksLike(buffer: Buffer, mimetype: string): boolean {
   )
 }
 
+/**
+ * The fields of POST /documents. Beside where the file is filed, at most one of: `attachTo` with `attachId` and
+ * `purpose` (put it in a record's proof slot), `replaces` (put it in place of an unattached document), or
+ * `clearsWaiver` (the engagement's reason this kind was missing goes). Each is one transaction with one line.
+ */
+export interface UploadBody {
+  workspaceId: string
+  kind: DocumentKind
+  period?: string
+  engagementId?: string
+  attachTo?: string
+  attachId?: string
+  purpose?: string
+  replaces?: string
+  clearsWaiver?: string
+}
+
+/** Why the attach list was opened, to word its line. It picks the words only: the list is always logged. */
+export interface ListContext {
+  for?: string
+  id?: string
+}
+
+type Uploaded = { originalname: string; mimetype: string; size: number; buffer: Buffer }
+
 @Injectable()
 export class DocumentsService {
+  private readonly logger = new Logger(DocumentsService.name)
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly log: AccessLogService,
-    @Inject(DOCUMENT_STORAGE) private readonly storage: DocumentStorage
+    @Inject(DOCUMENT_STORAGE) private readonly storage: DocumentStorage,
+    private readonly reports: ReportsService,
+    private readonly participants: ParticipantsService,
+    private readonly engagements: EngagementsService
   ) {}
 
-  async upload(
-    caller: Caller,
-    file: { originalname: string; mimetype: string; size: number; buffer: Buffer },
-    body: { workspaceId: string; kind: DocumentKind; period?: string; engagementId?: string }
-  ): Promise<DocumentDto> {
+  /** Checks an upload (who, what kind, which bytes, where) and readies it; nothing is stored yet. */
+  private async stage(caller: Caller, file: Uploaded, body: UploadBody): Promise<StagedFile> {
     if (!caller.workspaceIds.includes(body.workspaceId))
       throw new NotFoundException('No such workspace')
     allow(
@@ -103,47 +139,244 @@ export class DocumentsService {
       })
       if (!c) throw new BadRequestException('engagementId is not an engagement of this workspace')
     }
-    const storageKey = `${objectFolder(body)}${randomUUID()}.${ext}`
-    await this.storage.upload(storageKey, file.buffer, file.mimetype)
-    const doc = await this.prisma.document.create({
-      data: {
-        workspaceId: body.workspaceId,
-        engagementId: body.engagementId || null,
+    const where = {
+      workspaceId: body.workspaceId,
+      engagementId: body.engagementId || null,
+      period: body.period || null,
+    }
+    return new StagedFile(
+      this.storage,
+      {
+        ...where,
         kind: body.kind,
         sensitivity: DOCUMENT_SENSITIVITY[body.kind],
         fileName: file.originalname.replace(/[^\w.() -]+/g, '_').slice(0, 200),
         contentType: file.mimetype,
         size: file.size,
         sha256: createHash('sha256').update(file.buffer).digest('hex'),
-        storageKey,
-        period: body.period || null,
+        storageKey: `${objectFolder(where)}${randomUUID()}.${ext}`,
         uploadedById: caller.userId,
       },
-    })
-    await this.log.log(caller, {
-      workspaceId: body.workspaceId,
-      resource: 'document',
-      subjectId: doc.id,
-      action: 'create',
-      detail: doc.kind,
-    })
+      file.buffer
+    )
+  }
+
+  /**
+   * One upload, one transaction, one line: the file alone, or the file and what it is for (a record's proof, the
+   * replacement of an unattached document, or the end of a "no such document" reason). A refused request stores
+   * nothing and logs nothing; a failed save deletes the stored object again.
+   */
+  async upload(caller: Caller, file: Uploaded, body: UploadBody): Promise<UploadResult> {
+    const staged = await this.stage(caller, file, body)
+    const chosen = [body.attachTo, body.replaces, body.clearsWaiver].filter(Boolean).length
+    if (chosen > 1)
+      throw new BadRequestException('An upload attaches, replaces or clears a reason, not more')
+    if (body.attachTo) {
+      if (!body.attachId || !body.purpose)
+        throw new BadRequestException('attachTo needs attachId and purpose')
+      const purpose = body.purpose
+      if (body.attachTo === 'expense') {
+        const report = await this.reports.attachToExpense(
+          caller,
+          body.attachId,
+          purpose as DocumentPurpose,
+          staged
+        )
+        return { ...documentDto(staged.row!), report }
+      }
+      if (body.attachTo === 'wex') {
+        const report = await this.reports.attachToWex(
+          caller,
+          body.attachId,
+          purpose as DocumentPurpose,
+          staged
+        )
+        return { ...documentDto(staged.row!), report }
+      }
+      if (body.attachTo === 'participant') {
+        const engagementId = await this.participants.attach(caller, body.attachId, purpose, staged)
+        // The engagement as its page now shows it, unlogged: an upload is a change, not the page being opened.
+        const engagement = await this.engagements.detail(caller, engagementId)
+        return { ...documentDto(staged.row!), engagement }
+      }
+      throw new BadRequestException('attachTo must be expense, wex or participant')
+    }
+    if (body.replaces) return documentDto(await this.replace(caller, staged, body.replaces))
+    if (body.clearsWaiver === 'true')
+      return documentDto(await this.uploadClearingWaiver(caller, staged))
+    if (body.clearsWaiver) throw new BadRequestException('clearsWaiver must be true')
+    const doc = await staged.commit(() =>
+      this.log.change(
+        caller,
+        (tx) => staged.create(tx),
+        (made) => ({
+          workspaceId: made.workspaceId,
+          resource: 'document',
+          subjectId: made.id,
+          action: 'create',
+          description: `Uploaded ${describe(made)}`,
+        })
+      )
+    )
     return documentDto(doc)
   }
 
-  async list(caller: Caller, workspaceId: string): Promise<DocumentDto[]> {
+  /** "Replace": the new file takes the place of one that is attached to nothing; the old row and object go. */
+  private async replace(caller: Caller, staged: StagedFile, oldId: string) {
+    const old = await this.prisma.document.findFirst({
+      where: { id: oldId, ...tenantWhere(caller) },
+    })
+    if (!old || old.workspaceId !== staged.data.workspaceId) throw new NotFoundException()
+    // Refused before anything is stored: an attached file is detached where it is used first.
+    await this.assertUnattached(this.prisma, oldId)
+    if (!keyInWorkspace(old)) throw new NotFoundException()
+    const made = await staged.commit(() =>
+      this.log.change(
+        caller,
+        async (tx) => {
+          await this.assertUnattached(tx, oldId)
+          const doc = await staged.create(tx)
+          await tx.document.delete({ where: { id: oldId } })
+          return doc
+        },
+        (doc) => ({
+          workspaceId: doc.workspaceId,
+          resource: 'document',
+          subjectId: doc.id,
+          action: 'update',
+          description: `Replaced ${describe(doc, 'the')}`,
+        })
+      )
+    )
+    await this.dropStored(caller, old)
+    return made
+  }
+
+  /** A file on hand for a record the engagement said was missing: the upload and the reason's removal, together. */
+  private async uploadClearingWaiver(caller: Caller, staged: StagedFile) {
+    const engagementId = staged.data.engagementId
+    if (!engagementId) throw new BadRequestException('clearsWaiver needs an engagementId')
+    const kind = staged.data.kind
+    const { doc } = await staged.commit(() =>
+      this.log.change(
+        caller,
+        async (tx) => {
+          const doc = await staged.create(tx)
+          const e = await tx.engagement.findFirst({ where: { id: engagementId } })
+          const waivers = { ...((e?.waivers ?? {}) as Record<string, string>) }
+          const had = !!waivers[kind]
+          if (had) {
+            delete waivers[kind]
+            await tx.engagement.update({ where: { id: engagementId }, data: { waivers } })
+          }
+          return { doc, had }
+        },
+        ({ doc, had }) => ({
+          workspaceId: doc.workspaceId,
+          resource: 'document',
+          subjectId: doc.id,
+          action: 'create',
+          description: had
+            ? `Uploaded ${describe(doc, 'the')} and removed the reason it was missing`
+            : `Uploaded ${describe(doc)}`,
+          // The reason as the engagement's details name it (ENGAGEMENT_FIELDS), never its words.
+          changes: had ? [{ field: `No ${DOCUMENT_KIND_LABELS[kind]} (reason)` }] : undefined,
+        })
+      )
+    )
+    return doc
+  }
+
+  private async assertUnattached(
+    db: Pick<Prisma.TransactionClient, 'document'>,
+    id: string
+  ): Promise<void> {
+    const d = await db.document.findFirst({
+      where: { id },
+      include: { _count: { select: { expenses: true, participants: true, wexPayments: true } } },
+    })
+    if (!d) throw new NotFoundException()
+    const uses = d._count.expenses + d._count.participants + d._count.wexPayments
+    if (uses > 0)
+      throw new ConflictException(
+        `This document is attached to ${uses} record${uses === 1 ? '' : 's'}; detach it there first`
+      )
+  }
+
+  /**
+   * After a removal committed, the stored object goes too. If storage refuses, the person's request still stands:
+   * the leftover is written to the server log and the access log, by document id and key, so it can be found.
+   */
+  private async dropStored(
+    caller: Caller,
+    doc: { id: string; workspaceId: string; kind: string; storageKey: string }
+  ): Promise<void> {
+    try {
+      await this.storage.delete(doc.storageKey)
+    } catch (e) {
+      this.logger.error(
+        `Document ${doc.id}: its file ${doc.storageKey} could not be deleted from storage: ${(e as Error).message}`
+      )
+      await this.log
+        .log(caller, {
+          workspaceId: doc.workspaceId,
+          resource: 'document',
+          subjectId: doc.id,
+          action: 'delete',
+          description: `The file of a removed ${DOCUMENT_KIND_LABELS[doc.kind as DocumentKind] ?? 'document'} could not be deleted from storage`,
+        })
+        .catch((err: unknown) =>
+          this.logger.error(
+            `Document ${doc.id}: the access log line for its leftover file failed: ${(err as Error).message}`
+          )
+        )
+    }
+  }
+
+  /**
+   * The workspace's documents, for picking proof. `context` (why the list was opened) only words the line; the
+   * list is logged whatever it says.
+   */
+  async list(
+    caller: Caller,
+    workspaceId: string,
+    context: ListContext = {}
+  ): Promise<DocumentDto[]> {
     if (!caller.workspaceIds.includes(workspaceId)) throw new NotFoundException('No such workspace')
     const docs = await this.prisma.document.findMany({
       where: { AND: [{ workspaceId }, tenantWhere(caller)] },
       orderBy: { uploadedAt: 'desc' },
       take: 300,
     })
+    const listed = howMany(docs.length, 'document')
     await this.log.log(caller, {
       workspaceId,
       resource: 'document',
       action: 'list',
-      detail: `${docs.length} documents`,
+      description: `Listed ${listed}${await this.listedFor(caller, workspaceId, context)}`,
     })
     return docs.map(documentDto)
+  }
+
+  /** " to choose proof for expense 1001", or " of the workspace" when the context names no record of this workspace. */
+  private async listedFor(caller: Caller, workspaceId: string, context: ListContext) {
+    const everything = ' of the workspace'
+    const id = typeof context.id === 'string' ? context.id : ''
+    if (!id) return everything
+    const where = { id, AND: [{ workspaceId }, tenantWhere(caller)] }
+    if (context.for === 'expense') {
+      const e = await this.prisma.expense.findFirst({ where, select: { itemNumber: true } })
+      if (e) return ` to choose proof for expense ${e.itemNumber}`
+    }
+    if (context.for === 'wex') {
+      const w = await this.prisma.wexPayment.findFirst({
+        where,
+        select: { monthlyReport: { select: { period: true } } },
+      })
+      if (w)
+        return ` to choose proof for a work-experience payment in ${monthName(w.monthlyReport.period)}`
+    }
+    return everything
   }
 
   /** Removes a document that is attached to nothing: the row and the file. */
@@ -162,16 +395,16 @@ export class DocumentsService {
       throw new ConflictException(
         `This document is attached to ${uses} record${uses === 1 ? '' : 's'}; detach it there first`
       )
-    await this.prisma.document.delete({ where: { id } })
+    // A row whose key says another workspace is tampered or broken: nothing is deleted and nothing logged.
     if (!keyInWorkspace(doc)) throw new NotFoundException()
-    await this.storage.delete(doc.storageKey).catch(() => undefined)
-    await this.log.log(caller, {
+    await this.log.change(caller, (tx) => tx.document.delete({ where: { id } }), {
       workspaceId: doc.workspaceId,
       resource: 'document',
       subjectId: doc.id,
       action: 'delete',
-      detail: doc.kind,
+      description: `Removed ${describe(doc)}`,
     })
+    await this.dropStored(caller, doc)
   }
 
   /** A short-lived link to the file. Personal documents: shorter, download only, fewer roles, and logged as such. */
@@ -196,7 +429,7 @@ export class DocumentsService {
       resource: 'document',
       subjectId: doc.id,
       action: 'read',
-      detail: `${doc.kind}${personal ? ' (personal)' : ''}`,
+      description: `${personal ? 'Downloaded' : 'Opened'} ${describe(doc)}`,
     })
     return { url, expiresInSeconds }
   }

@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import {
+  DOCUMENT_KIND_LABELS,
   DOCUMENT_KINDS,
+  ENGAGEMENT_KIND_LABELS,
   ENGAGEMENT_KINDS,
   WRITE_ROLES,
   type BudgetCategory,
@@ -10,6 +12,7 @@ import {
   type EngagementKind,
   type EngagementStatus,
   type EngagementSummary,
+  type LoggedChange,
   type ParticipantDto,
   type ReportLine,
   type ReportStatus,
@@ -20,12 +23,111 @@ import { ChecksService } from '../checks/checks.service'
 import { dueDate } from '../checks/rules'
 import { AccessLogService } from '../core/access-log.service'
 import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
+import { changesOf, howMany, monthName, type Fields } from '../core/changes'
 import { documentDto } from '../documents/document.dto'
 import { PrismaService } from '../prisma/prisma.service'
 import { cleanEligibilityItems, eligibilityItemsOf } from './eligibility'
 
 const iso = (d: Date) => d.toISOString()
 const DAY = /^\d{4}-\d{2}-\d{2}$/
+
+/** How the engagement page words a record that does not exist (RecordModal, and the Details modal's checkboxes). */
+const WAIVER_WORDS: Partial<Record<DocumentKind, string>> = {
+  proposal: 'proposal',
+  'award-letter': 'award letter',
+  'budget-narrative': 'budget narrative',
+  contract: 'signed contract',
+}
+const waiverWord = (k: DocumentKind) => WAIVER_WORDS[k] ?? DOCUMENT_KIND_LABELS[k]
+
+/** An engagement's status as its chip on the engagement page shows it. */
+const STATUS_WORDS: Record<EngagementStatus, string> = {
+  proposed: 'proposed',
+  awarded: 'awarded',
+  active: 'active',
+  closed: 'closed',
+}
+
+/**
+ * An engagement in the access log, each field under the label the Details modal and the setup flow show for it:
+ * amounts, dates, kinds and statuses by value; people's names, contacts, free text, the checklist (its items are
+ * the owners' own words) and a waiver's reason by name alone.
+ */
+const ENGAGEMENT_FIELDS: Fields = {
+  kind: { label: 'Kind', show: 'text', labels: ENGAGEMENT_KIND_LABELS },
+  name: { label: 'Name', show: 'text' },
+  status: { label: 'Status', show: 'text', labels: STATUS_WORDS },
+  funder: { label: 'Funding organization', show: 'text' },
+  funderContact: { label: 'Funding organization contact' },
+  solicitation: { label: 'Proposal name', show: 'text' },
+  number: { label: 'Contract number', show: 'text' },
+  requestedAmount: { label: 'Amount requested', show: 'money' },
+  awardAmount: { label: 'Award amount', show: 'money' },
+  proposalSubmittedOn: { label: 'Submitted on', show: 'date' },
+  awardedOn: { label: 'Award letter dated', show: 'date' },
+  periodStart: { label: 'Starts', show: 'date' },
+  periodEnd: { label: 'Ends', show: 'date' },
+  fundingSources: { label: 'Source of funds', show: 'list' },
+  reportDueDay: { label: 'Monthly report due on day', show: 'text' },
+  // On no screen today; kept for an API caller.
+  indirectTerms: { label: 'Indirect terms' },
+  reportTo: { label: 'Submitted to' },
+  submissionMethod: { label: 'How it is submitted' },
+  preparerName: { label: 'Prepared by' },
+  preparerOrganization: { label: 'Preparer organization' },
+  authorizerName: { label: 'Authorized by' },
+  authorizerOrganization: { label: 'Authorizer organization' },
+  eligibilityItems: { label: 'Participant files' },
+  ...Object.fromEntries(
+    DOCUMENT_KINDS.map((k) => [`waiver:${k}`, { label: `No ${waiverWord(k)}` }])
+  ),
+}
+
+/** A participant is personal: every field by name alone. */
+export const PARTICIPANT_FIELDS: Fields = {
+  displayName: { label: 'Name' },
+  participantId: { label: 'Participant number' },
+  enrollmentStatus: { label: 'Enrollment' },
+}
+
+/**
+ * An engagement's values for `changesOf`: a waiver per document kind (every kind when `all`, for an update), and the
+ * checklist as the engagement uses it, so a row that holds none compares equal to the defaults it shows.
+ */
+function loggable(values: Record<string, unknown>, all: boolean): Record<string, unknown> {
+  const { waivers, ...rest } = values
+  if ('eligibilityItems' in rest && rest.eligibilityItems !== undefined)
+    rest.eligibilityItems = eligibilityItemsOf({ eligibilityItems: rest.eligibilityItems })
+  if (waivers === undefined) return rest
+  const w = (waivers ?? {}) as Record<string, string>
+  for (const k of all ? DOCUMENT_KINDS : Object.keys(w)) rest[`waiver:${k}`] = w[k] ?? null
+  return rest
+}
+
+/**
+ * What a change to an engagement says. A change of one waiver alone is worded as RecordModal words it: no such
+ * document, a new reason, or the reason removed; anything else is a change of the details.
+ */
+function describeUpdate(
+  name: string,
+  changes: LoggedChange[],
+  before: unknown,
+  after: unknown
+): string {
+  const touched = DOCUMENT_KINDS.filter((k) =>
+    changes.some((ch) => ch.field === ENGAGEMENT_FIELDS[`waiver:${k}`]!.label)
+  )
+  if (changes.length === 1 && touched.length === 1) {
+    const k = touched[0]!
+    const b = ((before ?? {}) as Record<string, string>)[k]
+    const a = ((after ?? {}) as Record<string, string>)[k]
+    const word = waiverWord(k)
+    if (!b) return `Recorded that ${name} has no ${word}`
+    if (!a) return `Removed the reason ${name} has no ${word}`
+    return `Changed why ${name} has no ${word}`
+  }
+  return `Changed the details of ${name}`
+}
 
 /** One engagement: a grant, a contract or an agreement a workspace accounts for to a funder. */
 @Injectable()
@@ -50,6 +152,10 @@ export class EngagementsService {
     _count: { select: { budgetLines: true } },
   }
 
+  /**
+   * The engagements of every workspace the caller belongs to (the overview, and a workspace's own page). One line in
+   * each workspace's log, with that workspace's own counts: no workspace learns another's size.
+   */
   async list(caller: Caller): Promise<EngagementSummary[]> {
     const rows = await this.prisma.engagement.findMany({
       where: tenantWhere(caller),
@@ -57,18 +163,40 @@ export class EngagementsService {
       orderBy: [{ workspace: { name: 'asc' } }, { name: 'asc' }],
     })
     const summaries = rows.map((c) => this.summary(c))
-    const count = summaries.reduce((t, c) => t + c.documents.length, 0)
-    if (count > 0)
+    const byWorkspace = new Map<string, EngagementSummary[]>()
+    for (const c of summaries)
+      byWorkspace.set(c.workspaceId, [...(byWorkspace.get(c.workspaceId) ?? []), c])
+    for (const [workspaceId, list] of byWorkspace) {
+      const records = list.reduce((t, c) => t + c.documents.length, 0)
       await this.log.log(caller, {
-        workspaceId: rows[0]!.workspaceId,
-        resource: 'document',
+        workspaceId,
+        resource: 'engagement',
         action: 'list',
-        detail: `${count} engagement records across ${rows.length} engagements`,
+        description: `Viewed the list of engagements: ${howMany(list.length, 'engagement')}, ${howMany(records, 'record')}`,
       })
+    }
     return summaries
   }
 
+  /** Opening an engagement's page: one line, with what the page lists. */
   async get(caller: Caller, id: string): Promise<EngagementDetail> {
+    const c = await this.detail(caller, id)
+    await this.log.log(caller, {
+      workspaceId: c.workspaceId,
+      resource: 'engagement',
+      subjectId: c.id,
+      action: 'read',
+      description: `Viewed ${c.name}: ${howMany(c.documents.length, 'record')}, ${howMany(c.participants.length, 'participant')}`,
+    })
+    return c
+  }
+
+  /**
+   * The engagement as its page shows it, unlogged: what a change returns to the page that made it (here, and an
+   * upload into a participant's file). Only `get`, the person opening the page, writes the read line; never serve
+   * this from a GET.
+   */
+  async detail(caller: Caller, id: string): Promise<EngagementDetail> {
     const c = await this.prisma.engagement.findFirst({
       where: { id, ...tenantWhere(caller) },
       include: {
@@ -81,20 +209,6 @@ export class EngagementsService {
       },
     })
     if (!c) throw new NotFoundException()
-    if (c.documents.length > 0)
-      await this.log.log(caller, {
-        workspaceId: c.workspaceId,
-        resource: 'document',
-        action: 'list',
-        detail: `${c.documents.length} records of ${c.name}`,
-      })
-    if (c.participants.length > 0)
-      await this.log.log(caller, {
-        workspaceId: c.workspaceId,
-        resource: 'participant',
-        action: 'list',
-        detail: `${c.participants.length} participants of ${c.name}`,
-      })
     return {
       ...this.summary(c),
       funderContact: c.funderContact,
@@ -234,15 +348,27 @@ export class EngagementsService {
     if (data.periodStart && data.periodEnd && (data.periodEnd as Date) < (data.periodStart as Date))
       throw new BadRequestException('The engagement must end after it starts')
     let created: { id: string }
+    const values = { ...data, status: this.statusFor(data) }
     try {
-      created = await this.prisma.engagement.create({
-        data: {
-          ...(data as Prisma.EngagementUncheckedCreateInput),
+      created = await this.log.change(
+        caller,
+        (tx) =>
+          tx.engagement.create({
+            data: {
+              ...(values as Prisma.EngagementUncheckedCreateInput),
+              workspaceId: input.workspaceId,
+            },
+            select: { id: true },
+          }),
+        (made) => ({
           workspaceId: input.workspaceId,
-          status: this.statusFor(data),
-        },
-        select: { id: true },
-      })
+          resource: 'engagement',
+          subjectId: made.id,
+          action: 'create',
+          description: `Created the engagement ${values.name as string}`,
+          changes: changesOf(null, loggable(values, false), ENGAGEMENT_FIELDS),
+        })
+      )
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
         throw new BadRequestException(
@@ -250,14 +376,7 @@ export class EngagementsService {
         )
       throw e
     }
-    await this.log.log(caller, {
-      workspaceId: input.workspaceId,
-      resource: 'engagement',
-      subjectId: created.id,
-      action: 'create',
-      detail: input.name,
-    })
-    return this.get(caller, created.id)
+    return this.detail(caller, created.id)
   }
 
   /** Changes to an engagement's facts; the workspace cannot change. */
@@ -274,12 +393,38 @@ export class EngagementsService {
     const end = (data.periodEnd as Date | null | undefined) ?? c.periodEnd
     if (start && end && end < start)
       throw new BadRequestException('The engagement must end after it starts')
-    const merged = { ...c, ...data }
+    // The Details modal sends every field on every Save: only what differs is a change.
+    if (
+      data.eligibilityItems !== undefined &&
+      JSON.stringify(data.eligibilityItems) === JSON.stringify(eligibilityItemsOf(c))
+    )
+      delete data.eligibilityItems
+    if (this.changeOf(c, data).changes.length === 0) return this.detail(caller, id)
     try {
-      await this.prisma.engagement.update({
-        where: { id },
-        data: { ...data, status: c.status === 'closed' ? 'closed' : this.statusFor(merged) },
-      })
+      await this.log.change(
+        caller,
+        async (tx) => {
+          // Read again inside the transaction, so the line describes the row this update changed.
+          const before = await tx.engagement.findFirst({ where: { id, ...tenantWhere(caller) } })
+          if (!before) throw new NotFoundException()
+          const change = this.changeOf(before, data)
+          await tx.engagement.update({ where: { id }, data: change.values })
+          return { before, ...change }
+        },
+        ({ before, values, changes }) => ({
+          workspaceId: before.workspaceId,
+          resource: 'engagement',
+          subjectId: id,
+          action: 'update',
+          description: describeUpdate(
+            (values.name as string | undefined) ?? before.name,
+            changes,
+            before.waivers,
+            values.waivers ?? before.waivers
+          ),
+          changes,
+        })
+      )
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
         throw new BadRequestException(
@@ -287,14 +432,21 @@ export class EngagementsService {
         )
       throw e
     }
-    await this.log.log(caller, {
-      workspaceId: c.workspaceId,
-      resource: 'engagement',
-      subjectId: id,
-      action: 'update',
-      detail: Object.keys(data).join(', '),
-    })
-    return this.get(caller, id)
+    return this.detail(caller, id)
+  }
+
+  /** What `data` would write over `before` (the status follows the facts unless closed), and the fields it changes. */
+  private changeOf(
+    before: Record<string, unknown> & { status: string },
+    data: Prisma.EngagementUncheckedUpdateInput
+  ) {
+    const merged = { ...before, ...data }
+    const values: Prisma.EngagementUncheckedUpdateInput = {
+      ...data,
+      status: before.status === 'closed' ? 'closed' : this.statusFor(merged),
+    }
+    const changes = changesOf(loggable(before, true), loggable(values, true), ENGAGEMENT_FIELDS)
+    return { values, changes }
   }
 
   /** Proposed until an award amount is on file; active once the contract period is set. */
@@ -321,18 +473,26 @@ export class EngagementsService {
     const end = c.periodEnd.toISOString().slice(0, 7)
     if (period < start || period > end)
       throw new BadRequestException(`period must be within the contract (${start} to ${end})`)
-    const report = await this.prisma.monthlyReport.create({
-      data: { engagementId, period, dueDate: dueDate(period, c.reportDueDay) },
+    const due = dueDate(period, c.reportDueDay)
+    const report = await this.log.change(
+      caller,
+      (tx) => tx.monthlyReport.create({ data: { engagementId, period, dueDate: due } }),
+      (made) => ({
+        workspaceId: c.workspaceId,
+        resource: 'report',
+        subjectId: made.id,
+        action: 'create',
+        description: `Started ${monthName(period)} of ${c.name}`,
+        changes: [{ field: 'Due on', after: due.toISOString().slice(0, 10) }],
+      })
+    )
+    // A new month has no expenses; its checks are the findings this first run opens.
+    const findings = await this.checks.refresh(report.id)
+    return this.reportSummary({
+      ...report,
+      expenses: [],
+      checks: findings.map((f) => ({ severity: f.severity })),
     })
-    await this.checks.refresh(report.id)
-    await this.log.log(caller, {
-      workspaceId: c.workspaceId,
-      resource: 'report',
-      subjectId: report.id,
-      action: 'create',
-      detail: period,
-    })
-    return this.reportSummary({ ...report, expenses: [], checks: [] })
   }
 
   async createParticipant(
@@ -347,21 +507,25 @@ export class EngagementsService {
     allow(workspaceRole(caller, c.workspaceId, WRITE_ROLES))
     if (!input.participantId?.trim() || !input.displayName?.trim())
       throw new BadRequestException('participantId and displayName are required')
-    const p = await this.prisma.participant.create({
-      data: {
-        engagementId,
-        participantId: input.participantId.trim(),
-        displayName: input.displayName.trim(),
-        enrollmentStatus: input.enrollmentStatus === 'carryover' ? 'carryover' : 'new',
-      },
-      include: { documents: { include: { document: true } } },
-    })
-    await this.log.log(caller, {
-      workspaceId: c.workspaceId,
-      resource: 'participant',
-      subjectId: p.id,
-      action: 'create',
-    })
+    const data = {
+      engagementId,
+      participantId: input.participantId.trim(),
+      displayName: input.displayName.trim(),
+      enrollmentStatus: input.enrollmentStatus === 'carryover' ? 'carryover' : 'new',
+    }
+    const p = await this.log.change(
+      caller,
+      (tx) =>
+        tx.participant.create({ data, include: { documents: { include: { document: true } } } }),
+      (made) => ({
+        workspaceId: c.workspaceId,
+        resource: 'participant',
+        subjectId: made.id,
+        action: 'create',
+        description: `Added a participant to ${c.name}`,
+        changes: changesOf(null, data, PARTICIPANT_FIELDS),
+      })
+    )
     return participantDto(p)
   }
 

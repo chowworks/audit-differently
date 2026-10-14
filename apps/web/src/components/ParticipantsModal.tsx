@@ -27,7 +27,8 @@ export function ParticipantsModal({
   initialFileFor?: string
   onClose: () => void
   onAdd: () => void
-  onChanged: () => Promise<void>
+  /** After an upload into a participant's file, with the engagement as the upload answered it. */
+  onChanged: (engagement: EngagementDetail) => void
 }) {
   const [fileFor, setFileFor] = useState<string | null>(initialFileFor ?? null)
   const [q, setQ] = useState('')
@@ -177,7 +178,7 @@ function ParticipantFile({
   order: string[]
   onBack: () => void
   onSwitch: (id: string) => void
-  onChanged: () => Promise<void>
+  onChanged: (engagement: EngagementDetail) => void
 }) {
   const api = useApi()
   const [busy, setBusy] = useState<string | null>(null)
@@ -196,9 +197,16 @@ function ParticipantFile({
       form.append('workspaceId', c.workspaceId)
       form.append('engagementId', c.id)
       form.append('kind', item.key === 'enrollment-form' ? 'enrollment-form' : 'eligibility-record')
-      const doc = await api.upload<DocumentDto>('/documents', form)
-      await api.post(`/participants/${p.id}/documents`, { documentId: doc.id, purpose: item.key })
-      await onChanged()
+      // One call files the record under this item: stored, attached and logged together, or not at all.
+      form.append('attachTo', 'participant')
+      form.append('attachId', p.id)
+      form.append('purpose', item.key)
+      // The answer carries the engagement as it now stands: the file, the counts and the months' checks.
+      const doc = await api.upload<DocumentDto & { engagement?: EngagementDetail }>(
+        '/documents',
+        form
+      )
+      if (doc.engagement) onChanged(doc.engagement)
     } catch (e) {
       setError((e as Error).message)
     } finally {

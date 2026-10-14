@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { DocumentDto } from '@ad/types'
+import { DOCUMENT_KIND_LABELS, type DocumentDto } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
 
 /** Opens a document through a short-lived link from the API (which logs the read). */
@@ -28,7 +28,7 @@ export function DocumentLink({
         type="button"
         onClick={open}
         className={`cursor-pointer border-0 bg-transparent p-0 font-semibold text-accent hover:underline ${className}`}
-        title={`${doc.kind} · ${doc.fileName}${doc.sensitivity === 'personal' ? ' · personal: download only, logged' : ''}`}
+        title={`${DOCUMENT_KIND_LABELS[doc.kind]} · ${doc.fileName}${doc.sensitivity === 'personal' ? ' · personal: download only, logged' : ''}`}
       >
         {children ?? doc.fileName}
       </button>

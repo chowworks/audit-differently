@@ -21,7 +21,8 @@ import {
   type DeletionSummaryDto,
 } from '@ad/types'
 import { AccessLogService } from '../core/access-log.service'
-import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
+import { allow, staffName, tenantWhere, workspaceRole, type Caller } from '../core/caller'
+import { howMany } from '../core/changes'
 import { runAsSystem } from '../core/tenant-context'
 import { keyInWorkspace } from '../documents/documents.service'
 import { AuditPackageService, csv, safe } from '../engagements/audit-package.service'
@@ -55,6 +56,9 @@ interface StoredPart extends PartLayout {
 }
 
 const storedParts = (json: unknown): StoredPart[] => (Array.isArray(json) ? json : [])
+
+/** An export's content and which of its paths are personal records (for the access log's words). */
+type Content = ExportContent & { personalPaths: Set<string> }
 
 /** A part built and ready to send: what the response headers say, and `send`, which writes it. */
 export interface PartFile {
@@ -140,19 +144,13 @@ export class DeletionService {
 
   /**
    * Starts an export: works out the files, splits them into parts of at most about 1.5 GB of source data, and
-   * writes the DeletionRecord that names every part. Nothing is built yet; each part is built when it is
-   * downloaded (`downloadEngagementPart`).
+   * writes the DeletionRecord that names every part. Nothing is built or sent yet, so nothing is logged here; each
+   * part is built, and logged, when it is downloaded (`downloadEngagementPart`). One "Download export" click is one
+   * line.
    */
   async exportEngagement(caller: Caller, id: string): Promise<DeletionExportDto> {
     const c = await this.ownedEngagement(caller, id)
     const plan = await this.audit.plan(caller, id, { complete: true })
-    await this.log.log(caller, {
-      workspaceId: c.workspaceId,
-      resource: 'export',
-      subjectId: id,
-      action: 'export',
-      detail: `full export before deletion, ${plan.files} files, personal records included`,
-    })
     return this.begin(caller, {
       workspaceId: c.workspaceId,
       engagementId: id,
@@ -166,13 +164,6 @@ export class DeletionService {
     const w = await this.ownedWorkspace(caller, id)
     await this.noEngagements(id)
     const content = await this.workspaceContent(caller, w)
-    await this.log.log(caller, {
-      workspaceId: id,
-      resource: 'export',
-      subjectId: id,
-      action: 'export',
-      detail: `full export before deletion, ${content.objects.length} workspace documents, personal records included`,
-    })
     return this.begin(caller, {
       workspaceId: id,
       engagementId: null,
@@ -192,7 +183,7 @@ export class DeletionService {
   private async workspaceContent(
     caller: Caller,
     w: { id: string; name: string }
-  ): Promise<ExportContent> {
+  ): Promise<Content> {
     const docs = await this.prisma.document.findMany({
       where: { workspaceId: w.id, engagementId: null },
       orderBy: { uploadedAt: 'asc' },
@@ -200,6 +191,7 @@ export class DeletionService {
     const objects: ExportObject[] = []
     const index: (string | number)[][] = [['File', 'Document type', 'Uploaded']]
     const seen = new Set<string>()
+    const personalPaths = new Set<string>()
     const root = safe(`${w.name} - workspace records`)
     for (const d of docs) {
       if (!keyInWorkspace(d)) throw new NotFoundException()
@@ -208,6 +200,7 @@ export class DeletionService {
       while (seen.has(path))
         path = `${root}/${safe(d.fileName).replace(/(\.[^.]+)?$/, ` (${n++})$1`)}`
       seen.add(path)
+      if (d.sensitivity === 'personal') personalPaths.add(path)
       objects.push([path, d.storageKey, d.size ?? 0])
       index.push([path.slice(root.length + 1), d.kind, d.uploadedAt.toISOString().slice(0, 10)])
     }
@@ -218,7 +211,7 @@ export class DeletionService {
         [`${root}/README.txt`]: strToU8(
           [
             `WORKSPACE RECORDS: ${w.name}`,
-            `Generated ${new Date().toISOString()} by ${caller.displayName} from Audit Differently.`,
+            `Generated ${new Date().toISOString()} by ${staffName(caller)} from Audit Differently.`,
             'The documents filed to the workspace itself, not to an engagement, as they were uploaded.',
             'This is the full copy taken before the workspace was deleted.',
             '',
@@ -226,6 +219,7 @@ export class DeletionService {
         ),
         [`${root}/Index.csv`]: strToU8(csv(index)),
       },
+      personalPaths,
     }
   }
 
@@ -257,7 +251,8 @@ export class DeletionService {
         engagementId: o.engagementId,
         subjectName: o.subjectName,
         deletedById: caller.userId,
-        deletedByName: caller.displayName,
+        // The column keeps its name; like the access log's actorName it holds the owner's email (staffName).
+        deletedByName: staffName(caller),
         exportKey: `${prefix}-${stamp}`,
         parts: parts as unknown as Prisma.InputJsonValue,
         expiresAt: new Date(now.getTime() + RETAINED_COPY_DAYS * 24 * 60 * 60 * 1000),
@@ -316,10 +311,12 @@ export class DeletionService {
     rec: {
       id: string
       workspaceId: string
+      engagementId: string | null
+      subjectName: string
       parts: unknown
     },
     n: number,
-    content: ExportContent
+    content: Content
   ): Promise<PartFile> {
     const parts = storedParts(rec.parts)
     const stored = Number.isInteger(n) ? parts[n - 1] : undefined
@@ -329,12 +326,16 @@ export class DeletionService {
       throw new ConflictException(
         'The records changed after this export was prepared. Close this window and start the export again.'
       )
+    // Logged before a byte is built or sent: no export leaves without its line. So the line says the download
+    // started, which is true even when it then fails and is tried again (each try is its own line).
+    const subject = rec.engagementId ? rec.subjectName : `the workspace ${rec.subjectName}`
+    const personal = stored.paths.some((p) => content.personalPaths.has(p))
     await this.log.log(caller, {
       workspaceId: rec.workspaceId,
       resource: 'export',
       subjectId: rec.id,
       action: 'export',
-      detail: `full export before deletion, part ${n} of ${parts.length}`,
+      description: `Started downloading ${parts.length > 1 ? `part ${n} of ${parts.length} of ` : ''}the full export of ${subject} before deleting it: ${howMany(stored.paths.length, 'file')}${personal ? ', personal records included' : ''}`,
     })
     const dir = await mkdtemp(join(tmpdir(), 'ad-export-'))
     try {
@@ -458,7 +459,7 @@ export class DeletionService {
       resource: 'engagement',
       subjectId: id,
       action: 'delete',
-      detail: `${c.name}, permanent, after full export ${rec.id}`,
+      description: `Deleted the engagement ${c.name} permanently, after its full export`,
     })
     const folder = `${c.workspaceId}/${id}/`
     await this.storage.deleteByPrefix(folder)
@@ -490,7 +491,7 @@ export class DeletionService {
       resource: 'workspace',
       subjectId: id,
       action: 'delete',
-      detail: `${w.name}, permanent${rec ? `, after full export ${rec.id}` : ', no documents'}`,
+      description: `Deleted the workspace ${w.name} permanently${rec ? ', after its full export' : ', with no documents to export'}`,
     })
     const folder = `${id}/`
     await this.storage.deleteByPrefix(folder)

@@ -11,7 +11,7 @@ export function AddParticipantModal({
 }: {
   engagementId: string
   onClose: () => void
-  onAdded: () => Promise<void>
+  onAdded: (participant: ParticipantDto) => void
 }) {
   const api = useApi()
   const [participantId, setParticipantId] = useState('')
@@ -24,12 +24,12 @@ export function AddParticipantModal({
     setBusy(true)
     setError(null)
     try {
-      await api.post<ParticipantDto>(`/engagements/${engagementId}/participants`, {
+      const added = await api.post<ParticipantDto>(`/engagements/${engagementId}/participants`, {
         participantId,
         displayName,
         enrollmentStatus,
       })
-      await onAdded()
+      onAdded(added)
     } catch (e) {
       setError((e as Error).message)
       setBusy(false)

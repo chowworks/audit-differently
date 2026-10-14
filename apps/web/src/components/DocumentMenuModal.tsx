@@ -1,8 +1,14 @@
 import { useState } from 'react'
 import type { DocumentDto, DocumentKind } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
-import { shortDate, titleCase } from '@/lib/format'
+import { shortDate } from '@/lib/format'
 import { Button, ErrorNote, Field, Modal } from '@/components/ui'
+import { kindLabel } from '@/components/AttachModal'
+
+export interface DocumentChange {
+  added?: DocumentDto
+  removedId: string
+}
 
 /** What you can do with a document you already saved: open it, put a newer file in its place, or remove it. */
 export function DocumentMenuModal({
@@ -22,18 +28,19 @@ export function DocumentMenuModal({
     period: string | null
   }
   onClose: () => void
-  onChanged: () => Promise<void>
+  /** What changed: the new file in place of this one (`added` and `removedId`), or this one removed. */
+  onChanged: (change: DocumentChange) => void
 }) {
   const api = useApi()
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const run = async (fn: () => Promise<void>, close = true) => {
+  const run = async (fn: () => Promise<DocumentChange | void>) => {
     setBusy(true)
     setError(null)
     try {
-      await fn()
-      if (close) await onChanged()
+      const change = await fn()
+      if (change) onChanged(change)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -44,7 +51,8 @@ export function DocumentMenuModal({
     run(async () => {
       const { url } = await api.get<{ url: string }>(`/documents/${doc.id}/url`)
       window.open(url, '_blank', 'noopener')
-    }, false)
+    })
+  // One call: the new file and the old one's removal happen together, or not at all.
   const replace = () =>
     run(async () => {
       if (!file || !replaceWith) return
@@ -54,18 +62,22 @@ export function DocumentMenuModal({
       form.append('engagementId', replaceWith.engagementId)
       form.append('kind', replaceWith.kind)
       if (replaceWith.period) form.append('period', replaceWith.period)
-      await api.upload<DocumentDto>('/documents', form)
-      await api.del(`/documents/${doc.id}`)
+      form.append('replaces', doc.id)
+      const added = await api.upload<DocumentDto>('/documents', form)
+      return { added, removedId: doc.id }
     })
   const remove = () => {
     if (!confirm(`Remove ${doc.fileName}? The file is deleted.`)) return
-    void run(() => api.del(`/documents/${doc.id}`))
+    void run(async () => {
+      await api.del(`/documents/${doc.id}`)
+      return { removedId: doc.id }
+    })
   }
   return (
     <Modal title={doc.fileName} onClose={onClose}>
       <ErrorNote message={error} />
       <p className="mb-4 text-sm text-soft">
-        {titleCase(doc.kind)} · uploaded {shortDate(doc.uploadedAt)} ·{' '}
+        {kindLabel(doc.kind)} · uploaded {shortDate(doc.uploadedAt)} ·{' '}
         {Math.max(1, Math.round(doc.size / 1024))} KB
         {doc.sensitivity === 'personal'
           ? ' · personal record, download only, every read logged'
