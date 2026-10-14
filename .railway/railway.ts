@@ -12,8 +12,8 @@ import { bucket, defineRailway, github, postgres, preserve, project, service } f
  *   - REQUIRE_TENANT_RLS=on in every environment; NODE_ENV=production in production, set here, not by hand;
  *   - production Postgres has no public TCP proxy: it is reachable on Railway's private network only. The dev
  *     Postgres has one, because laptops develop against it, and it holds fictional seed data only;
- *   - production's Postgres volume is backed up daily and point-in-time recovery archives to the Postgres-PITR
- *     bucket (both switched on in that volume's settings; the bucket is declared for production only, dev holds
+ *   - production's Postgres volume is backed up daily and point-in-time recovery archives to the
+ *     Postgres-PITR-Prod-Archive bucket (both switched on in that volume's settings; the bucket is declared for production only, dev holds
  *     a fictional seed that `db:seed` recreates);
  *   - documents live in a private Cloudflare R2 bucket (R2_*), one per environment, never on the service's disk;
  *   - there is no demo sign-in: every environment signs people in through Clerk, dev with a dev instance.
@@ -75,9 +75,11 @@ export default defineRailway((ctx) => {
   }
 
   // Production: private network only, no seed, NODE_ENV fixed here, and the bucket point-in-time recovery
-  // archives to (switch PITR and the daily backup on in the Postgres volume's settings, once).
+  // archives to. Switching PITR on in the Postgres volume's settings creates that bucket itself (it took a
+  // random name here, because a declared Postgres-PITR already held that one); it was renamed to this, and the
+  // archive settings on Postgres use its storage name, which a rename does not change.
   Postgres.networking = { privateNetworkEndpoint: 'postgres' }
-  const PostgresPITR = bucket('Postgres-PITR', { region: 'iad' })
+  const PostgresPITR = bucket('Postgres-PITR-Prod-Archive', { region: 'iad' })
   const api = service('audit-differently', {
     source: github('chowworks/audit-differently', { checkSuites: true }),
     build: {
