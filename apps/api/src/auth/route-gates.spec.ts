@@ -66,6 +66,10 @@ function routes(): { route: string; gated: boolean; admin: boolean; skipsTerms: 
 const PUBLIC = [
   // Which system this is; the answer holds no configuration (health.controller.spec).
   'GET /api/health',
+  // How many proof uploads failed and how many requests answered 5xx in the last 15 minutes, for the uptime
+  // monitors: status, count and window only, 503 when any, each result reused for a minute (health.controller.spec).
+  'GET /api/health/upload-failures',
+  'GET /api/health/server-errors',
   // The file behind a signed, expiring token that the gated (and logged) /documents/:id/url issued; local disk
   // only, 404 when R2 is configured. The signature is the credential, as with an R2 signed URL.
   'GET /api/documents/local/:token',

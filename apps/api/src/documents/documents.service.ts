@@ -46,6 +46,7 @@ import {
 import { AccessLogService } from '../core/access-log.service'
 import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { howMany, monthName } from '../core/changes'
+import { ServiceFailureLog } from '../core/service-failure-log'
 import { EngagementsService } from '../engagements/engagements.service'
 import { ParticipantsService } from '../participants/participants.service'
 import { PrismaService } from '../prisma/prisma.service'
@@ -112,7 +113,8 @@ export class DocumentsService {
     @Inject(DOCUMENT_STORAGE) private readonly storage: DocumentStorage,
     private readonly reports: ReportsService,
     private readonly participants: ParticipantsService,
-    private readonly engagements: EngagementsService
+    private readonly engagements: EngagementsService,
+    private readonly failures: ServiceFailureLog
   ) {}
 
   /** Checks an upload (who, what kind, which bytes, where) and readies it; nothing is stored yet. */
@@ -159,7 +161,8 @@ export class DocumentsService {
         storageKey: `${objectFolder(where)}${randomUUID()}.${ext}`,
         uploadedById: caller.userId,
       },
-      file.buffer
+      file.buffer,
+      () => void this.failures.record('upload', 'POST /api/documents')
     )
   }
 

@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common'
+import { HttpException, Logger } from '@nestjs/common'
 import type { Document, Prisma } from '@prisma/client'
 import { DOCUMENT_KIND_LABELS, type DocumentKind } from '@ad/types'
 import { monthName } from '../core/changes'
@@ -26,6 +26,8 @@ export function describe(
  * An upload that passed every check (role, type, bytes, size) and is not stored yet. `commit` puts the object
  * in storage and then runs the one transaction that creates its row (with `create`) and whatever goes with it;
  * if that transaction fails, the object is deleted again, best effort, so a failure leaves nothing half done.
+ * A failure that is not the request's fault (storage refused the object, or the save failed with anything but a 4xx)
+ * calls `onFailure`, which counts it for the upload-failures health check.
  */
 export class StagedFile {
   private static readonly logger = new Logger('StagedFile')
@@ -42,7 +44,8 @@ export class StagedFile {
       period: string | null
       storageKey: string
     },
-    private readonly buffer: Buffer
+    private readonly buffer: Buffer,
+    private readonly onFailure: () => void = () => {}
   ) {}
 
   async create(tx: Prisma.TransactionClient): Promise<Document> {
@@ -51,11 +54,17 @@ export class StagedFile {
   }
 
   async commit<T>(save: () => Promise<T>): Promise<T> {
-    await this.storage.upload(this.data.storageKey, this.buffer, this.data.contentType)
+    try {
+      await this.storage.upload(this.data.storageKey, this.buffer, this.data.contentType)
+    } catch (e) {
+      this.onFailure()
+      throw e
+    }
     try {
       return await save()
     } catch (e) {
       this.row = null
+      if (!(e instanceof HttpException && e.getStatus() < 500)) this.onFailure()
       StagedFile.logger.error(
         `Saving the upload ${this.data.storageKey} failed, so its object is deleted: ${(e as Error).message}`
       )

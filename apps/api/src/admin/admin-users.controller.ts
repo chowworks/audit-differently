@@ -12,8 +12,8 @@ import { AdminUsersService } from './admin-users.service'
 export class AdminUsersController {
   constructor(private readonly users: AdminUsersService) {}
 
-  /** One Clerk list call per search. */
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  /** One Clerk list call per search; the page searches as the admin types, so the limit allows for that. */
+  @Throttle({ default: { limit: 90, ttl: 60_000 } })
   @Get('users')
   search(@Query('q') q?: string): Promise<AdminUserDto[]> {
     return this.users.search(q)

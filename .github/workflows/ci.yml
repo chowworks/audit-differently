@@ -35,10 +35,12 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test
+      - run: npm run test:scripts
 
   # Everything below runs on main only, after CI passes. It is switched on by the repository variable
   # DEPLOY_ENABLED=true and aimed by variables, so the same jobs serve dev now and production later:
-  #   secrets:   RAILWAY_TOKEN (a project token for ONE Railway environment), VERCEL_TOKEN
+  #   secrets:   RAILWAY_TOKEN (a project token for ONE Railway environment), VERCEL_TOKEN,
+  #              BETTERSTACK_API_TOKEN (optional; the monitoring sync skips without it)
   #   variables: RAILWAY_API_SERVICE (api-dev now, audit-differently for production), VERCEL_ORG_ID,
   #              VERCEL_PROJECT_ID, API_URL and WEB_URL (the public addresses the smoke test checks)
   # Railway is declared in .railway/railway.ts; a project token is tied to one environment, so the apply and the
@@ -154,3 +156,26 @@ jobs:
           bad=$(curl -s -D - -o /dev/null -H "Origin: https://evil.example" "${{ vars.API_URL }}/api/health" | grep -ci "access-control-allow-origin" || true)
           echo "web origin allowed: $ok, foreign origin allowed: $bad"
           [ "$ok" -ge 1 ] && [ "$bad" -eq 0 ]
+
+  # Applies ops/monitoring.ts to Better Stack: the monitors, the "Audit Differently" monitor group and this product's
+  # section of the shared status page (docs/monitoring.md). Runs after the smoke test, so the health routes it watches
+  # are live on API_URL before a monitor checks them. Never deletes anything. Without the BETTERSTACK_API_TOKEN secret
+  # the script prints that it skipped and exits 0; nothing depends on this job.
+  betterstack:
+    name: Sync Better Stack monitoring (ops/monitoring.ts)
+    needs: [smoke-test]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      # No npm install: the script uses only Node's own modules.
+      - run: npm run betterstack:sync
+        env:
+          BETTERSTACK_API_TOKEN: ${{ secrets.BETTERSTACK_API_TOKEN }}
+          API_URL: ${{ vars.API_URL }}

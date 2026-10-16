@@ -171,6 +171,7 @@ function service() {
   const engagements = {
     detail: jest.fn(async (_caller: Caller, id: string) => ({ id, participantsComplete: 1 })),
   }
+  const failures = { record: jest.fn().mockResolvedValue(undefined) }
   return {
     service: new DocumentsService(
       prisma as never,
@@ -178,10 +179,12 @@ function service() {
       storage,
       reports as never,
       participants as never,
-      engagements as never
+      engagements as never,
+      failures as never
     ),
     prisma,
     log,
+    failures,
     storage,
     reports,
     participants,
@@ -306,7 +309,7 @@ describe('DocumentsService', () => {
   })
 
   it('deletes the stored object again when the save fails, and logs nothing', async () => {
-    const { service: s, prisma, storage, log } = service()
+    const { service: s, prisma, storage, log, failures } = service()
     prisma.document.create.mockRejectedValueOnce(new Error('database down'))
     await expect(s.upload(member('owner'), file, upload('invoice'))).rejects.toThrow(
       'database down'
@@ -315,6 +318,42 @@ describe('DocumentsService', () => {
     expect(storage.delete).toHaveBeenCalledWith(storage.upload.mock.calls[0][0])
     expect(log.entries).toEqual([])
     expect(Logger.prototype.error).toHaveBeenCalled()
+    // not the person's fault, so the upload-failures health check counts it
+    expect(failures.record).toHaveBeenCalledWith('upload', 'POST /api/documents')
+  })
+
+  it('counts an upload storage refused for the health check, and saves nothing', async () => {
+    const { service: s, prisma, storage, failures } = service()
+    storage.upload.mockRejectedValueOnce(new Error('InternalError'))
+    await expect(s.upload(member('owner'), file, upload('invoice'))).rejects.toThrow(
+      'InternalError'
+    )
+    expect(prisma.document.create).not.toHaveBeenCalled()
+    expect(failures.record).toHaveBeenCalledWith('upload', 'POST /api/documents')
+  })
+
+  it("does not count a refusal that is the request's fault", async () => {
+    const { service: s, reports, storage, failures } = service()
+    // the record is checked inside the save, after the object is stored
+    reports.attachToExpense.mockImplementationOnce(
+      async (_c: Caller, _id: string, _p: string, staged: StagedFile) =>
+        staged.commit(() => Promise.reject(new NotFoundException()))
+    )
+    await expect(
+      s.upload(
+        member('bookkeeper'),
+        file,
+        upload('invoice', {
+          engagementId: 'e-1',
+          period: '2026-09',
+          attachTo: 'expense',
+          attachId: 'x-1',
+          purpose: 'invoice',
+        })
+      )
+    ).rejects.toThrow(NotFoundException)
+    expect(storage.delete).toHaveBeenCalled()
+    expect(failures.record).not.toHaveBeenCalled()
   })
 
   it('uploads and attaches in one call: the record decides, and the answer carries the month', async () => {
