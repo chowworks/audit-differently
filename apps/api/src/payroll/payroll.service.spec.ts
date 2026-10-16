@@ -248,7 +248,8 @@ function setup(status = 'draft', docs: Row[] = []) {
     storage as never,
     reports,
     {} as never,
-    {} as never
+    {} as never,
+    { record: jest.fn() } as never
   )
   const s = new PayrollService(
     prisma as never,

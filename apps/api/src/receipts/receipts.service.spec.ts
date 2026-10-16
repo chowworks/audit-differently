@@ -238,7 +238,8 @@ function setup(status = 'draft', docs: Doc[] = [], expenses = SEPTEMBER) {
     storage as never,
     reports,
     {} as never,
-    {} as never
+    {} as never,
+    { record: jest.fn() } as never
   )
   const stats = { record: jest.fn() }
   const s = new ReceiptsService(
