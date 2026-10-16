@@ -2,14 +2,17 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import {
   DOCUMENT_KIND_LABELS,
   DOCUMENT_KINDS,
+  ENGAGEMENT_CODE_PATTERN,
   ENGAGEMENT_KIND_LABELS,
   ENGAGEMENT_KINDS,
+  ENGAGEMENT_TRACK_LABELS,
+  ENGAGEMENT_TRACKS,
   WRITE_ROLES,
-  type BudgetCategory,
   type DocumentKind,
   type EngagementDetail,
   type EngagementInput,
   type EngagementKind,
+  type EngagementTrack,
   type EngagementStatus,
   type EngagementSummary,
   type LoggedChange,
@@ -26,6 +29,8 @@ import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { changesOf, howMany, monthName, type Fields } from '../core/changes'
 import { documentDto } from '../documents/document.dto'
 import { PrismaService } from '../prisma/prisma.service'
+import { budgetItemsOf } from '../workspaces/budget-items'
+import { allTagTypes, cleanTags, tagWords } from '../workspaces/tags'
 import { cleanEligibilityItems, eligibilityItemsOf } from './eligibility'
 
 const iso = (d: Date) => d.toISOString()
@@ -57,17 +62,18 @@ const ENGAGEMENT_FIELDS: Fields = {
   kind: { label: 'Kind', show: 'text', labels: ENGAGEMENT_KIND_LABELS },
   name: { label: 'Name', show: 'text' },
   status: { label: 'Status', show: 'text', labels: STATUS_WORDS },
+  tracks: { label: 'Records kept', show: 'list', labels: ENGAGEMENT_TRACK_LABELS },
   funder: { label: 'Funding organization', show: 'text' },
   funderContact: { label: 'Funding organization contact' },
   solicitation: { label: 'Proposal name', show: 'text' },
   number: { label: 'Contract number', show: 'text' },
+  code: { label: 'Engagement code', show: 'text' },
   requestedAmount: { label: 'Amount requested', show: 'money' },
   awardAmount: { label: 'Award amount', show: 'money' },
   proposalSubmittedOn: { label: 'Submitted on', show: 'date' },
   awardedOn: { label: 'Award letter dated', show: 'date' },
   periodStart: { label: 'Starts', show: 'date' },
   periodEnd: { label: 'Ends', show: 'date' },
-  fundingSources: { label: 'Source of funds', show: 'list' },
   reportDueDay: { label: 'Monthly report due on day', show: 'text' },
   // On no screen today; kept for an API caller.
   indirectTerms: { label: 'Indirect terms' },
@@ -83,11 +89,31 @@ const ENGAGEMENT_FIELDS: Fields = {
   ),
 }
 
+/** The fields with the engagement's tags in the workspace's words ("Funding source: Youth Workforce Fund"). */
+const fieldsFor = (w: { tagTypes?: unknown }): Fields => ({
+  ...ENGAGEMENT_FIELDS,
+  tags: { label: 'Tags', show: 'list', labels: tagWords(w) },
+})
+
+/** Which unique field a duplicate broke: the engagement code, or the contract number. */
+function duplicateWords(
+  e: Prisma.PrismaClientKnownRequestError,
+  input: Partial<EngagementInput>
+): string {
+  const target = (e.meta as { target?: unknown } | undefined)?.target
+  const fields = Array.isArray(target) ? target.map(String) : [String(target ?? '')]
+  return fields.some((f) => f.includes('code'))
+    ? `Another engagement in this workspace uses the code ${input.code?.trim().toUpperCase()}`
+    : `A contract numbered ${input.number} already exists in this workspace`
+}
+
 /** A participant is personal: every field by name alone. */
 export const PARTICIPANT_FIELDS: Fields = {
   displayName: { label: 'Name' },
   participantId: { label: 'Participant number' },
   enrollmentStatus: { label: 'Enrollment' },
+  // A participant's tags are personal data (an age group, a funding stream): by name alone.
+  tags: { label: 'Tags' },
 }
 
 /**
@@ -144,12 +170,18 @@ export class EngagementsService {
       include: {
         expenses: { select: { allocatedAmount: true } },
         checks: { where: { status: 'open' }, select: { severity: true } },
+        reopenings: {
+          select: { reopenedAt: true },
+          orderBy: { reopenedAt: 'desc' as const },
+          take: 1,
+        },
       },
       orderBy: { period: 'asc' as const },
     },
     documents: { orderBy: { uploadedAt: 'desc' as const } },
     participants: { select: { documents: { select: { purpose: true } } } },
-    _count: { select: { budgetLines: true } },
+    // The lines with an amount entered: a line a new engagement ticked starts at $0.
+    _count: { select: { budgetLines: { where: { amount: { gt: 0 } } } } },
   }
 
   /**
@@ -215,8 +247,7 @@ export class EngagementsService {
       solicitation: c.solicitation,
       proposalSubmittedOn: c.proposalSubmittedOn ? iso(c.proposalSubmittedOn) : null,
       awardedOn: c.awardedOn ? iso(c.awardedOn) : null,
-      fundingSources: c.fundingSources,
-      fundingOptions: c.workspace.fundingSources,
+      tags: c.tags,
       reportDueDay: c.reportDueDay,
       indirectTerms: c.indirectTerms,
       reportTo: c.reportTo,
@@ -227,11 +258,15 @@ export class EngagementsService {
       authorizerOrganization: c.authorizerOrganization,
       eligibilityItems: eligibilityItemsOf(c),
       budgetLines: c.budgetLines.map((b) => ({
-        category: b.category as BudgetCategory,
+        id: b.id,
+        category: b.category,
+        label: budgetItemsOf(c.workspace).find((i) => i.key === b.category)?.label ?? b.category,
         reportLine: b.reportLine as ReportLine,
         amount: Number(b.amount),
         narrative: b.narrative,
       })),
+      budgetOptions: budgetItemsOf(c.workspace),
+      tagTypes: allTagTypes(c.workspace),
       participants: c.participants.map(participantDto),
       canManage: workspaceRole(caller, c.workspaceId, WRITE_ROLES),
     }
@@ -251,6 +286,13 @@ export class EngagementsService {
       const name = input.name?.trim()
       if (!name) throw bad('An engagement needs a name')
       out.name = name
+    }
+    // A new engagement that does not say keeps every record (the column's default).
+    if (has('tracks') && input.tracks !== undefined) {
+      if (!Array.isArray(input.tracks) || input.tracks.some((t) => !ENGAGEMENT_TRACKS.includes(t)))
+        throw bad('tracks may hold only proposal, award-letter and contract')
+      // In the list's own order, once each, so a Save that reorders nothing is no change.
+      out.tracks = ENGAGEMENT_TRACKS.filter((t) => input.tracks!.includes(t))
     }
     const text = (
       k:
@@ -272,6 +314,12 @@ export class EngagementsService {
     text('funderContact')
     text('solicitation')
     text('number')
+    if (has('code')) {
+      const code = input.code?.trim().toUpperCase() || null
+      if (code && !ENGAGEMENT_CODE_PATTERN.test(code))
+        throw bad('The engagement code is 2 to 20 letters, digits and hyphens')
+      out.code = code
+    }
     text('indirectTerms')
     text('reportTo')
     text('submissionMethod')
@@ -316,8 +364,6 @@ export class EngagementsService {
     day('awardedOn')
     day('periodStart')
     day('periodEnd')
-    if (has('fundingSources'))
-      out.fundingSources = (input.fundingSources ?? []).map((f) => String(f).trim()).filter(Boolean)
     if (has('reportDueDay')) {
       const n = input.reportDueDay == null ? 12 : Number(input.reportDueDay)
       if (!Number.isInteger(n) || n < 1 || n > 28)
@@ -345,10 +391,16 @@ export class EngagementsService {
       'Only an owner or bookkeeper of the workspace adds an engagement'
     )
     const data = this.data(input, false)
+    const w = (await this.prisma.workspace.findFirst({ where: { id: input.workspaceId } })) ?? {}
+    if (input.tags !== undefined) data.tags = cleanTags(input.tags, w, 'engagement')
     if (data.periodStart && data.periodEnd && (data.periodEnd as Date) < (data.periodStart as Date))
       throw new BadRequestException('The engagement must end after it starts')
     let created: { id: string }
     const values = { ...data, status: this.statusFor(data) }
+    const budget = await this.enabledItems(input)
+    const budgetChange: LoggedChange[] = budget.length
+      ? [{ field: 'Budget lines', after: budget.map((i) => i.label).join(', ') }]
+      : []
     try {
       created = await this.log.change(
         caller,
@@ -357,6 +409,17 @@ export class EngagementsService {
             data: {
               ...(values as Prisma.EngagementUncheckedCreateInput),
               workspaceId: input.workspaceId,
+              // Each budget item it uses is a line of $0 until the approved budget is entered (step 4).
+              ...(budget.length && {
+                budgetLines: {
+                  create: budget.map((i) => ({
+                    category: i.key,
+                    reportLine: i.reportLine,
+                    amount: '0.00',
+                    sortOrder: i.sortOrder,
+                  })),
+                },
+              }),
             },
             select: { id: true },
           }),
@@ -366,17 +429,29 @@ export class EngagementsService {
           subjectId: made.id,
           action: 'create',
           description: `Created the engagement ${values.name as string}`,
-          changes: changesOf(null, loggable(values, false), ENGAGEMENT_FIELDS),
+          changes: [...changesOf(null, loggable(values, false), fieldsFor(w)), ...budgetChange],
         })
       )
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
-        throw new BadRequestException(
-          `A contract numbered ${input.number} already exists in this workspace`
-        )
+        throw new BadRequestException(duplicateWords(e, input))
       throw e
     }
     return this.detail(caller, created.id)
+  }
+
+  /** The workspace's budget items a new engagement uses (`budgetItems`, keys), in the list's order. */
+  private async enabledItems(input: EngagementInput) {
+    if (input.budgetItems === undefined) return []
+    if (!Array.isArray(input.budgetItems))
+      throw new BadRequestException('budgetItems must be a list of budget item keys')
+    const w = await this.prisma.workspace.findFirst({ where: { id: input.workspaceId } })
+    const items = budgetItemsOf(w ?? {})
+    const unknown = input.budgetItems.filter((k) => !items.some((i) => i.key === k))
+    if (unknown.length) throw new BadRequestException("Choose from the workspace's budget items")
+    return items
+      .map((i, sortOrder) => ({ ...i, sortOrder }))
+      .filter((i) => input.budgetItems!.includes(i.key))
   }
 
   /** Changes to an engagement's facts; the workspace cannot change. */
@@ -385,10 +460,15 @@ export class EngagementsService {
     id: string,
     input: Partial<EngagementInput>
   ): Promise<EngagementDetail> {
-    const c = await this.prisma.engagement.findFirst({ where: { id, ...tenantWhere(caller) } })
+    const c = await this.prisma.engagement.findFirst({
+      where: { id, ...tenantWhere(caller) },
+      include: { workspace: true },
+    })
     if (!c) throw new NotFoundException()
     allow(workspaceRole(caller, c.workspaceId, WRITE_ROLES), 'Only an owner or bookkeeper edits it')
     const data = this.data(input, true)
+    if ('tags' in input) data.tags = cleanTags(input.tags, c.workspace, 'engagement', c.tags)
+    const fields = fieldsFor(c.workspace)
     const start = (data.periodStart as Date | null | undefined) ?? c.periodStart
     const end = (data.periodEnd as Date | null | undefined) ?? c.periodEnd
     if (start && end && end < start)
@@ -399,7 +479,7 @@ export class EngagementsService {
       JSON.stringify(data.eligibilityItems) === JSON.stringify(eligibilityItemsOf(c))
     )
       delete data.eligibilityItems
-    if (this.changeOf(c, data).changes.length === 0) return this.detail(caller, id)
+    if (this.changeOf(c, data, fields).changes.length === 0) return this.detail(caller, id)
     try {
       await this.log.change(
         caller,
@@ -407,7 +487,7 @@ export class EngagementsService {
           // Read again inside the transaction, so the line describes the row this update changed.
           const before = await tx.engagement.findFirst({ where: { id, ...tenantWhere(caller) } })
           if (!before) throw new NotFoundException()
-          const change = this.changeOf(before, data)
+          const change = this.changeOf(before, data, fields)
           await tx.engagement.update({ where: { id }, data: change.values })
           return { before, ...change }
         },
@@ -427,9 +507,7 @@ export class EngagementsService {
       )
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
-        throw new BadRequestException(
-          `A contract numbered ${input.number} already exists in this workspace`
-        )
+        throw new BadRequestException(duplicateWords(e, input))
       throw e
     }
     return this.detail(caller, id)
@@ -438,14 +516,15 @@ export class EngagementsService {
   /** What `data` would write over `before` (the status follows the facts unless closed), and the fields it changes. */
   private changeOf(
     before: Record<string, unknown> & { status: string },
-    data: Prisma.EngagementUncheckedUpdateInput
+    data: Prisma.EngagementUncheckedUpdateInput,
+    fields: Fields
   ) {
     const merged = { ...before, ...data }
     const values: Prisma.EngagementUncheckedUpdateInput = {
       ...data,
       status: before.status === 'closed' ? 'closed' : this.statusFor(merged),
     }
-    const changes = changesOf(loggable(before, true), loggable(values, true), ENGAGEMENT_FIELDS)
+    const changes = changesOf(loggable(before, true), loggable(values, true), fields)
     return { values, changes }
   }
 
@@ -498,10 +577,11 @@ export class EngagementsService {
   async createParticipant(
     caller: Caller,
     engagementId: string,
-    input: { participantId: string; displayName: string; enrollmentStatus?: string }
+    input: { participantId: string; displayName: string; enrollmentStatus?: string; tags?: unknown }
   ): Promise<ParticipantDto> {
     const c = await this.prisma.engagement.findFirst({
       where: { id: engagementId, ...tenantWhere(caller) },
+      include: { workspace: true },
     })
     if (!c) throw new NotFoundException()
     allow(workspaceRole(caller, c.workspaceId, WRITE_ROLES))
@@ -512,6 +592,7 @@ export class EngagementsService {
       participantId: input.participantId.trim(),
       displayName: input.displayName.trim(),
       enrollmentStatus: input.enrollmentStatus === 'carryover' ? 'carryover' : 'new',
+      tags: cleanTags(input.tags, c.workspace, 'participant'),
     }
     const p = await this.log.change(
       caller,
@@ -536,7 +617,9 @@ export class EngagementsService {
     name: string
     funder: string | null
     number: string | null
+    code: string | null
     status: string
+    tracks: string[]
     periodStart: Date | null
     periodEnd: Date | null
     requestedAmount: unknown
@@ -563,7 +646,9 @@ export class EngagementsService {
       name: c.name,
       funder: c.funder,
       number: c.number,
+      code: c.code,
       status: c.status as EngagementStatus,
+      tracks: c.tracks as EngagementTrack[],
       periodStart: c.periodStart ? iso(c.periodStart) : null,
       periodEnd: c.periodEnd ? iso(c.periodEnd) : null,
       requestedAmount: c.requestedAmount == null ? null : Number(c.requestedAmount),
@@ -586,6 +671,8 @@ export class EngagementsService {
     submittedAt: Date | null
     expenses: { allocatedAmount: unknown }[]
     checks: { severity: string }[]
+    /** The latest reopening first, if any. */
+    reopenings?: { reopenedAt: Date }[]
   }): ReportSummary {
     return {
       id: r.id,
@@ -593,6 +680,7 @@ export class EngagementsService {
       status: r.status as ReportStatus,
       dueDate: iso(r.dueDate),
       submittedAt: r.submittedAt ? iso(r.submittedAt) : null,
+      lastReopenedAt: r.reopenings?.[0] ? iso(r.reopenings[0].reopenedAt) : null,
       billedThisPeriod: r.expenses.reduce((t, e) => t + Number(e.allocatedAmount), 0),
       expenseCount: r.expenses.length,
       openBlockers: r.checks.filter((k) => k.severity === 'blocker').length,
@@ -607,6 +695,7 @@ export function participantDto(p: {
   displayName: string
   enrollmentStatus: string
   currentStatus: string
+  tags: string[]
   documents: { purpose: string; document: Parameters<typeof documentDto>[0] }[]
 }): ParticipantDto {
   return {
@@ -615,6 +704,7 @@ export function participantDto(p: {
     displayName: p.displayName,
     enrollmentStatus: p.enrollmentStatus,
     currentStatus: p.currentStatus,
+    tags: p.tags,
     documents: p.documents.map((d) => ({
       purpose: d.purpose,
       document: documentDto(d.document),

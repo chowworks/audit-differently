@@ -1,35 +1,50 @@
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { useUser } from '@clerk/clerk-react'
-import {
-  ROLE_LABELS,
-  type AdminListDto,
-  type AdminUserDto,
-  type AdminWorkspaceDetail,
-  type AdminWorkspaceDto,
-  type CreateWorkspaceRequest,
-  type PlatformRoleChangeDto,
-} from '@ad/types'
-import { useApi, useLoad } from '@/hooks/useApi'
-import { ME_CHANGED_EVENT } from '@/services/api'
-import { shortDate } from '@/lib/format'
-import {
-  Button,
-  Card,
-  Chip,
-  Empty,
-  ErrorNote,
-  Field,
-  Modal,
-  SavedMark,
-  inputClass,
-} from '@/components/ui'
-import { HandCard } from '@/components/HandCard'
+import { Link } from 'react-router-dom'
+import { Icon, type IconName } from '@/components/icons'
 
 /**
- * Admin tools, for the platform admin (Clerk publicMetadata.role = admin): every workspace with its people, creating
- * one for a customer, and who else is an admin. Workspace level only: nothing here reads an engagement, a record or
- * an access log.
+ * The tools, in the order the landing page shows them. Each tool's page reads its header from here (AdminToolHead):
+ * the tile's icon and title, `sub` (one line: what to do here) and `how` (the longer explanation, behind "How this
+ * works"). A new tool adds an entry here and uses AdminToolHead and AdminHow (CLAUDE.md, "Admin tools").
+ */
+const TOOLS: {
+  to: string
+  icon: IconName
+  title: string
+  text: string
+  sub: string
+  how: string
+}[] = [
+  {
+    to: '/admin/admins',
+    icon: 'shield',
+    title: 'Manage admins',
+    text: 'Find a person and make them a platform admin, or take that away. Every change is kept.',
+    sub: 'Make a person a platform admin, or take that away.',
+    how: "Platform admins set up workspaces and their people; they never read a workspace's records. Nobody changes their own role, so the platform always keeps an admin, and there are at most 20. Every attempt is kept under Admin changes.",
+  },
+  {
+    to: '/admin/workspaces',
+    icon: 'building',
+    title: 'Manage workspaces',
+    text: 'Create a workspace for a customer with its first owner, and keep its people and lists.',
+    sub: 'Set up a workspace for each customer, and keep its people and lists.',
+    how: 'A new workspace names its first owner by email; they get it when they sign in. Open a workspace to rename it or change its people and lists. What a workspace records (its engagements, documents and access log) stays its own: nothing here opens it.',
+  },
+  {
+    to: '/admin/email',
+    icon: 'mail',
+    title: 'Email administration',
+    text: 'See emailed receipts that went nowhere or were refused or failed, and run them again.',
+    sub: "Emails that didn't get filed. Fix the cause, then run one again.",
+    how: "An email shows here when it reached no workspace (an unknown address, a sender who couldn't be verified, or a failure before anyone knew whose it was), or when a workspace's email was refused or failed. You see who sent it, to which address and its subject, never its attachments. Run again puts it back in the queue; the page checks what became of it for a minute. Emails are removed 30 days after they arrive.",
+  },
+]
+
+const tool = (to: string) => TOOLS.find((t) => t.to === to)!
+
+/**
+ * Admin tools, for the platform admin (Clerk publicMetadata.role = admin): one tile per tool. Workspace level only:
+ * no tool opens an engagement, a record or an access log.
  */
 export function AdminPage() {
   return (
@@ -39,384 +54,72 @@ export function AdminPage() {
           <p className="ad-eyebrow">Platform admin</p>
           <h1 className="ad-h1">Admin tools</h1>
           <p className="ad-sub">
-            Set up a workspace for each customer and its first owner, and keep its people and lists.
-            What a workspace records stays its own: nothing here opens an engagement or a document.
+            Tools for running the platform. What a workspace records stays its own.
           </p>
         </div>
       </div>
-      <div className="grid gap-6">
-        <Workspaces />
-        <Admins />
+      <div className="ad-tools">
+        {TOOLS.map((t) => (
+          <Link key={t.to} to={t.to} className="ad-tool">
+            <span className="ad-tool-icon">
+              <Icon name={t.icon} size={28} />
+            </span>
+            <span className="ad-tool-title">{t.title}</span>
+            <span className="ad-tool-text">{t.text}</span>
+            <span className="ad-tool-open">Open tool →</span>
+          </Link>
+        ))}
+        <div className="ad-tool ad-tool-more">
+          <span className="ad-tool-title">More tools coming</span>
+          <span className="ad-tool-text">New platform tools will appear here.</span>
+        </div>
       </div>
     </>
   )
 }
 
-function Workspaces() {
-  const { data, error, loading, reload } = useLoad<AdminWorkspaceDto[]>('/admin/workspaces')
-  const [creating, setCreating] = useState(false)
-  const navigate = useNavigate()
+/** A tool page's breadcrumb (Admin tools / the tool) and header: the tile's icon, the title and one line. */
+export function AdminToolHead({ to }: { to: string }) {
+  const t = tool(to)
   return (
-    <div className="grid gap-4 lg:grid-cols-4">
-      <div className="lg:col-span-3">
-        <Card
-          title="Workspaces"
-          aside={
-            <Button kind="primary" size="sm" onClick={() => setCreating(true)}>
-              + Create a workspace
-            </Button>
-          }
-        >
-          <ErrorNote message={error} />
-          {loading && !data && <Empty>Loading…</Empty>}
-          {data?.length === 0 && <Empty>No workspace yet. Create the first one.</Empty>}
-          {!!data?.length && (
-            <div className="ad-tablewrap">
-              <table className="ad-table">
-                <thead>
-                  <tr>
-                    <th>Workspace</th>
-                    <th>People</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.map((w) => (
-                    <tr key={w.id}>
-                      <td>
-                        <Link
-                          to={`/admin/workspaces/${w.id}`}
-                          className="font-bold text-navy no-underline hover:underline"
-                        >
-                          {w.name}
-                        </Link>
-                        <span className="ad-table-sub">
-                          Created {shortDate(w.createdAt)} · {w.memberCount}{' '}
-                          {w.memberCount === 1 ? 'person' : 'people'}
-                          {!w.termsAcceptedAt && ' · Terms not yet accepted by an owner'}
-                        </span>
-                      </td>
-                      <td>
-                        <ul className="grid gap-1">
-                          {w.members.map((m) => (
-                            <li key={m.userId} className="text-sm">
-                              {m.email ?? m.displayName}{' '}
-                              <span className="text-soft">{ROLE_LABELS[m.role].toLowerCase()}</span>{' '}
-                              {m.pending && <Chip tone="warn">invited</Chip>}
-                            </li>
-                          ))}
-                        </ul>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
+    <>
+      <AdminCrumbs tool={t.title} />
+      <div className="ad-toolhead">
+        <span className="ad-tool-icon">
+          <Icon name={t.icon} size={28} />
+        </span>
+        <div>
+          <h1 className="ad-h1">{t.title}</h1>
+          <p className="ad-sub">{t.sub}</p>
+        </div>
       </div>
-      <div className="grid content-start gap-4">
-        <HandCard lead="One workspace per customer.">
-          <p>
-            Name its first owner by email. They see the workspace when they first sign in with that
-            address, accept the Terms, and invite their own team.
-          </p>
-        </HandCard>
-      </div>
-      {creating && (
-        <CreateWorkspaceModal
-          onClose={() => setCreating(false)}
-          onCreated={async (w) => {
-            setCreating(false)
-            await reload()
-            // An admin who named themself the first owner is now a member: the app asks /me again.
-            window.dispatchEvent(new Event(ME_CHANGED_EVENT))
-            navigate(`/admin/workspaces/${w.id}`)
-          }}
-        />
+    </>
+  )
+}
+
+/** The longer explanation of a tool, closed until asked for; it goes at the end of the tool's main card. */
+export function AdminHow({ to }: { to: string }) {
+  return (
+    <details className="ad-toolhow">
+      <summary>How this works</summary>
+      <p>{tool(to).how}</p>
+    </details>
+  )
+}
+
+/** Admin tools / the tool; inside a tool, the tool links to its page (`to`) and `here` names the page. */
+export function AdminCrumbs({ tool, to, here }: { tool: string; to?: string; here?: string }) {
+  return (
+    <nav className="ad-crumbs" aria-label="Breadcrumb">
+      <Link to="/admin">Admin tools</Link> /{' '}
+      {to ? (
+        <>
+          <Link to={to}>{tool}</Link>
+          {here && ` / ${here}`}
+        </>
+      ) : (
+        tool
       )}
-    </div>
-  )
-}
-
-function CreateWorkspaceModal({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void
-  onCreated: (w: AdminWorkspaceDetail) => void
-}) {
-  const api = useApi()
-  const [form, setForm] = useState<CreateWorkspaceRequest>({
-    name: '',
-    ownerEmail: '',
-    ownerName: '',
-  })
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const set = (k: keyof CreateWorkspaceRequest) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm({ ...form, [k]: e.target.value })
-  const save = async (ev: React.FormEvent) => {
-    ev.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      onCreated(await api.post<AdminWorkspaceDetail>('/workspaces', form))
-    } catch (e) {
-      setError((e as Error).message)
-      setBusy(false)
-    }
-  }
-  return (
-    <Modal title="Create a workspace" onClose={onClose}>
-      <form onSubmit={save} className="grid gap-4">
-        <ErrorNote message={error} />
-        <Field label="Workspace name" hint="Usually the customer's organization name" required>
-          <input
-            className={inputClass}
-            value={form.name}
-            onChange={set('name')}
-            required
-            autoFocus
-          />
-        </Field>
-        <Field
-          label="First owner's email"
-          hint="They sign in with this address and the workspace is waiting"
-          required
-        >
-          <input
-            type="email"
-            className={inputClass}
-            value={form.ownerEmail}
-            onChange={set('ownerEmail')}
-            required
-          />
-        </Field>
-        <Field label="First owner's name">
-          <input className={inputClass} value={form.ownerName} onChange={set('ownerName')} />
-        </Field>
-        <div className="flex justify-end gap-2">
-          <Button type="button" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            kind="primary"
-            disabled={busy || !form.name.trim() || !form.ownerEmail.trim()}
-          >
-            Create workspace
-          </Button>
-        </div>
-      </form>
-    </Modal>
-  )
-}
-
-/** Who is a platform admin. Nobody changes their own role, so the platform always keeps one. */
-function Admins() {
-  const api = useApi()
-  const { user } = useUser()
-  const admins = useLoad<AdminListDto>('/admin/admins')
-  const changes = useLoad<PlatformRoleChangeDto[]>('/admin/role-changes')
-  const [query, setQuery] = useState('')
-  const [found, setFound] = useState<AdminUserDto[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [done, setDone] = useState<{ at: number; text: string } | null>(null)
-  const search = async (ev: React.FormEvent) => {
-    ev.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      setFound(await api.get<AdminUserDto[]>(`/admin/users?q=${encodeURIComponent(query.trim())}`))
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-  const setRole = async (u: AdminUserDto, role: 'admin' | null) => {
-    const who = u.email ?? u.displayName ?? u.id
-    if (!confirm(role ? `Make ${who} a platform admin?` : `Remove ${who} as a platform admin?`))
-      return
-    setBusy(true)
-    setError(null)
-    try {
-      await api.put<AdminUserDto>(`/admin/users/${u.id}/role`, { role })
-      // The admins list is the one place a person shows as an admin: the search is done with.
-      setFound(null)
-      setQuery('')
-      setDone({
-        at: Date.now(),
-        text: role ? `${who} is now a platform admin` : `${who} is no longer a platform admin`,
-      })
-      await admins.reload()
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      // A failed attempt is kept too.
-      await changes.reload()
-      setBusy(false)
-    }
-  }
-  const row = (u: AdminUserDto, inSearch = false) => (
-    <tr key={u.id}>
-      <td>
-        <span className="font-semibold">{u.displayName ?? u.email ?? u.id}</span>
-        {u.email && <span className="ad-table-sub">{u.email}</span>}
-      </td>
-      <td>{u.role === 'admin' ? <Chip tone="accent">admin</Chip> : null}</td>
-      <td className="ad-num">
-        {u.id === user?.id ? (
-          // Nobody changes their own role (the API refuses it too).
-          <Chip tone="muted">you</Chip>
-        ) : u.role === 'admin' && inSearch ? (
-          // Removing is done from the admins list above, so there is one place for it.
-          <span className="text-xs text-soft">already an admin</span>
-        ) : u.role === 'admin' ? (
-          <Button
-            kind="ghost"
-            className="text-danger"
-            disabled={busy}
-            onClick={() => setRole(u, null)}
-          >
-            remove admin
-          </Button>
-        ) : (
-          <Button size="sm" disabled={busy} onClick={() => setRole(u, 'admin')}>
-            Make admin
-          </Button>
-        )}
-      </td>
-    </tr>
-  )
-  const head = (
-    <thead>
-      <tr>
-        <th>Person</th>
-        <th>Role</th>
-        <th className="ad-num">Change</th>
-      </tr>
-    </thead>
-  )
-  return (
-    <div className="grid gap-4 lg:grid-cols-4">
-      <div className="lg:col-span-3">
-        <Card title="Admins">
-          <ErrorNote message={error ?? admins.error} />
-          {admins.loading && !admins.data && <Empty>Loading…</Empty>}
-          {admins.data && (
-            <>
-              <table className="ad-table">
-                {head}
-                <tbody>{admins.data.admins.map((u) => row(u))}</tbody>
-              </table>
-              {!admins.data.complete && (
-                <p className="mt-2 text-xs text-soft">
-                  Too many accounts to read them all: search to find anyone else who is an admin.
-                </p>
-              )}
-            </>
-          )}
-          <form onSubmit={search} className="mt-4 flex gap-2">
-            <input
-              className={inputClass}
-              placeholder="Find a person by name or email"
-              aria-label="Find a person by name or email"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <Button type="submit" disabled={busy || !query.trim()}>
-              Search
-            </Button>
-          </form>
-          <p className="mt-2 text-xs text-soft">
-            Only people who have signed in to Audit Differently at least once can be found. Someone
-            new signs in first (they will see that they are not in a workspace yet), then search
-            again.
-          </p>
-          {done && (
-            <p className="mt-2">
-              <SavedMark at={done.at}>{done.text}</SavedMark>
-            </p>
-          )}
-          {found?.length === 0 && (
-            <Empty>
-              Nobody matches. If they have never signed in, ask them to sign in once, then search
-              again.
-            </Empty>
-          )}
-          {!!found?.length && (
-            <>
-              <p className="ad-group-title mt-4">Search results</p>
-              <table className="ad-table">
-                {head}
-                <tbody>{found.map((u) => row(u, true))}</tbody>
-              </table>
-            </>
-          )}
-        </Card>
-        <div className="mt-4">
-          <AdminChanges changes={changes} />
-        </div>
-      </div>
-      <div className="grid content-start gap-4">
-        <HandCard lead="Admins run the platform, not the records.">
-          <p>
-            An admin sets up workspaces and their people. You cannot change your own role, so there
-            is always at least one admin, and there can be at most 20. To make someone an admin,
-            they sign in once first, then you find them here.
-          </p>
-        </HandCard>
-      </div>
-    </div>
-  )
-}
-
-/** Who made or unmade an admin, newest first (the last 50), with the attempts Clerk refused. */
-function AdminChanges({
-  changes,
-}: {
-  changes: { data: PlatformRoleChangeDto[] | null; error: string | null; loading: boolean }
-}) {
-  const role = (r: string | null) => (r === 'admin' ? 'admin' : 'none')
-  return (
-    <Card title="Admin changes">
-      <ErrorNote message={changes.error} />
-      {changes.loading && !changes.data && <Empty>Loading…</Empty>}
-      {changes.data?.length === 0 && <Empty>No admin has been made or unmade yet.</Empty>}
-      {!!changes.data?.length && (
-        <div className="ad-tablewrap">
-          <table className="ad-table">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Who</th>
-                <th>Change</th>
-              </tr>
-            </thead>
-            <tbody>
-              {changes.data.map((c) => (
-                <tr key={c.id}>
-                  <td className="whitespace-nowrap">{shortDate(c.at)}</td>
-                  <td>
-                    <span className="font-semibold">{c.targetEmail ?? 'someone'}</span>
-                    <span className="ad-table-sub">by {c.actorEmail ?? 'an admin'}</span>
-                  </td>
-                  <td>
-                    {role(c.oldRole)} → {role(c.newRole)}{' '}
-                    {c.outcome === 'failed' && (
-                      <Chip tone="warn" title={c.error ?? undefined}>
-                        failed
-                      </Chip>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Card>
+    </nav>
   )
 }

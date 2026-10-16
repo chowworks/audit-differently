@@ -12,7 +12,7 @@ const ACTION_WORDS: Record<string, string> = {
   delete: 'removed',
   export: 'exported',
   submit: 'submitted',
-  review: 'recorded a decision on',
+  review: 'recorded a review of',
 }
 const what = (a: ActivityEntry) =>
   a.resource === 'export'
@@ -21,7 +21,7 @@ const what = (a: ActivityEntry) =>
       ? `${a.resource}s`
       : `a ${a.resource}`
 /** What the person did, as the line says it; older lines without one are worded from their action. */
-const did = (a: ActivityEntry) =>
+export const did = (a: ActivityEntry) =>
   a.description ?? `${ACTION_WORDS[a.action] ?? a.action} ${what(a)}`
 /** One changed field. A field logged by name alone (personal or free text) shows its name only. */
 const changed = (c: LoggedChange) =>

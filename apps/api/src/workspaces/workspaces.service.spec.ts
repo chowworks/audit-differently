@@ -1,5 +1,11 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
-import type { Role } from '@ad/types'
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common'
+import { Prisma } from '@prisma/client'
+import { DEFAULT_TAG_TYPES, type Role } from '@ad/types'
 import type { Caller } from '../core/caller'
 import { member, OTHER, scoped, stranger, W } from '../core/testing/callers'
 import { expectNoneOf, fakeLog } from '../core/testing/log'
@@ -26,7 +32,19 @@ const newWorkspace = {
 const workspace = () => ({
   id: W,
   name: 'Riverbend Youth Services',
-  fundingSources: [],
+  budgetItems: [
+    { key: 'personnel', label: 'Personnel', reportLine: 'staff-salaries' },
+    { key: 'travel', label: 'Travel', reportLine: 'program-costs' },
+  ],
+  tagTypes: [
+    {
+      key: 'age-group',
+      label: 'Age group',
+      appliesTo: ['participant'],
+      values: [{ key: 'under-18', label: 'Under 18' }],
+    },
+  ],
+  receiptsAddress: null as string | null,
   createdAt: new Date('2026-10-01T00:00:00Z'),
   termsAcceptedAt: null,
   _count: { memberships: 2, engagements: 1 },
@@ -82,6 +100,12 @@ function service() {
     },
     dataAccessLog: { findMany: jest.fn().mockResolvedValue([]) },
     engagement: { findMany: jest.fn(), count: jest.fn() },
+    // Records of a closed or submitted month that hold a tag being removed: none unless a test says so.
+    expense: { count: jest.fn().mockResolvedValue(0) },
+    wexPayment: { count: jest.fn().mockResolvedValue(0) },
+    // Taking a tag off the records (one UPDATE per kind of record), and counting the tags in use.
+    $executeRaw: jest.fn().mockResolvedValue(0),
+    $queryRaw: jest.fn().mockResolvedValue([]),
     user: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn(async ({ data }: { data: { id: string } }) => data),
@@ -117,7 +141,7 @@ describe('WorkspacesService', () => {
     await expect(s.get(who, W)).rejects.toThrow(NotFoundException)
     await expect(s.activity(who, W)).rejects.toThrow(NotFoundException)
     await expect(s.suggest(who, W, 'a fund')).rejects.toThrow(NotFoundException)
-    await expect(s.setLists(who, W, ['x'])).rejects.toThrow(NotFoundException)
+    await expect(s.setTagTypes(who, W, [])).rejects.toThrow(NotFoundException)
     await expect(s.addMember(who, W, invite)).rejects.toThrow(NotFoundException)
     await expect(s.setRole(who, W, 'u-bookkeeper-ws-1', 'owner')).rejects.toThrow(NotFoundException)
     await expect(s.removeMember(who, W, 'u-bookkeeper-ws-1')).rejects.toThrow(NotFoundException)
@@ -138,7 +162,7 @@ describe('WorkspacesService', () => {
       expect((await s.get(who, W)).canManage).toBe(false)
       if (role === 'auditor') expect(await s.activity(who, W)).toEqual([])
       else await expect(s.activity(who, W)).rejects.toThrow(ForbiddenException)
-      await expect(s.setLists(who, W, ['x'])).rejects.toThrow(ForbiddenException)
+      await expect(s.setTagTypes(who, W, [])).rejects.toThrow(ForbiddenException)
       await expect(s.addMember(who, W, invite)).rejects.toThrow(ForbiddenException)
       await expect(s.setRole(who, W, 'u-bookkeeper-ws-1', 'owner')).rejects.toThrow(
         ForbiddenException
@@ -162,11 +186,6 @@ describe('WorkspacesService', () => {
     const { service: s, prisma } = service()
     const owner = member('owner')
     expect((await s.get(owner, W)).canManage).toBe(true)
-    await s.setLists(owner, W, ['Youth Fund', ' Youth Fund ', ''])
-    expect(prisma.workspace.update).toHaveBeenCalledWith({
-      where: { id: W },
-      data: { fundingSources: ['Youth Fund'] },
-    })
     await s.addMember(owner, W, invite)
     expect(prisma.membership.create).toHaveBeenCalledWith({
       data: { userId: expect.stringMatching(/^pending-/), workspaceId: W, role: 'auditor' },
@@ -184,6 +203,283 @@ describe('WorkspacesService', () => {
     })
   })
 
+  describe('the budget items', () => {
+    const items = [
+      { key: 'personnel', label: 'Staff', reportLine: 'staff-salaries' },
+      { label: 'Rent', reportLine: 'program-costs' },
+    ]
+
+    it('lets an owner rename, add and remove items, keeping each key, and logs the list', async () => {
+      const { service: s, prisma, log } = service()
+      await s.setBudgetItems(member('owner'), W, items)
+      const saved = prisma.workspace.update.mock.calls[0][0].data.budgetItems
+      expect(saved).toEqual([
+        { key: 'personnel', label: 'Staff', reportLine: 'staff-salaries' },
+        {
+          key: expect.stringMatching(/^rent-[0-9a-f]{4}$/),
+          label: 'Rent',
+          reportLine: 'program-costs',
+        },
+      ])
+      expect(log.entries).toEqual([
+        {
+          workspaceId: W,
+          resource: 'workspace',
+          subjectId: W,
+          action: 'update',
+          description: 'Changed the budget items',
+          changes: [
+            {
+              field: 'Budget items',
+              before: 'Personnel (Staff Salaries), Travel (Program Costs)',
+              after: 'Staff (Staff Salaries), Rent (Program Costs)',
+            },
+          ],
+        },
+      ])
+    })
+
+    it('refuses a changed report line, an unknown key, a blank or doubled name, and a bad line', async () => {
+      const { service: s, prisma } = service()
+      const owner = member('owner')
+      for (const bad of [
+        [{ key: 'travel', label: 'Travel', reportLine: 'wex' }],
+        [{ key: 'gone', label: 'Gone', reportLine: 'wex' }],
+        [{ label: ' ', reportLine: 'wex' }],
+        [
+          { label: 'Rent', reportLine: 'wex' },
+          { label: 'rent', reportLine: 'wex' },
+        ],
+        [{ label: 'Rent', reportLine: 'not-a-line' }],
+        'Rent',
+      ])
+        await expect(s.setBudgetItems(owner, W, bad)).rejects.toThrow(BadRequestException)
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+    })
+
+    it('writes nothing when nothing differs', async () => {
+      const { service: s, prisma, log } = service()
+      await s.setBudgetItems(member('owner'), W, workspace().budgetItems)
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+
+    it('is for owners and the platform admin: a bookkeeper suggests, a stranger gets 404', async () => {
+      const { service: s, prisma, log } = service()
+      await expect(s.setBudgetItems(member('bookkeeper'), W, items)).rejects.toThrow(
+        ForbiddenException
+      )
+      await expect(s.setBudgetItems(member('auditor'), W, items)).rejects.toThrow(
+        ForbiddenException
+      )
+      await expect(s.setBudgetItems(stranger(), W, items)).rejects.toThrow(NotFoundException)
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      await s.setBudgetItems(admin(), W, items)
+      expect(log.entries.map((e) => e.description)).toEqual([
+        'Changed the budget items (by a platform admin)',
+      ])
+      expect((await s.get(member('bookkeeper'), W)).budgetItems).toHaveLength(2)
+    })
+  })
+
+  describe('the tag types', () => {
+    const types = [
+      {
+        key: 'age-group',
+        label: 'Age band',
+        appliesTo: ['participant', 'payroll'],
+        values: [{ key: 'under-18', label: 'Under 18' }, { label: '18 to 24' }],
+      },
+      { label: 'Site', appliesTo: ['expense'], values: [{ label: 'North campus' }] },
+    ]
+
+    it('lets an owner rename, add and remove types and values, keeping each key, and logs the list', async () => {
+      const { service: s, prisma, log } = service()
+      await s.setTagTypes(member('owner'), W, types)
+      const saved = prisma.workspace.update.mock.calls[0][0].data.tagTypes
+      expect(saved).toEqual([
+        {
+          key: 'age-group',
+          label: 'Age band',
+          appliesTo: ['payroll', 'participant'],
+          values: [
+            { key: 'under-18', label: 'Under 18' },
+            { key: expect.stringMatching(/^18-to-24-[0-9a-f]{4}$/), label: '18 to 24' },
+          ],
+        },
+        {
+          key: expect.stringMatching(/^site-[0-9a-f]{4}$/),
+          label: 'Site',
+          appliesTo: ['expense'],
+          values: [
+            { key: expect.stringMatching(/^north-campus-[0-9a-f]{4}$/), label: 'North campus' },
+          ],
+        },
+      ])
+      expect(log.entries).toEqual([
+        {
+          workspaceId: W,
+          resource: 'workspace',
+          subjectId: W,
+          action: 'update',
+          description: 'Changed the tags',
+          changes: [
+            {
+              field: 'Tag types',
+              before: 'Age group (Participants): Under 18',
+              after:
+                'Age band (Payroll items, Participants): Under 18, 18 to 24, Site (Expenses): North campus',
+            },
+          ],
+        },
+      ])
+    })
+
+    it('refuses an unknown key, a blank or doubled name, no target and no value', async () => {
+      const { service: s, prisma } = service()
+      const owner = member('owner')
+      const v = [{ label: 'A' }]
+      for (const bad of [
+        [{ key: 'gone', label: 'Gone', appliesTo: ['expense'], values: v }],
+        [{ label: ' ', appliesTo: ['expense'], values: v }],
+        [
+          { label: 'Site', appliesTo: ['expense'], values: v },
+          { label: 'site', appliesTo: ['expense'], values: v },
+        ],
+        [{ label: 'Site', appliesTo: [], values: v }],
+        [{ label: 'Site', appliesTo: ['budget'], values: v }],
+        [{ label: 'Site', appliesTo: ['expense'], values: [] }],
+        [{ label: 'Site', appliesTo: ['expense'], values: [{ label: 'A' }, { label: 'a' }] }],
+        [{ label: 'Site', appliesTo: ['expense'], values: [{ key: 'gone', label: 'A' }] }],
+        'Site',
+      ])
+        await expect(s.setTagTypes(owner, W, bad)).rejects.toThrow(BadRequestException)
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+    })
+
+    it('writes nothing when nothing differs', async () => {
+      const { service: s, prisma, log } = service()
+      await s.setTagTypes(member('owner'), W, workspace().tagTypes)
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+
+    it('is for owners and the platform admin: a bookkeeper suggests, an auditor reads, a stranger gets 404', async () => {
+      const { service: s, prisma, log } = service()
+      await expect(s.setTagTypes(member('bookkeeper'), W, types)).rejects.toThrow(
+        ForbiddenException
+      )
+      await expect(s.setTagTypes(member('auditor'), W, types)).rejects.toThrow(ForbiddenException)
+      await expect(s.setTagTypes(stranger(), W, types)).rejects.toThrow(NotFoundException)
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      await s.setTagTypes(admin(), W, types)
+      expect(log.entries.map((e) => e.description)).toEqual([
+        'Changed the tags (by a platform admin)',
+      ])
+      expect((await s.get(member('auditor'), W)).tagTypes).toHaveLength(1)
+    })
+
+    const funding = {
+      key: 'funding-source',
+      label: 'Funding source',
+      appliesTo: ['engagement', 'expense', 'payroll', 'participant'],
+      values: [
+        { key: 'youth-fund', label: 'Youth Fund' },
+        { key: 'old-fund', label: 'Old Fund' },
+      ],
+    }
+    const withFunding = () => ({ ...workspace(), tagTypes: [funding, ...workspace().tagTypes] })
+
+    it('treats Funding source like any type: a rename keeps the key, so every record shows the new name', async () => {
+      const { service: s, prisma, log } = service()
+      prisma.workspace.findFirst.mockResolvedValue(withFunding())
+      const renamed = [
+        {
+          ...funding,
+          values: [{ key: 'youth-fund', label: 'Youth Futures Fund' }, funding.values[1]],
+        },
+        ...workspace().tagTypes,
+      ]
+      await s.setTagTypes(member('owner'), W, renamed)
+      expect(prisma.workspace.update.mock.calls[0][0].data.tagTypes[0].values[0]).toEqual({
+        key: 'youth-fund',
+        label: 'Youth Futures Fund',
+      })
+      // No record changes: they hold the key.
+      expect(prisma.$executeRaw).not.toHaveBeenCalled()
+      expect(log.entries[0]!.description).toBe('Changed the tags')
+    })
+
+    it('takes a removed value off every record that has it, in the same change, and says how many', async () => {
+      const { service: s, prisma, log } = service()
+      prisma.workspace.findFirst.mockResolvedValue(withFunding())
+      // One UPDATE per kind of record, in order: engagements, expenses, payroll items, participants.
+      for (const n of [2, 3, 0, 1]) prisma.$executeRaw.mockResolvedValueOnce(n)
+      await s.setTagTypes(member('owner'), W, [
+        { ...funding, values: [funding.values[0]] },
+        ...workspace().tagTypes,
+      ])
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(4)
+      for (const [sql, ...values] of prisma.$executeRaw.mock.calls) {
+        expect((sql as string[]).join('?')).toMatch(/SET "tags" = array_remove\("tags", \?\)/)
+        expect(values).toEqual(['funding-source:old-fund', W, 'funding-source:old-fund'])
+      }
+      expect(prisma.expense.count).toHaveBeenCalledWith({
+        where: {
+          workspaceId: W,
+          tags: { hasSome: ['funding-source:old-fund'] },
+          monthlyReport: { status: { not: 'draft' } },
+        },
+      })
+      expect(log.entries.map((e) => e.description)).toEqual([
+        'Removed the funding source Old Fund from 3 expenses, 1 participant and 2 engagements',
+      ])
+      // A whole type removed comes off too; its values say so one by one.
+      const second = service()
+      second.prisma.workspace.findFirst.mockResolvedValue(withFunding())
+      await second.service.setTagTypes(member('owner'), W, workspace().tagTypes)
+      expect(second.prisma.$executeRaw).toHaveBeenCalledTimes(8)
+      expect(second.log.entries[0]!.description).toBe(
+        'Removed the funding source Youth Fund from no records; the funding source Old Fund from no records'
+      )
+    })
+
+    it('removes nothing that sits in a closed or submitted month, and nothing for an admin outside the workspace', async () => {
+      const { service: s, prisma, log } = service()
+      prisma.workspace.findFirst.mockResolvedValue(withFunding())
+      prisma.wexPayment.count.mockResolvedValueOnce(2)
+      const without = [{ ...funding, values: [funding.values[0]] }, ...workspace().tagTypes]
+      await expect(s.setTagTypes(member('owner'), W, without)).rejects.toThrow(
+        /2 expenses or payroll items in a closed or submitted month/
+      )
+      // The platform admin who is not a member sees none of the records, so removes nothing; adding stays open.
+      await expect(s.setTagTypes(admin(), W, without)).rejects.toThrow(ConflictException)
+      expect(prisma.$executeRaw).not.toHaveBeenCalled()
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+      await s.setTagTypes(admin(), W, [
+        { ...funding, values: [...funding.values, { label: 'New Fund' }] },
+        ...workspace().tagTypes,
+      ])
+      expect(log.entries.map((e) => e.description)).toEqual([
+        'Changed the tags (by a platform admin)',
+      ])
+    })
+
+    it('counts the tags in use for an owner only', async () => {
+      const { service: s, prisma } = service()
+      prisma.$queryRaw.mockResolvedValue([
+        { kind: 'expense', tag: 'funding-source:old-fund', n: 3 },
+        { kind: 'participant', tag: 'funding-source:old-fund', n: 1 },
+      ])
+      expect((await s.get(member('owner'), W)).tagUses).toEqual({
+        'funding-source:old-fund': { expense: 3, participant: 1 },
+      })
+      expect((await s.get(member('bookkeeper'), W)).tagUses).toEqual({})
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('keeps at least one owner', async () => {
     const { service: s, prisma } = service()
     const owner = member('owner')
@@ -198,7 +494,10 @@ describe('WorkspacesService', () => {
   it("logs each change to people and lists in the screen's words", async () => {
     const { service: s, prisma, log } = service()
     const owner = member('owner')
-    await s.setLists(owner, W, ['Youth Fund'])
+    await s.setTagTypes(owner, W, [
+      ...workspace().tagTypes,
+      { label: 'Site', appliesTo: ['expense'], values: [{ label: 'North campus' }] },
+    ])
     await s.suggest(member('bookkeeper'), W, 'Call Jordan Sample about the fund')
     await s.addMember(owner, W, { ...invite, displayName: 'Jules' })
     await s.setRole(owner, W, 'u-bookkeeper-ws-1', 'owner')
@@ -207,7 +506,7 @@ describe('WorkspacesService', () => {
     await s.removeMember(owner, W, 'u-bookkeeper-ws-1')
     await s.create(admin(), newWorkspace)
     expect(log.entries.map((e) => [e.workspaceId, e.resource, e.action, e.description])).toEqual([
-      [W, 'workspace', 'update', 'Changed the sources of funds'],
+      [W, 'workspace', 'update', 'Changed the tags'],
       [W, 'workspace', 'create', 'Suggested an addition to the lists'],
       [W, 'member', 'create', 'Invited jules@example.org as auditor'],
       [W, 'member', 'update', 'Changed the role of dana@example.org from bookkeeper to owner'],
@@ -220,7 +519,13 @@ describe('WorkspacesService', () => {
       ],
     ])
     expect(log.entries.map((e) => e.changes)).toEqual([
-      [{ field: 'Sources of funds', before: null, after: 'Youth Fund' }],
+      [
+        {
+          field: 'Tag types',
+          before: 'Age group (Participants): Under 18',
+          after: 'Age group (Participants): Under 18, Site (Expenses): North campus',
+        },
+      ],
       [{ field: 'Suggestion' }],
       [{ field: 'Role', after: 'Auditor' }],
       [{ field: 'Role', before: 'Bookkeeper', after: 'Owner' }],
@@ -258,7 +563,7 @@ describe('WorkspacesService', () => {
     })
     // No Terms on file: the first owner's acceptance is recorded later (MeController).
     expect(prisma.workspace.create).toHaveBeenCalledWith({
-      data: { name: 'Riverbend Youth Services', fundingSources: expect.any(Array) },
+      data: { name: 'Riverbend Youth Services', tagTypes: DEFAULT_TAG_TYPES },
     })
     expect(made.termsAcceptedAt).toBeNull()
     // The owner has not signed in: an invitation's placeholder, made under the admin's own flag, not as system.
@@ -310,14 +615,17 @@ describe('WorkspacesService', () => {
     const detail = await s.adminGet(a, W)
     expect(detail.members.map((m) => m.email)).toEqual(['sam@example.org', 'dana@example.org'])
     expect(detail).not.toHaveProperty('engagementCount')
-    await s.setLists(a, W, ['Youth Fund'])
+    await s.setTagTypes(a, W, [
+      ...workspace().tagTypes,
+      { label: 'Site', appliesTo: ['expense'], values: [{ label: 'North campus' }] },
+    ])
     await withTenantContext(() => s.addMember(a, W, invite), { userId: 'u-admin', admin: true })
     await s.setRole(a, W, 'u-bookkeeper-ws-1', 'owner')
     // Keep an owner holds for the admin too.
     await expect(s.removeMember(a, W, 'u-owner-ws-1')).rejects.toThrow(BadRequestException)
     // Every line the admin leaves says a platform admin did it.
     expect(log.entries.map((e) => e.description)).toEqual([
-      'Changed the sources of funds (by a platform admin)',
+      'Changed the tags (by a platform admin)',
       'Invited jules@example.org as auditor (by a platform admin)',
       'Changed the role of dana@example.org from bookkeeper to owner (by a platform admin)',
     ])
@@ -341,7 +649,7 @@ describe('WorkspacesService', () => {
     const { service: s, writes } = service()
     // CallerService.load (every route but the admin ones) never sets `admin`.
     const both = admin({ admin: undefined, ...member('auditor') })
-    await expect(s.setLists(both, W, ['x'])).rejects.toThrow(ForbiddenException)
+    await expect(s.setTagTypes(both, W, [])).rejects.toThrow(ForbiddenException)
     await expect(s.addMember(both, W, invite)).rejects.toThrow(ForbiddenException)
     await expect(s.get(both, OTHER)).rejects.toThrow(NotFoundException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
@@ -432,6 +740,129 @@ describe('WorkspacesService', () => {
     )
     expect(prisma.membership.create).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
+  })
+
+  describe('the receipts address', () => {
+    it('lets an owner set it, lowercased, and shows the full address once the domain is set', async () => {
+      const { service: s, prisma, log } = service()
+      await s.setReceiptsAddress(member('owner'), W, ' Riverbend-Youth ')
+      expect(prisma.workspace.update).toHaveBeenCalledWith({
+        where: { id: W },
+        data: { receiptsAddress: 'riverbend-youth' },
+      })
+      expect(log.entries).toEqual([
+        expect.objectContaining({
+          description: 'Set the receipts address',
+          changes: [{ field: 'Receipts address', before: null, after: 'riverbend-youth' }],
+        }),
+      ])
+      const before = process.env.RECEIPTS_DOMAIN
+      prisma.workspace.findFirst.mockResolvedValueOnce({
+        ...workspace(),
+        receiptsAddress: 'riverbend-youth',
+      })
+      process.env.RECEIPTS_DOMAIN = 'receipts.example.org'
+      try {
+        const w = await s.get(member('auditor'), W)
+        expect([w.receiptsAddress, w.receiptsEmail]).toEqual([
+          'riverbend-youth',
+          'riverbend-youth@receipts.example.org',
+        ])
+      } finally {
+        if (before === undefined) delete process.env.RECEIPTS_DOMAIN
+        else process.env.RECEIPTS_DOMAIN = before
+      }
+    })
+
+    it('refuses to change an address once it is set (409) and writes nothing', async () => {
+      const { service: s, prisma, log } = service()
+      prisma.workspace.findFirst.mockResolvedValueOnce({
+        ...workspace(),
+        receiptsAddress: 'riverbend-youth',
+      })
+      await expect(s.setReceiptsAddress(member('owner'), W, 'riverbend-two')).rejects.toThrow(
+        ConflictException
+      )
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+
+    it('refuses a malformed or taken address, a bookkeeper (403) and a stranger (404)', async () => {
+      const { service: s, prisma } = service()
+      for (const bad of ['ab', 'has space', '-start', 'end-', 'a'.repeat(41), 'under_score', 42])
+        await expect(s.setReceiptsAddress(member('owner'), W, bad)).rejects.toThrow(
+          BadRequestException
+        )
+      await expect(s.setReceiptsAddress(member('bookkeeper'), W, 'abc')).rejects.toThrow(
+        ForbiddenException
+      )
+      await expect(s.setReceiptsAddress(stranger(), W, 'abc')).rejects.toThrow(NotFoundException)
+      prisma.workspace.update.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('taken', { code: 'P2002', clientVersion: 'x' })
+      )
+      await expect(s.setReceiptsAddress(member('owner'), W, 'abc')).rejects.toThrow(
+        ConflictException
+      )
+    })
+
+    it('is not the platform admin to set: it is not a name, a list or a membership', async () => {
+      const { service: s, prisma, log } = service()
+      await expect(s.setReceiptsAddress(admin(), W, 'riverbend')).rejects.toThrow(
+        ForbiddenException
+      )
+      // Seated as an owner, the admin flag still sets nothing: the admin routes carry it.
+      await expect(s.setReceiptsAddress(admin(member('owner')), W, 'riverbend')).rejects.toThrow(
+        ForbiddenException
+      )
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+  })
+
+  describe('reading emailed receipts with AI', () => {
+    const off = () => ({ ...workspace(), readEmailedReceiptsWithAi: false })
+
+    it('is off until an owner turns it on, with the line in the words of the screen', async () => {
+      const { service: s, prisma, log } = service()
+      prisma.workspace.findFirst.mockResolvedValueOnce(off())
+      await s.setReadEmailedReceiptsWithAi(member('owner'), W, true)
+      expect(prisma.workspace.update).toHaveBeenCalledWith({
+        where: { id: W },
+        data: { readEmailedReceiptsWithAi: true },
+      })
+      expect(log.entries).toEqual([
+        expect.objectContaining({
+          resource: 'workspace',
+          description: 'Turned on reading emailed receipts with AI',
+          changes: [{ field: 'Read emailed receipts with AI', before: 'off', after: 'on' }],
+        }),
+      ])
+    })
+
+    it('changes nothing and logs nothing when it already says so', async () => {
+      const { service: s, prisma, log } = service()
+      prisma.workspace.findFirst.mockResolvedValueOnce(off())
+      await s.setReadEmailedReceiptsWithAi(member('owner'), W, false)
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+
+    it('refuses a bookkeeper, an auditor and the platform admin (403), a stranger (404) and a non-boolean', async () => {
+      const { service: s, prisma, log } = service()
+      prisma.workspace.findFirst.mockResolvedValue(off())
+      for (const who of [member('bookkeeper'), member('auditor'), admin(), admin(member('owner'))])
+        await expect(s.setReadEmailedReceiptsWithAi(who, W, true)).rejects.toThrow(
+          ForbiddenException
+        )
+      await expect(s.setReadEmailedReceiptsWithAi(stranger(), W, true)).rejects.toThrow(
+        NotFoundException
+      )
+      await expect(s.setReadEmailedReceiptsWithAi(member('owner'), W, 'yes')).rejects.toThrow(
+        BadRequestException
+      )
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
   })
 
   describe('renaming a workspace', () => {

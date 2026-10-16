@@ -1,8 +1,12 @@
 import { NotFoundException } from '@nestjs/common'
 import { strFromU8, unzipSync } from 'fflate'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { PDFDocument } from 'pdf-lib'
 import type { Role } from '@ad/types'
 import type { Caller } from '../core/caller'
-import { AuditPackageService } from './audit-package.service'
+import { encryptedPdf } from '../payroll/testing'
+import { AuditPackageService, csv } from './audit-package.service'
 
 /**
  * The zip is laid out the way the funder's own package is (see the README it writes). These cases pin that
@@ -52,6 +56,7 @@ const engagement = () => ({
   preparerOrganization: null,
   authorizerName: 'Sam Whitfield',
   authorizerOrganization: 'Riverbend Youth Services',
+  tracks: ['proposal', 'award-letter', 'contract'],
   waivers: { 'budget-narrative': 'this funder does not use one' },
   eligibilityItems: [
     { key: 'enrollment-form', label: 'Enrollment form', required: true },
@@ -69,6 +74,7 @@ const engagement = () => ({
   monthlyReports: [
     {
       period: '2026-09',
+      reopenings: [] as object[],
       expenses: [
         {
           itemNumber: 'RYS-11',
@@ -400,6 +406,156 @@ describe('AuditPackageService', () => {
   })
 })
 
+describe('AuditPackageService: payroll lines marked on a bank statement', () => {
+  const pdf = readFileSync(
+    join(__dirname, '../../test/fixtures/statements/riverbend-2026-09-statement.pdf')
+  )
+  const mark = { page: 2, x: 48, y: 677, width: 520, height: 14.4 }
+  it("highlights the marked line on the package's copy and leaves the stored statement as it is", async () => {
+    const e = engagement()
+    const month = e.monthlyReports[0]!
+    const marked = {
+      ...e,
+      monthlyReports: [
+        {
+          ...month,
+          expenses: month.expenses.map((x) =>
+            x.itemNumber === 'RYS-13'
+              ? {
+                  ...x,
+                  documents: [...x.documents, { purpose: 'payment', document: statement, mark }],
+                }
+              : x
+          ),
+          wexPayments: month.wexPayments.map((w) => ({
+            ...w,
+            // A mark on anything but a bank statement is never drawn (the database refuses one anyway).
+            documents: w.documents.map((d) => (d.document === stub ? { ...d, mark } : d)),
+          })),
+        },
+      ],
+    }
+    const prisma = { engagement: { findFirst: jest.fn().mockResolvedValue(marked) } }
+    const storage = {
+      read: jest.fn(async (key: string) =>
+        key === statement.storageKey ? Buffer.from(pdf) : Buffer.from(`bytes of ${key}`)
+      ),
+    }
+    const service = new AuditPackageService(
+      prisma as never,
+      { log: jest.fn() } as never,
+      storage as never
+    )
+    const plan = await service.plan(caller('owner'), 'e-1')
+    expect([...(plan.marks ?? new Map()).entries()]).toEqual([[statement.storageKey, [mark]]])
+    const out = await service.build(caller('owner'), 'e-1')
+    const entries = unzipSync(new Uint8Array(out.bytes))
+    const copy =
+      entries[
+        `Coding Pathway (DEMO-1)/${MONTH}/Proof of Purchase - Bank Statements/2026-09 Bank Statement.pdf`
+      ]!
+    expect(Buffer.from(copy).equals(pdf)).toBe(false)
+    expect((await PDFDocument.load(copy)).getPageCount()).toBe(2)
+    const copied = Object.entries(entries).find(([p]) => p.endsWith('Jordan pay stub.pdf'))!
+    expect(strFromU8(copied[1])).toBe(`bytes of ${stub.storageKey}`)
+    const readme = strFromU8(entries['Coding Pathway (DEMO-1)/README.txt']!)
+    expect(readme).toContain('highlighted (the stored statement is unchanged)')
+    expect(readme).not.toContain('NOT DRAWN')
+  })
+
+  it('puts an encrypted statement in as stored and says in the README which marks are not drawn', async () => {
+    const encrypted = Buffer.from(await encryptedPdf())
+    const e = engagement()
+    const month = e.monthlyReports[0]!
+    const marked = {
+      ...e,
+      monthlyReports: [
+        {
+          ...month,
+          expenses: month.expenses.map((x) =>
+            x.itemNumber === 'RYS-13'
+              ? {
+                  ...x,
+                  documents: [...x.documents, { purpose: 'payment', document: statement, mark }],
+                }
+              : x
+          ),
+        },
+      ],
+    }
+    const prisma = { engagement: { findFirst: jest.fn().mockResolvedValue(marked) } }
+    const storage = {
+      read: jest.fn(async (key: string) =>
+        key === statement.storageKey ? encrypted : Buffer.from(`bytes of ${key}`)
+      ),
+    }
+    const service = new AuditPackageService(
+      prisma as never,
+      { log: jest.fn() } as never,
+      storage as never
+    )
+    const out = await service.build(caller('owner'), 'e-1')
+    const entries = unzipSync(new Uint8Array(out.bytes))
+    const path = `${MONTH}/Proof of Purchase - Bank Statements/2026-09 Bank Statement.pdf`
+    expect(Buffer.from(entries[`Coding Pathway (DEMO-1)/${path}`]!).equals(encrypted)).toBe(true)
+    const readme = strFromU8(entries['Coding Pathway (DEMO-1)/README.txt']!)
+    expect(readme).toContain('highlighted where it could be drawn (see MARKED LINES NOT DRAWN)')
+    expect(readme).toContain(
+      `MARKED LINES NOT DRAWN\n  ${path}\n    The marked lines could not be drawn on this copy (encrypted or damaged):\n      page 2, at 48, 677\n`
+    )
+  })
+})
+
+describe('AuditPackageService: a month reopened after it was submitted', () => {
+  it('files the corrected signed copy, each copy submitted before, and Reopenings.csv; the README says so', async () => {
+    const e = engagement()
+    const corrected = doc('d-signed-2', 'signed Sep corrected.pdf', 'signed-report', {
+      period: '2026-09',
+      uploadedAt: new Date('2026-10-10T00:00:00Z'),
+    })
+    const reopened = {
+      ...e,
+      documents: [...e.documents, corrected],
+      monthlyReports: e.monthlyReports.map((r) => ({
+        ...r,
+        reopenings: [
+          {
+            reopenedAt: new Date('2026-10-09T00:00:00Z'),
+            reopenedByEmail: 'owner@example.test',
+            reason: 'Rent line typo',
+            submittedAt: new Date('2026-10-08T00:00:00Z'),
+            approvedByName: 'Sam Whitfield',
+            approvedAt: new Date('2026-10-05T00:00:00Z'),
+            signedDocumentId: 'd-signed',
+          },
+        ],
+      })),
+    }
+    const prisma = { engagement: { findFirst: jest.fn().mockResolvedValue(reopened) } }
+    const storage = { read: jest.fn(async (key: string) => Buffer.from(`bytes of ${key}`)) }
+    const service = new AuditPackageService(
+      prisma as never,
+      { log: jest.fn() } as never,
+      storage as never
+    )
+    const out = await service.build(caller('bookkeeper'), 'e-1')
+    const entries = unzipSync(new Uint8Array(out.bytes))
+    const root = 'Coding Pathway (DEMO-1)'
+    const text = (p: string) => strFromU8(entries[`${root}/${p}`]!)
+    expect(text(`${MONTH}/Signed report - signed Sep corrected.pdf`)).toBe(
+      `bytes of ${corrected.storageKey}`
+    )
+    expect(text(`${MONTH}/Earlier submissions/Signed report as submitted 2026-10-08.pdf`)).toBe(
+      `bytes of ${W}/e-1/general/d-signed`
+    )
+    expect(text(`${MONTH}/Reopenings.csv`).split('\r\n')[1]).toBe(
+      `"2026-10-08","Sam Whitfield","2026-10-05","2026-10-09","owner@example.test","Rent line typo","${MONTH}/Earlier submissions/Signed report as submitted 2026-10-08.pdf"`
+    )
+    expect(text('README.txt')).toContain('MONTHS REOPENED AFTER THEY WERE SUBMITTED')
+    expect(text('README.txt')).toContain('September 2026: Reopened once after it was submitted')
+  })
+})
+
 describe('AuditPackageService: the full copy taken before a deletion', () => {
   const orphan = doc('d-orphan', 'loose invoice.pdf', 'invoice', { period: '2026-09' })
   const personalOrphan = doc('d-pers', 'loose id.pdf', 'eligibility-record', {
@@ -419,8 +575,8 @@ describe('AuditPackageService: the full copy taken before a deletion', () => {
         preparedByName: 'Dana Okafor',
         authorizedByName: 'Sam Whitfield',
         authorizedAt: new Date('2026-10-10T00:00:00Z'),
-        review: { invoiceNumber: 'INV-1' },
-        deniedReason: null,
+        closingNote: 'Approved by phone',
+        sentBackReason: null,
         comments: null,
         isFinal: false,
         checks: [
@@ -473,7 +629,7 @@ describe('AuditPackageService: the full copy taken before a deletion', () => {
       ])
     )
     expect(strFromU8(entries[`${root}/Checks.csv`]!)).toContain('Vendor closed')
-    expect(strFromU8(entries[`${root}/Months.csv`]!)).toContain('INV-1')
+    expect(strFromU8(entries[`${root}/Months.csv`]!)).toContain('Approved by phone')
     expect(strFromU8(entries[`${root}/Index.csv`]!)).toContain('Unfiled records')
     expect(strFromU8(entries[`${root}/README.txt`]!)).toContain('before the engagement was deleted')
     expect(plan.subject).toBe('Coding Pathway')
@@ -490,5 +646,13 @@ describe('AuditPackageService: the full copy taken before a deletion', () => {
   it('reads every stored object once while streaming', async () => {
     const { storage, plan } = await run('owner', true)
     expect(storage.read).toHaveBeenCalledTimes(plan.objects.length)
+  })
+})
+
+describe('csv', () => {
+  it('keeps a negative amount a number and quotes anything a spreadsheet would run', () => {
+    expect(
+      csv([[-224, '-224.00', '-2240', '-2+3', '=1+1', '@x', '+5', '\tx', 'Ledger & Co.']])
+    ).toBe(`"-224","-224.00","-2240","'-2+3","'=1+1","'@x","'+5","'\tx","Ledger & Co."`)
   })
 })

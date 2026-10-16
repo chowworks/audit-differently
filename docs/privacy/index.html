@@ -276,6 +276,55 @@
           download, and then it is destroyed.
         </p>
       </section>
+      <section id="ai">
+        <h2><span aria-hidden="true">🤖</span> How we use AI</h2>
+        <p>
+          Audit Differently can use an AI model for two jobs, and only when someone says yes. Each
+          time, it fills in fields on your screen, and you check them before anything is saved.
+          Without that yes, nothing goes to an AI model, and you map or type the fields yourself.
+        </p>
+        <ul>
+          <li>
+            <strong>Importing transactions:</strong> when you press "Suggest the mapping with AI",
+            we send the file's column names (for example "Date", "Name", "Amount") to suggest which
+            column holds what. We never send a row of the file.
+          </li>
+          <li>
+            <strong>Uploading receipts:</strong> when you tick "Read the amount, date and vendor
+            with AI", we send those receipt files to read the amount, date and vendor whenever a
+            PDF's text does not give all three. The box is unticked every time you upload.
+          </li>
+          <li>
+            <strong>Emailed receipts:</strong> nobody is there to ask when a receipt is emailed in,
+            so a workspace owner decides. It is off unless an owner turns on "Read emailed receipts
+            with AI" in the workspace's settings.
+          </li>
+        </ul>
+        <p>
+          We never send personal documents (eligibility records, enrollment forms, pay stubs) to an
+          AI model, whatever is ticked or turned on. When AI read a receipt or suggested a mapping,
+          the workspace's activity log says so.
+        </p>
+        <p>
+          The AI model is run by a service provider that processes what we send on our behalf, under
+          a contract with us, to give back the answer. We use what comes back only to fill in those
+          fields.
+        </p>
+      </section>
+      <section id="services">
+        <h2><span aria-hidden="true">🧩</span> Services we use</h2>
+        <p>
+          Besides the AI provider above, we use service providers to host the app and its database,
+          to store your documents, and to sign you in. Each handles your data only to provide that
+          service to us.
+        </p>
+        <p>
+          <strong>Email:</strong> receipts emailed to your workspace's receipts address are received
+          for us by an email service provider, which passes the message and its attachments to the
+          app. The same provider delivers what you send us through the contact form. The app never
+          sends a document by email.
+        </p>
+      </section>
       <!-- END EDIT HERE -->
 
       <section id="contact">

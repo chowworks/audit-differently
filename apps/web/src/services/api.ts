@@ -75,6 +75,29 @@ export async function apiDownload<T = never>(
   return null
 }
 
+/** A file's bytes from the API with the caller's token, for showing in the page (a statement for pdf.js). */
+export async function apiBytes(path: string, token: string | null): Promise<ArrayBuffer> {
+  const headers = new Headers()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const response = await fetch(`${API_URL}/api${path}`, { headers, cache: 'no-store' })
+  if (!response.ok) {
+    let body: unknown = null
+    try {
+      body = await response.json()
+    } catch {
+      /* no body */
+    }
+    const message =
+      body &&
+      typeof body === 'object' &&
+      typeof (body as { message?: unknown }).message === 'string'
+        ? (body as { message: string }).message
+        : `GET ${path} failed (${response.status})`
+    throw new ApiError(response.status, message, body)
+  }
+  return response.arrayBuffer()
+}
+
 /** A JSON call to the API with the caller's token. Throws ApiError on a non-2xx response. */
 export async function apiFetch<T>(
   path: string,

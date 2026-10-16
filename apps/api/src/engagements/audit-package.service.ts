@@ -1,10 +1,13 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common'
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { strToU8, zipSync, type Zippable } from 'fflate'
 import {
   DOCUMENT_PURPOSE_LABELS,
+  ENGAGEMENT_TRACK_LABELS,
+  ENGAGEMENT_TRACKS,
   PERSONAL_DOCUMENT_ROLES,
   type DocumentPurpose,
   type Role,
+  type StatementMark,
 } from '@ad/types'
 import { AccessLogService } from '../core/access-log.service'
 import { keyInWorkspace } from '../documents/documents.service'
@@ -13,7 +16,16 @@ import { zipEntries, type ZipSource } from './zip-stream'
 import { splitParts, streamPart, type ExportObject, type PartLayout } from './export-parts'
 import { staffName, tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { howMany } from '../core/changes'
+import { budgetItemsOf } from '../workspaces/budget-items'
+import { markPdf, markPlace, NOT_DRAWN } from '../payroll/mark-pdf'
 import { PrismaService } from '../prisma/prisma.service'
+import {
+  currentSignedCopy,
+  earlierSignedName,
+  reopenedWords,
+  reopeningRows,
+  type Reopening,
+} from '../reports/reopenings'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
 
 /** Where each engagement-level record kind files, in the order the auditor reads them. */
@@ -43,13 +55,13 @@ export const safe = (s: string) =>
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 80)
-const ext = (fileName: string) => {
+export const ext = (fileName: string) => {
   const i = fileName.lastIndexOf('.')
   return i > 0 ? fileName.slice(i).toLowerCase() : ''
 }
-const money = (n: number) =>
+export const money = (n: number) =>
   `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-const day = (d: Date) => d.toISOString().slice(0, 10)
+export const day = (d: Date) => d.toISOString().slice(0, 10)
 /** MM.DD.YY, the way the funder's package names files. */
 const stamp = (d: Date) => {
   const [y, m, dd] = day(d).split('-')
@@ -63,8 +75,17 @@ const monthName = (period: string) => {
     timeZone: 'UTC',
   })
 }
+/**
+ * A CSV cell a spreadsheet will not run: text that starts with =, +, -, @, a tab or a carriage return is read as a
+ * formula, so it gets a leading apostrophe (vendor and memo text can come from an imported file). A plain signed
+ * number (-224.00) is left as it is, so a negative amount stays a number.
+ */
+const cell = (v: string | number) => {
+  const s = String(v ?? '')
+  return /^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s) ? `'${s}` : s
+}
 export const csv = (rows: (string | number)[][]) =>
-  rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n')
+  rows.map((r) => r.map((v) => `"${cell(v).replace(/"/g, '""')}"`).join(',')).join('\r\n')
 
 type Doc = {
   id: string
@@ -87,6 +108,8 @@ type Doc = {
  */
 @Injectable()
 export class AuditPackageService {
+  private readonly logger = new Logger(AuditPackageService.name)
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly log: AccessLogService,
@@ -94,8 +117,9 @@ export class AuditPackageService {
   ) {}
 
   /**
-   * Works out every file of the package without fetching any stored object: the text files are made here, each
-   * stored object is a key to fetch when it is written. `complete` is the copy taken before an engagement is
+   * Works out every file of the package: the text files are made here, each stored object is a key to fetch when it
+   * is written. The only objects read here are the bank statements with marked lines, to know which marks can be
+   * drawn. `complete` is the copy taken before an engagement is
    * deleted: it also files whatever the layout does not reach (a document attached to nothing) under Unfiled
    * records, and adds the budget, the months' status and the checks as CSVs, so nothing the owner may see is lost.
    */
@@ -114,6 +138,7 @@ export class AuditPackageService {
           orderBy: { period: 'asc' },
           include: {
             checks: true,
+            reopenings: { orderBy: { reopenedAt: 'asc' } },
             expenses: {
               orderBy: [{ date: 'asc' }, { itemNumber: 'asc' }],
               include: { documents: { include: { document: true } } },
@@ -151,6 +176,13 @@ export class AuditPackageService {
       ],
     ]
     const seen = new Set<string>()
+    const marks = new Map<string, StatementMark[]>()
+    const reopened: string[] = []
+    /** A payroll item's marked line on its bank statement, drawn on the statement's copy in the package. */
+    const markOf = (d: Doc, mark: unknown) => {
+      if (!mark || d.kind !== 'bank-statement' || d.sensitivity !== 'financial') return
+      marks.set(d.storageKey, [...(marks.get(d.storageKey) ?? []), mark as StatementMark])
+    }
     let count = 0
     /** Writes the file once and returns its path inside the package. */
     const add = async (
@@ -227,12 +259,36 @@ export class AuditPackageService {
         placed.set(d.id, path)
         return path
       }
-      const signed = c.documents.find((d) => d.kind === 'signed-report' && d.period === r.period)
+      const signed = currentSignedCopy(
+        c.documents,
+        r.period,
+        r.reopenings[r.reopenings.length - 1]?.reopenedAt
+      )
       if (signed)
         await add(`${folder}/Signed report - ${safe(signed.fileName)}`, signed, {
           step: '07 Signed report',
           month,
         })
+      // Each signed copy submitted before the month was reopened, and the reopenings themselves.
+      if (r.reopenings.length) {
+        const paths = new Map<Reopening, string>()
+        for (const o of r.reopenings) {
+          const d = c.documents.find((x) => x.id === o.signedDocumentId)
+          if (!d) continue
+          paths.set(
+            o,
+            await add(
+              `${folder}/Earlier submissions/${earlierSignedName(o.submittedAt, ext(d.fileName))}`,
+              d,
+              { step: '07 Signed report (earlier submission)', month }
+            )
+          )
+        }
+        files[`${root}/${folder}/Reopenings.csv`] = strToU8(
+          csv(reopeningRows(r.reopenings, (o) => paths.get(o) ?? 'not on file'))
+        )
+        reopened.push(`  ${month}: ${reopenedWords(r.reopenings.length)}`)
+      }
       const ledger: (string | number)[][] = [
         [
           'Item #',
@@ -253,6 +309,7 @@ export class AuditPackageService {
         const paths: string[] = []
         for (const ed of e.documents) {
           const d = ed.document
+          markOf(d, ed.mark)
           const own = `${folder}/Program Costs/${safe(`${e.itemNumber} - ${e.vendor} - ${money(allocated)} - ${stamp(e.date)} - ${purposeLabel(ed.purpose)}`)}${ext(d.fileName)}`
           paths.push(
             await file(d, own, {
@@ -299,6 +356,7 @@ export class AuditPackageService {
           for (const wd of w.documents) {
             const d = wd.document
             if (d.sensitivity === 'personal' && !personal) continue
+            markOf(d, wd.mark)
             paths.push(
               await file(
                 d,
@@ -376,7 +434,7 @@ export class AuditPackageService {
         csv([
           ['Category', 'Report line', 'Amount', 'Narrative'],
           ...c.budgetLines.map((b) => [
-            b.category,
+            budgetItemsOf(c.workspace).find((i) => i.key === b.category)?.label ?? b.category,
             b.reportLine,
             Number(b.amount).toFixed(2),
             b.narrative ?? '',
@@ -391,10 +449,10 @@ export class AuditPackageService {
             'Due',
             'Submitted',
             'Prepared by',
-            'Authorized by',
-            'Authorized',
-            'Funder review',
-            'Denied reason',
+            'Month-end closing approved by',
+            'Month-end closing approved',
+            'Closing note',
+            'Last sent back because',
             'Comments',
             'Final',
           ],
@@ -406,8 +464,8 @@ export class AuditPackageService {
             r.preparedByName ?? '',
             r.authorizedByName ?? '',
             r.authorizedAt ? day(r.authorizedAt) : '',
-            r.review ? JSON.stringify(r.review) : '',
-            r.deniedReason ?? '',
+            r.closingNote ?? '',
+            r.sentBackReason ?? '',
             r.comments ?? '',
             r.isFinal ? 'yes' : 'no',
           ]),
@@ -432,6 +490,16 @@ export class AuditPackageService {
       )
     }
 
+    // Which marks the package's copies will carry, worked out now so the README says only what is drawn: a statement
+    // with marks is read once here and again when it is written (a month has one or two). The deletion export keeps
+    // the originals, so it reads none here.
+    const notDrawn = new Map<string, StatementMark[]>()
+    if (!options.complete)
+      for (const [key, ms] of marks) {
+        const marked = await markPdf(new Uint8Array(await this.storage.read(key)), ms)
+        if (marked.notDrawn.length) notDrawn.set(key, marked.notDrawn)
+      }
+
     const readme = [
       `AUDIT PACKAGE: ${c.name}${c.number ? ` (${c.number})` : ''}`,
       `Workspace: ${c.workspace.name}`,
@@ -447,9 +515,14 @@ export class AuditPackageService {
       '  Engagement records/      the proposal, award letter, budget narrative and contract, numbered by step',
       '  Months/                  one folder per month of the contract, named with the amount billed:',
       '                             Signed report: the monthly financial report as submitted;',
+      '                             Earlier submissions and Reopenings.csv, for a month reopened to correct it:',
+      '                             each signed copy submitted before, and when, by whom and why it was reopened;',
       '                             Ledger.csv: every line billed that month, with the files behind it;',
       '                             Program Costs: one file per line and proof, named item, vendor, amount, date;',
-      '                             Proof of Purchase - Bank Statements: each statement once, for the lines it backs;',
+      '                             Proof of Purchase - Bank Statements: each statement once, for the lines it backs,',
+      notDrawn.size
+        ? '                             with each payroll payment it proves highlighted where it could be drawn (see MARKED LINES NOT DRAWN);'
+        : '                             with each payroll payment it proves highlighted (the stored statement is unchanged);',
       '                             Payroll and Timesheet Reports: each register and timesheet once;',
       '                             WEX Documentation: per participant paid that month, Payroll Verification',
       '                             (the pay stub or other evidence of payment) and Payroll.csv with the figures',
@@ -465,13 +538,34 @@ export class AuditPackageService {
       ...(options.complete
         ? [
             '  Unfiled records/         records kept with this engagement that no step above reaches',
-            "  Budget.csv, Months.csv, Checks.csv  the approved budget, each month's status and funder review,",
+            "  Budget.csv, Months.csv, Checks.csv  the approved budget, each month's status and month-end closing,",
             '                           and every check finding with how it was resolved',
             '',
             'This is the full copy taken before the engagement was deleted.',
           ]
         : []),
       '',
+      ...(ENGAGEMENT_TRACKS.some((t) => !c.tracks.includes(t))
+        ? [
+            'NOT KEPT IN AUDIT DIFFERENTLY FOR THIS ENGAGEMENT',
+            ...ENGAGEMENT_TRACKS.filter((t) => !c.tracks.includes(t)).map(
+              (t) => `  ${ENGAGEMENT_TRACK_LABELS[t]}`
+            ),
+            '',
+          ]
+        : []),
+      ...(notDrawn.size
+        ? [
+            'MARKED LINES NOT DRAWN',
+            ...[...notDrawn].flatMap(([key, ms]) => [
+              ...objects.filter((o) => o[1] === key).map((o) => `  ${o[0].slice(root.length + 1)}`),
+              `    ${NOT_DRAWN}`,
+              ...ms.map((m) => `      ${markPlace(m)}`),
+            ]),
+            '',
+          ]
+        : []),
+      ...(reopened.length ? ['MONTHS REOPENED AFTER THEY WERE SUBMITTED', ...reopened, ''] : []),
       'RECORDS THAT DO NOT EXIST FOR THIS ENGAGEMENT',
       ...(Object.keys(waivers).length
         ? Object.entries(waivers).map(([k, v]) => `  ${k}: ${v}`)
@@ -491,7 +585,26 @@ export class AuditPackageService {
       files: count,
       personal,
       personalPaths,
+      marks,
+      notDrawn,
     }
+  }
+
+  /**
+   * A stored object for the package: a bank statement with marked lines as a highlighted copy, else as stored. A
+   * statement the plan found it cannot mark (encrypted, damaged) goes in as stored, and the README says so. Should a
+   * copy carry fewer marks than the README was written for, the download fails rather than claim them.
+   */
+  private async object(plan: PackagePlan, key: string): Promise<Uint8Array> {
+    const bytes = new Uint8Array(await this.storage.read(key))
+    const marks = plan.marks?.get(key)
+    if (!marks?.length || plan.notDrawn?.has(key)) return bytes
+    const marked = await markPdf(bytes, marks)
+    if (marked.notDrawn.length) {
+      this.logger.error('A statement could not be marked as its plan said it would be')
+      throw new Error('A marked statement changed while the package was made')
+    }
+    return marked.bytes
   }
 
   /** The package as bytes in memory (the download button): fine for a small engagement. */
@@ -501,7 +614,7 @@ export class AuditPackageService {
   ): Promise<{ name: string; bytes: Buffer; files: number; personal: boolean }> {
     const p = await this.plan(caller, engagementId)
     const files: Zippable = { ...p.text }
-    for (const [path, key] of p.objects) files[path] = new Uint8Array(await this.storage.read(key))
+    for (const [path, key] of p.objects) files[path] = await this.object(p, key)
     const bytes = zipSync(files, { level: 6 })
     await this.log.log(caller, {
       workspaceId: p.workspaceId,
@@ -519,7 +632,7 @@ export class AuditPackageService {
       ...Object.entries(plan.text),
       ...plan.objects.map(([path, key]): [string, ZipSource] => [
         path,
-        async () => new Uint8Array(await this.storage.read(key)),
+        () => this.object(plan, key),
       ]),
     ]
     return zipEntries(entries)
@@ -532,7 +645,7 @@ export class AuditPackageService {
 
   /** Part `n` of the layout as zip chunks, one stored object in memory at a time. */
   streamPart(plan: PackagePlan, layouts: PartLayout[], n: number): AsyncGenerator<Uint8Array> {
-    return streamPart(plan, layouts, n, async (key) => new Uint8Array(await this.storage.read(key)))
+    return streamPart(plan, layouts, n, (key) => this.object(plan, key))
   }
 
   /**
@@ -577,4 +690,11 @@ export interface PackagePlan {
   personal: boolean
   /** The paths of the personal records the package actually holds. */
   personalPaths: Set<string>
+  /**
+   * The marked payroll lines of each bank statement, by storage key: the audit package draws them on its copy. The
+   * deletion export reads the stored objects itself, so it keeps the originals.
+   */
+  marks?: Map<string, StatementMark[]>
+  /** The marks that cannot be drawn on a statement's copy (encrypted or damaged), by storage key; that copy is as stored. */
+  notDrawn?: Map<string, StatementMark[]>
 }

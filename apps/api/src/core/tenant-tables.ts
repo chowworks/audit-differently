@@ -21,8 +21,14 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   'WexPayment',
   'WexPaymentDocument',
   'Check',
+  // A month's reopenings (migration 20261015001500): append-only, they go only with their month.
+  'ReportReopening',
   'DataAccessLog',
   'Suggestion',
+  'ImportMapping',
+  // Emailed receipts (migration 20261015001000). Its rows with no workspace yet are trusted work's alone (app.system),
+  // so like every table here a query on it must set the request's context.
+  'InboundReceipt',
   'DeletionRecord',
   'TermsAcceptance',
   // No workspace: who made or unmade a platform admin. It is here because its policies read the request's context

@@ -1,7 +1,5 @@
 import './review-switch.css'
 
-// Not used by any screen right now: kept for the next design experiment (see "Design experiments" in CLAUDE.md).
-
 export interface ReviewOption {
   key: string
   label: string
@@ -18,6 +16,7 @@ export function ReviewSwitch({
   label,
   options,
   current,
+  raised,
 }: {
   /** The query parameter that picks the option, e.g. "layout". */
   param: string
@@ -26,6 +25,8 @@ export function ReviewSwitch({
   options: ReviewOption[]
   /** The key of the option on screen. */
   current: string
+  /** Sits above another switch on the same page, so both can be reached. */
+  raised?: boolean
 }) {
   const hrefFor = (key: string) => {
     const q = new URLSearchParams(window.location.search)
@@ -34,7 +35,7 @@ export function ReviewSwitch({
   }
   const on = options.find((o) => o.key === current) ?? options[0]
   return (
-    <nav className="rsw" aria-label={`${label} under review`}>
+    <nav className={raised ? 'rsw rsw-raised' : 'rsw'} aria-label={`${label} under review`}>
       <span className="rsw-label">{label}:</span>
       <span className="rsw-current">{on?.label}</span>
       <span className="rsw-options">

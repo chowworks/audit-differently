@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, HttpCode, Param, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, HttpCode, Param, Patch, Post, UseGuards } from '@nestjs/common'
+import type { ParticipantDto } from '@ad/types'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
 import { ParticipantsService } from './participants.service'
@@ -10,6 +11,15 @@ export class ParticipantsController {
     private readonly participants: ParticipantsService,
     private readonly callers: CallerService
   ) {}
+
+  @Patch(':id/tags')
+  async setTags(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Body() body: { tags?: unknown }
+  ): Promise<ParticipantDto> {
+    return this.participants.setTags(await this.callers.load(userId), id, body?.tags)
+  }
 
   @Post(':id/documents')
   @HttpCode(204)

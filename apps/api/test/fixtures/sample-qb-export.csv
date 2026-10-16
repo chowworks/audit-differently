@@ -1,0 +1,25 @@
+Transaction Report
+Northwind Learning Collective (demo)
+"August 1 - September 30, 2026"
+
+,Date,Transaction Type,Num,Name,Memo/Description,Account,Split,Amount
+Checking,,,,,,,,
+,08/04/2026,Expense,2101,Bright Path Office Supply,"Printer paper, toner",Checking,Office Supplies,-186.40
+,08/11/2026,Check,2102,Clearwater Bookkeeping LLC,August bookkeeping,Checking,Contract Services,"-1,250.00"
+,08/18/2026,Expense,2103,Lakeside Transit Co.,Bus passes for participants,Checking,Participant Training,-320.00
+,08/25/2026,Bill Payment (Check),2104,Northstar Certification Board,IT fundamentals exam vouchers (4),Checking,Participant Training,-600.00
+,08/27/2026,Expense,,Pinecrest Coffee & Catering,Orientation lunch,Checking,Meals,-142.75
+,08/29/2026,Deposit,,Bright Path Office Supply,Refund for returned toner,Checking,Office Supplies,48.20
+,09/02/2026,Expense,2105,Bright Path Office Supply,Lab supplies,Checking,Office Supplies,-212.18
+,09/08/2026,Check,2106,Clearwater Bookkeeping LLC,September bookkeeping,Checking,Contract Services,"-1,250.00"
+,09/10/2026,Expense,2107,Summit Laptop Rentals,"Laptop rental, 8 units",Checking,Participant Training,"-1,480.00"
+,09/14/2026,Expense,2108,Lakeside Transit Co.,Bus passes for participants,Checking,Participant Training,-320.00
+,09/16/2026,Expense,,Fern Hollow Mileage Service,Site visit mileage,Checking,Travel,-86.25
+,09/21/2026,Bill Payment (Check),2109,Northstar Certification Board,Exam vouchers (2),Checking,Participant Training,-300.00
+,09/24/2026,Expense,2110,Pinecrest Coffee & Catering,Family night refreshments,Checking,Meals,-96.00
+,09/28/2026,Expense,2111,Bright Path Office Supply,"Notebooks, pens",Checking,Office Supplies,-64.90
+,09/30/2026,Expense,2112,Maple Street Properties,Classroom rent share,Checking,Rent,-900.00
+Total for Checking,,,,,,,,"-$7,160.28"
+TOTAL,,,,,,,,"-$7,160.28"
+
+"Accrual Basis Thursday, October 15, 2026 09:12 AM GMT-04:00"

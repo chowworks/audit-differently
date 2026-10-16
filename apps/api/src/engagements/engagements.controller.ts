@@ -117,7 +117,8 @@ export class EngagementsController {
   async createParticipant(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { participantId: string; displayName: string; enrollmentStatus?: string }
+    @Body()
+    body: { participantId: string; displayName: string; enrollmentStatus?: string; tags?: unknown }
   ): Promise<ParticipantDto> {
     return this.engagements.createParticipant(await this.callers.load(userId), id, body)
   }

@@ -60,18 +60,18 @@ The seed makes two fictional workspaces. Sign in as one of these people (they ex
 with these emails; the first sign-in takes over the seeded seat). Sam's seat is the
 test account `test@chowworks.com`.
 
-| Person        | Email                         | Role                  | Sees                                                                                               |
-| ------------- | ----------------------------- | --------------------- | -------------------------------------------------------------------------------------------------- |
-| Dana Okafor   | dana.okafor@riverbend.example | bookkeeper, Riverbend | Riverbend's engagement: July approved, August submitted, September draft with five blocking checks |
-| Sam Whitfield | test@chowworks.com            | owner, Riverbend      | The same, plus personal documents, the people and the lists of the workspace                       |
-| Jules Park    | jules.park@riverbend.example  | auditor, Riverbend    | Everything in Riverbend, read-only, personal documents included                                    |
-| Lee Tanaka    | lee.tanaka@harbortech.example | bookkeeper, Harbor    | Only Harbor Tech's workspace: an engagement missing its proposal and narrative                     |
+| Person        | Email                         | Role                  | Sees                                                                                                    |
+| ------------- | ----------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------- |
+| Dana Okafor   | dana.okafor@riverbend.example | bookkeeper, Riverbend | Riverbend's engagement: July and August closed and submitted, September draft with five blocking checks |
+| Sam Whitfield | test@chowworks.com            | owner, Riverbend      | The same, plus personal documents, the people and the lists of the workspace                            |
+| Jules Park    | jules.park@riverbend.example  | auditor, Riverbend    | Everything in Riverbend, read-only, personal documents included                                         |
+| Lee Tanaka    | lee.tanaka@harbortech.example | bookkeeper, Harbor    | Only Harbor Tech's workspace: an engagement missing its proposal and narrative                          |
 
 The story: as Dana, the overview says September is owed and lists what is missing. Open the engagement:
 steps 1 to 4 are on file (proposal, award letter, narrative, contract), July and August are signed and in,
 September is the month that needs you. Open September, attach the missing allocation worksheet and the bank
-statement, remove the G&A row the rule flagged as indirect, submit, attach the signed copy. When the funder's
-email arrives, record its decision on the month. As Sam, Manage workspaces shows Riverbend's people, roles and
+statement, remove the G&A row the rule flagged as indirect, record the month-end closing as approved by Sam
+Whitfield, attach the signed copy, submit. As Sam, My workspaces shows Riverbend's people, roles and
 the source-of-funds list; "Set up an award" walks the five-step setup, starting at the proposal or the award.
 
 Reset the demo to its starting state (the dev database is shared, so say so first):

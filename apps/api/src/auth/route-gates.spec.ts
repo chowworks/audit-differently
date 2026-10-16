@@ -9,7 +9,7 @@ import { SKIP_TERMS_GATE } from './skip-terms-gate.decorator'
 /**
  * Every HTTP route of the API, read from the controllers' decorators, and whether AuthenticatedGuard applies
  * to it. This data holds payroll and eligibility records: a route without the guard is a public one, and the
- * list of those is three long and written down here. Adding a route means adding it to the list below.
+ * list of those is four long and written down here. Adding a route means adding it to the list below.
  */
 type Ctor = { new (...args: never[]): unknown; prototype: Record<string, unknown> }
 
@@ -71,6 +71,10 @@ const PUBLIC = [
   'GET /api/documents/local/:token',
   // The contact form a visitor fills in before having an account: validated, throttled to 5 per 10 minutes, honeypot.
   'POST /api/contact',
+  // The email provider's webhook for emailed receipts (Resend inbound): its credential is the provider's Svix signature
+  // over the raw body, checked in constant time with a five-minute window; it only queues the email (once per provider
+  // id) and answers at once, nothing is read back; throttled to 60 a minute; 404 while the feature is not set up.
+  'POST /api/inbound/resend',
 ]
 
 /** The gated routes a person who has not accepted the current Terms may still call: the Terms screen's own. */
@@ -78,7 +82,8 @@ const OPEN_BEFORE_TERMS = ['GET /api/me', 'POST /api/me/terms']
 
 /**
  * The platform admin's routes: AdminGuard after AuthenticatedGuard, which checks the Clerk role and sets the admin's
- * database flag. Workspace level only: people, name, lists, suggestions, creating a workspace, and who is an admin. No
+ * database flag. Workspace level only: people, name, lists, suggestions, creating a workspace, who is an admin, and the emailed
+ * receipts that went nowhere or were refused or failed. No
  * route below the workspace (engagements, months, documents, participants, the access log, deletion) is here, so
  * the flag is never set there and an admin is only what their memberships make them (404 elsewhere).
  */
@@ -95,6 +100,9 @@ const ADMIN = [
   'GET /api/admin/admins',
   'GET /api/admin/role-changes',
   'PUT /api/admin/users/:id/role',
+  // Email administration: emailed receipts that reached no workspace, or were refused or failed. Metadata only.
+  'GET /api/admin/inbound',
+  'POST /api/admin/inbound/:id/run-again',
 ]
 
 /** Every other route. A member of another workspace gets 404 from each; the role checks are in the specs beside each service. */
@@ -126,21 +134,46 @@ const GATED = [
   'DELETE /api/engagements/:id',
   'POST /api/engagements/:id/reports',
   'POST /api/engagements/:id/participants',
+  'POST /api/engagements/:id/budget-lines',
+  'PATCH /api/engagements/:id/budget-lines/:lineId',
+  'DELETE /api/engagements/:id/budget-lines/:lineId',
+  'POST /api/engagements/:id/imports/read',
+  'POST /api/engagements/:id/imports/suggest',
+  'POST /api/engagements/:id/imports/preview',
+  'POST /api/engagements/:id/imports',
   'GET /api/reports/:id',
+  'GET /api/reports/:id/bundle',
   'POST /api/reports/:id/expenses',
   'PATCH /api/expenses/:id',
   'DELETE /api/expenses/:id',
   'POST /api/expenses/:id/documents',
   'DELETE /api/expenses/:id/documents/:documentId',
   'POST /api/reports/:id/wex',
+  'PATCH /api/wex/:id/tags',
   'POST /api/wex/:id/documents',
-  'POST /api/reports/:id/submit',
-  'POST /api/reports/:id/review',
+  'POST /api/reports/:id/closing',
+  'POST /api/reports/:id/send-back',
+  'POST /api/reports/:id/request-edits',
   'POST /api/reports/:id/reopen',
+  'POST /api/reports/:id/submit',
+  'POST /api/reports/:id/receipts',
+  'PATCH /api/receipts/:id',
+  'POST /api/receipts/:id/match',
+  'DELETE /api/receipts/:id/match/:expenseId',
+  'POST /api/receipts/:id/dismiss',
+  'GET /api/workspaces/:id/receipts-inbox',
+  'POST /api/inbound-receipts/:id/run-again',
+  'POST /api/inbound-receipts/:id/file',
+  'POST /api/reports/:id/payroll-documents',
+  'POST /api/reports/:id/payroll-documents/replace',
+  'GET /api/payroll/:target/:id/lines',
+  'GET /api/payroll/statements/:documentId/file',
+  'PUT /api/payroll/:target/:id/statement',
   'POST /api/documents',
   'GET /api/documents/of-workspace/:workspaceId',
   'DELETE /api/documents/:id',
   'GET /api/documents/:id/url',
+  'PATCH /api/participants/:id/tags',
   'POST /api/participants/:id/documents',
   'DELETE /api/participants/:id/documents/:documentId',
 ]
@@ -153,7 +186,7 @@ describe('route gates', () => {
     expect(new Set(all.map((r) => r.route))).toEqual(new Set([...PUBLIC, ...GATED]))
   })
 
-  it('puts AuthenticatedGuard on every route but the three public ones', () => {
+  it('puts AuthenticatedGuard on every route but the four public ones', () => {
     expect(
       all
         .filter((r) => !r.gated)

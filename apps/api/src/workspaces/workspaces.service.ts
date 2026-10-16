@@ -1,11 +1,17 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
 import { randomUUID } from 'node:crypto'
-import type { Prisma } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 import {
   WRITE_ROLES,
-  DEFAULT_FUNDING_SOURCES,
+  DEFAULT_TAG_TYPES,
   ROLES,
   ROLE_LABELS,
+  RECEIPTS_ADDRESS_PATTERN,
   type ActivityEntry,
   type AdminWorkspaceDetail,
   type AdminWorkspaceDto,
@@ -13,6 +19,8 @@ import {
   type LoggedChange,
   type Role,
   type SuggestionDto,
+  type TagTarget,
+  type TagUses,
   type WorkspaceDetail,
   type WorkspaceDto,
   type WorkspaceMemberDto,
@@ -22,10 +30,29 @@ import { AccessLogService } from '../core/access-log.service'
 import { allow, staffName, workspaceRole, type Caller } from '../core/caller'
 import { changesOf, type Fields } from '../core/changes'
 import { runAsSystem } from '../core/tenant-context'
+import { aiConfigured } from '../imports/ai-guess'
+import { receiptsEmail } from '../inbound/config'
 import { PrismaService } from '../prisma/prisma.service'
+import { budgetItemsOf, budgetItemWords, cleanBudgetItems } from './budget-items'
+import { cleanTagTypes, removedTags, tagTypesOf, tagTypeWords, type RemovedTag } from './tags'
 
-const LIST_FIELDS: Fields = { fundingSources: { label: 'Sources of funds', show: 'list' } }
+/** The budget items by their words, "Travel (Program Costs)": owners' labels, never personal. */
+const BUDGET_ITEM_FIELDS: Fields = { budgetItems: { label: 'Budget items', show: 'list' } }
+/** The tag types by their words, "Age group (Participants): Under 18, 18 to 24": owners' labels, never personal. */
+const TAG_TYPE_FIELDS: Fields = { tagTypes: { label: 'Tag types', show: 'list' } }
 const NAME_FIELDS: Fields = { name: { label: 'Workspace name', show: 'text' } }
+/** The local part of the receipts address: the owners' own words for the team, never personal. */
+const RECEIPTS_ADDRESS_FIELDS: Fields = {
+  receiptsAddress: { label: 'Receipts address', show: 'text' },
+}
+const EMAILED_AI_FIELDS: Fields = {
+  readEmailedReceiptsWithAi: {
+    label: 'Read emailed receipts with AI',
+    show: 'text',
+    labels: { true: 'on', false: 'off' },
+  },
+}
+
 /** A membership's role, in the words of the people list and the invite form (Owner, Bookkeeper, Auditor). */
 export const ROLE_FIELDS: Fields = { role: { label: 'Role', show: 'text', labels: ROLE_LABELS } }
 
@@ -93,7 +120,10 @@ export class WorkspacesService {
     w: {
       id: string
       name: string
-      fundingSources: string[]
+      budgetItems: unknown
+      tagTypes: unknown
+      receiptsAddress: string | null
+      readEmailedReceiptsWithAi: boolean
       termsAcceptedAt?: Date | null
       _count: { memberships: number; engagements: number }
     }
@@ -104,8 +134,13 @@ export class WorkspacesService {
       myRole: caller.memberships.find((m) => m.workspaceId === w.id)?.role ?? null,
       memberCount: w._count.memberships,
       engagementCount: w._count.engagements,
-      fundingSources: w.fundingSources.length ? w.fundingSources : DEFAULT_FUNDING_SOURCES,
+      budgetItems: budgetItemsOf(w),
+      tagTypes: tagTypesOf(w),
       canManage: workspaceRole(caller, w.id, ['owner']),
+      receiptsAddress: w.receiptsAddress,
+      receiptsEmail: receiptsEmail(w.receiptsAddress),
+      readEmailedReceiptsWithAi: w.readEmailedReceiptsWithAi,
+      aiAvailable: aiConfigured(),
       termsAcceptedAt: w.termsAcceptedAt?.toISOString() ?? null,
     }
   }
@@ -130,7 +165,31 @@ export class WorkspacesService {
     })
     if (!w) throw new NotFoundException()
     const members = w.memberships.map(memberDto)
-    return { ...this.dto(caller, w), members, suggestions: suggestionDtos(members, w.suggestions) }
+    return {
+      ...this.dto(caller, w),
+      members,
+      suggestions: suggestionDtos(members, w.suggestions),
+      tagUses: workspaceRole(caller, id, ['owner']) ? await this.tagUses(id) : {},
+    }
+  }
+
+  /**
+   * How many records of each kind hold each tag, for the owners' warning before a removal. Counts only: no row of a
+   * record (a participant's tags are personal) leaves the database.
+   */
+  private async tagUses(id: string): Promise<TagUses> {
+    const rows = await this.prisma.$queryRaw<{ kind: TagTarget; tag: string; n: number }[]>`
+      SELECT 'engagement' AS kind, t AS tag, count(*)::int AS n FROM "Engagement", unnest("tags") t
+        WHERE "workspaceId" = ${id} GROUP BY t
+      UNION ALL SELECT 'expense', t, count(*)::int FROM "Expense", unnest("tags") t
+        WHERE "workspaceId" = ${id} GROUP BY t
+      UNION ALL SELECT 'payroll', t, count(*)::int FROM "WexPayment", unnest("tags") t
+        WHERE "workspaceId" = ${id} GROUP BY t
+      UNION ALL SELECT 'participant', t, count(*)::int FROM "Participant", unnest("tags") t
+        WHERE "workspaceId" = ${id} GROUP BY t`
+    const out: TagUses = {}
+    for (const r of rows ?? []) (out[r.tag] ??= {})[r.kind] = Number(r.n)
+    return out
   }
 
   /**
@@ -160,7 +219,10 @@ export class WorkspacesService {
     const dto = adminDto(w)
     return {
       ...dto,
-      fundingSources: w.fundingSources.length ? w.fundingSources : DEFAULT_FUNDING_SOURCES,
+      receiptsAddress: w.receiptsAddress,
+      receiptsEmail: receiptsEmail(w.receiptsAddress),
+      budgetItems: budgetItemsOf(w),
+      tagTypes: tagTypesOf(w),
       suggestions: suggestionDtos(dto.members, w.suggestions),
     }
   }
@@ -233,7 +295,7 @@ export class WorkspacesService {
       caller,
       async (tx) => {
         const w = await tx.workspace.create({
-          data: { name, fundingSources: DEFAULT_FUNDING_SOURCES },
+          data: { name, tagTypes: DEFAULT_TAG_TYPES as unknown as Prisma.InputJsonValue },
         })
         const ownerId = self ? caller.userId : (await findOrInvite(tx, email, input.ownerName)).id
         await tx.membership.create({ data: { userId: ownerId, workspaceId: w.id, role: 'owner' } })
@@ -268,23 +330,169 @@ export class WorkspacesService {
     })
   }
 
-  async setLists(caller: Caller, id: string, fundingSources: string[]): Promise<void> {
+  /**
+   * The workspace's receipts address (its local part; the domain is the environment's): set by its owners only. The
+   * platform admin changes a workspace's name, lists and memberships, and this is none of them: it decides where a
+   * workspace's mail lands. Empty clears it. Unique across workspaces.
+   */
+  async setReceiptsAddress(caller: Caller, id: string, given: unknown): Promise<void> {
+    const w = await this.load(caller, id)
+    allow(
+      !caller.admin && workspaceRole(caller, id, ['owner']),
+      'Only an owner sets the receipts address'
+    )
+    if (given !== null && typeof given !== 'string')
+      throw new BadRequestException('The receipts address must be text')
+    const local = (given ?? '').trim().toLowerCase() || null
+    if (local && !RECEIPTS_ADDRESS_PATTERN.test(local))
+      throw new BadRequestException(
+        'Use 3 to 40 lowercase letters, digits and hyphens, starting and ending with a letter or digit'
+      )
+    if (local === w.receiptsAddress) return
+    // Set once (trigger Workspace_6_receipts_address_kept): an address never moves, so mail sent to it never lands
+    // in another workspace.
+    if (w.receiptsAddress)
+      throw new ConflictException('The receipts address is set; it does not change')
+    try {
+      await this.log.change(
+        caller,
+        (tx) => tx.workspace.update({ where: { id }, data: { receiptsAddress: local } }),
+        {
+          workspaceId: id,
+          resource: 'workspace',
+          subjectId: id,
+          action: 'update',
+          description: 'Set the receipts address',
+          changes: changesOf(w, { receiptsAddress: local }, RECEIPTS_ADDRESS_FIELDS),
+        }
+      )
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
+        throw new ConflictException('That address is taken; choose another')
+      throw e
+    }
+  }
+
+  /**
+   * "Read emailed receipts with AI": the yes for the one path with no person present to give it. Its owners only; the
+   * platform admin never sets it (the admin route refuses it, and so does trigger Workspace_4_admin_lists).
+   */
+  async setReadEmailedReceiptsWithAi(caller: Caller, id: string, given: unknown): Promise<void> {
+    const w = await this.load(caller, id)
+    allow(
+      !caller.admin && workspaceRole(caller, id, ['owner']),
+      'Only an owner turns on reading emailed receipts with AI'
+    )
+    if (typeof given !== 'boolean') throw new BadRequestException('Say true or false')
+    if (given === w.readEmailedReceiptsWithAi) return
+    const data = { readEmailedReceiptsWithAi: given }
+    await this.log.change(caller, (tx) => tx.workspace.update({ where: { id }, data }), {
+      workspaceId: id,
+      resource: 'workspace',
+      subjectId: id,
+      action: 'update',
+      description: given
+        ? 'Turned on reading emailed receipts with AI'
+        : 'Turned off reading emailed receipts with AI',
+      changes: changesOf(w, data, EMAILED_AI_FIELDS),
+    })
+  }
+
+  /**
+   * The budget items an engagement may use, kept like the sources of funds: by the owners, and by the platform admin
+   * (trigger Workspace_4_admin_lists). A removed item stays on the engagements that have a line for it.
+   */
+  async setBudgetItems(caller: Caller, id: string, given: unknown): Promise<void> {
     const w = await this.load(caller, id)
     allow(runs(caller, id), 'Only an owner edits the lists')
-    const clean = [...new Set((fundingSources ?? []).map((f) => String(f).trim()).filter(Boolean))]
-    if (clean.length > 40 || clean.some((f) => f.length > 60))
-      throw new BadRequestException('Up to 40 sources of 60 characters each')
+    const before = budgetItemsOf(w)
+    const clean = cleanBudgetItems(given, before)
+    const changes = changesOf(
+      { budgetItems: before.map(budgetItemWords) },
+      { budgetItems: clean.map(budgetItemWords) },
+      BUDGET_ITEM_FIELDS
+    )
+    if (changes.length === 0) return
     await this.log.change(
       caller,
-      (tx) => tx.workspace.update({ where: { id }, data: { fundingSources: clean } }),
+      (tx) =>
+        tx.workspace.update({
+          where: { id },
+          data: { budgetItems: clean as unknown as Prisma.InputJsonValue },
+        }),
       {
         workspaceId: id,
         resource: 'workspace',
         subjectId: id,
         action: 'update',
-        description: byAdmin(caller, 'Changed the sources of funds'),
-        changes: changesOf(w, { fundingSources: clean }, LIST_FIELDS),
+        description: byAdmin(caller, 'Changed the budget items'),
+        changes,
       }
+    )
+  }
+
+  /**
+   * The workspace's tag types and their values ("Funding source" is one like any other), kept like the other lists: by
+   * the owners, and by the platform admin (trigger Workspace_4_admin_lists). A rename keeps the key, so every record
+   * shows the new name. A value or type removed comes off every engagement, expense, payroll item and participant
+   * that has it, in the same transaction, and the line says how many of each.
+   */
+  async setTagTypes(caller: Caller, id: string, given: unknown): Promise<void> {
+    const w = await this.load(caller, id)
+    allow(runs(caller, id), 'Only an owner edits the lists')
+    const before = tagTypesOf(w)
+    const clean = cleanTagTypes(given, before)
+    const changes = changesOf(
+      { tagTypes: before.map(tagTypeWords) },
+      { tagTypes: clean.map(tagTypeWords) },
+      TAG_TYPE_FIELDS
+    )
+    if (changes.length === 0) return
+    const removed = removedTags(before, clean)
+    // The tagged records are below the workspace, where a platform admin who is not a member sees no row.
+    if (removed.length && !caller.memberships.some((m) => m.workspaceId === id))
+      throw new ConflictException(
+        "Only the workspace's owners remove a tag: it comes off their records, which they see"
+      )
+    await this.log.change(
+      caller,
+      async (tx) => {
+        const tags = removed.map((r) => r.tag)
+        if (tags.length) {
+          // A closed or submitted month's ledger does not change (trigger month_is_draft): say so before anything.
+          const where = {
+            workspaceId: id,
+            tags: { hasSome: tags },
+            monthlyReport: { status: { not: 'draft' } },
+          }
+          const locked =
+            (await tx.expense.count({ where })) + (await tx.wexPayment.count({ where }))
+          if (locked)
+            throw new ConflictException(
+              `${locked === 1 ? 'An expense or payroll item' : `${locked} expenses or payroll items`} in a closed or submitted month ${locked === 1 ? 'has' : 'have'} this tag, and those months do not change. Reopen the month to take it off, or keep the tag.`
+            )
+        }
+        const counts: { removed: RemovedTag; uses: Record<TagTarget, number> }[] = []
+        for (const r of removed) counts.push({ removed: r, uses: await ripTag(tx, id, r.tag) })
+        await tx.workspace.update({
+          where: { id },
+          data: { tagTypes: clean as unknown as Prisma.InputJsonValue },
+        })
+        return { workspaceId: id, counts }
+      },
+      ({ counts }) => ({
+        workspaceId: id,
+        resource: 'workspace',
+        subjectId: id,
+        action: 'update',
+        description: byAdmin(
+          caller,
+          counts.length
+            ? `Removed ${counts.map((c) => `the ${c.removed.type.toLowerCase()} ${c.removed.value} from ${usesWords(c.uses)}`).join('; ')}`
+            : 'Changed the tags'
+        ),
+        changes,
+      })
     )
   }
 
@@ -464,4 +672,41 @@ function suggestionDtos(
     by: names.get(x.userId) ?? 'someone who left',
     createdAt: x.createdAt.toISOString(),
   }))
+}
+
+/**
+ * Takes one tag off every engagement, expense, payroll item and participant of the workspace that has it, and says how
+ * many of each. Parameterized; the tables are named here, never from the request.
+ */
+export async function ripTag(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  tag: string
+): Promise<Record<TagTarget, number>> {
+  return {
+    engagement:
+      await tx.$executeRaw`UPDATE "Engagement" SET "tags" = array_remove("tags", ${tag}), "updatedAt" = now() WHERE "workspaceId" = ${workspaceId} AND ${tag} = ANY ("tags")`,
+    expense:
+      await tx.$executeRaw`UPDATE "Expense" SET "tags" = array_remove("tags", ${tag}), "updatedAt" = now() WHERE "workspaceId" = ${workspaceId} AND ${tag} = ANY ("tags")`,
+    payroll:
+      await tx.$executeRaw`UPDATE "WexPayment" SET "tags" = array_remove("tags", ${tag}), "updatedAt" = now() WHERE "workspaceId" = ${workspaceId} AND ${tag} = ANY ("tags")`,
+    participant:
+      await tx.$executeRaw`UPDATE "Participant" SET "tags" = array_remove("tags", ${tag}), "updatedAt" = now() WHERE "workspaceId" = ${workspaceId} AND ${tag} = ANY ("tags")`,
+  }
+}
+
+const USE_WORDS: Record<TagTarget, [string, string]> = {
+  expense: ['expense', 'expenses'],
+  payroll: ['payroll item', 'payroll items'],
+  participant: ['participant', 'participants'],
+  engagement: ['engagement', 'engagements'],
+}
+
+/** "3 expenses, 1 participant and 2 engagements", or "no records". */
+export function usesWords(uses: Partial<Record<TagTarget, number>>): string {
+  const parts = (Object.keys(USE_WORDS) as TagTarget[])
+    .filter((k) => (uses[k] ?? 0) > 0)
+    .map((k) => `${uses[k]} ${USE_WORDS[k][uses[k] === 1 ? 0 : 1]}`)
+  if (!parts.length) return 'no records'
+  return parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`
 }

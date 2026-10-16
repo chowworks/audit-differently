@@ -62,11 +62,11 @@ export function EngagementCard({
           <div className="mb-1 flex justify-between text-sm">
             <span className="text-soft">Workflow progress</span>
             <b>
-              {w.doneCount} of {w.steps.length} steps
+              {w.doneCount} of {w.total} steps
             </b>
           </div>
           <div className="ad-progress">
-            <i style={{ width: `${(w.doneCount / w.steps.length) * 100}%` }} />
+            <i style={{ width: `${(w.doneCount / w.total) * 100}%` }} />
           </div>
         </div>
         <div className="ad-grant-foot">

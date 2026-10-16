@@ -4,6 +4,7 @@ import helmet from 'helmet'
 import type { NestExpressApplication } from '@nestjs/platform-express'
 import { AppModule } from './app.module'
 import { corsOrigin } from './cors'
+import { rawBody } from './inbound/raw-body'
 import { assertDeployedConfig } from './startup-checks'
 
 async function bootstrap() {
@@ -23,6 +24,9 @@ async function bootstrap() {
     // The web app reads the file name, and the size and sha256 it checks a downloaded part against.
     exposedHeaders: ['Content-Disposition', 'X-Export-Bytes', 'X-Export-Sha256'],
   })
+  // The email provider signs the exact bytes of its webhook call, so that one path keeps them raw (256 KB at most);
+  // Nest's JSON parser, registered later, finds the body read and leaves it. Every other route parses as usual.
+  app.use('/api/inbound/resend', rawBody())
   // Behind a proxy (Railway) set TRUST_PROXY=1 so req.ip is the client.
   if (process.env.TRUST_PROXY) {
     const hops = Number(process.env.TRUST_PROXY)

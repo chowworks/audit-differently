@@ -24,3 +24,6 @@ apps/api/storage/
 apps/api/.pgdata/
 apps/api/.pglite/
 .railway/*.json
+
+# Local agent worktrees (each its own checkout)
+.claude/worktrees/

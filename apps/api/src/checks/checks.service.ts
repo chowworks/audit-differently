@@ -15,10 +15,34 @@ export class ChecksService {
   refresh(reportId: string): Promise<Finding[]> {
     return refreshChecks(this.prisma, reportId)
   }
+
+  /** What the rules find in the month as it stands, without storing it: to compare with what a change leaves. */
+  findings(reportId: string): Promise<Finding[]> {
+    return findingsOf(this.prisma, reportId)
+  }
 }
 
 /** The same, on any client: the seed uses it as the owner. */
 export async function refreshChecks(prisma: PrismaClient, reportId: string): Promise<Finding[]> {
+  const findings = await findingsOf(prisma, reportId)
+  await prisma.$transaction([
+    prisma.check.deleteMany({ where: { monthlyReportId: reportId, source: 'rule' } }),
+    prisma.check.createMany({
+      data: findings.map((f) => ({
+        monthlyReportId: reportId,
+        expenseId: f.expenseId ?? null,
+        participantId: f.participantId ?? null,
+        code: f.code,
+        severity: f.severity,
+        source: 'rule',
+        message: f.message,
+      })),
+    }),
+  ])
+  return findings
+}
+
+async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Finding[]> {
   {
     const report = await prisma.monthlyReport.findUniqueOrThrow({
       where: { id: reportId },
@@ -91,21 +115,6 @@ export async function refreshChecks(prisma: PrismaClient, reportId: string): Pro
         paidThisMonth: paid.has(p.id),
       })),
     }
-    const findings = runRules(month)
-    await prisma.$transaction([
-      prisma.check.deleteMany({ where: { monthlyReportId: reportId, source: 'rule' } }),
-      prisma.check.createMany({
-        data: findings.map((f) => ({
-          monthlyReportId: reportId,
-          expenseId: f.expenseId ?? null,
-          participantId: f.participantId ?? null,
-          code: f.code,
-          severity: f.severity,
-          source: 'rule',
-          message: f.message,
-        })),
-      }),
-    ])
-    return findings
+    return runRules(month)
   }
 }

@@ -1,12 +1,12 @@
 import '../scripts/lib/owner-env'
-import { Prisma, PrismaClient } from '@prisma/client'
+import { PrismaClient } from '@prisma/client'
 import { createHash } from 'node:crypto'
 import 'reflect-metadata'
 import {
   DOCUMENT_SENSITIVITY,
   type DocumentKind,
   type EligibilityItem,
-  DEFAULT_FUNDING_SOURCES,
+  DEFAULT_TAG_TYPES,
 } from '@ad/types'
 import { refreshChecks } from '../src/checks/checks.service'
 import { LocalDiskStorage } from '../src/storage/local-disk-storage'
@@ -29,7 +29,7 @@ const d = (s: string) => new Date(`${s}T00:00:00Z`)
 async function main() {
   const workspace = async (name: string) =>
     (await prisma.workspace.findFirst({ where: { name } })) ??
-    prisma.workspace.create({ data: { name, fundingSources: DEFAULT_FUNDING_SOURCES } })
+    prisma.workspace.create({ data: { name, tagTypes: DEFAULT_TAG_TYPES as object[] } })
   const riverbend = await workspace('Riverbend Youth Services')
   const harbor = await workspace('Harbor Tech Collective')
   const FUNDER = 'Demo Workforce Board'
@@ -120,7 +120,7 @@ async function main() {
     number: string,
     kind: 'grant' | 'contract',
     name: string,
-    fundingSources: string[],
+    tags: string[],
     award: number,
     budget: [string, string, number, string][]
   ) => {
@@ -134,7 +134,7 @@ async function main() {
       proposalSubmittedOn: d('2026-03-14'),
       awardedOn: d('2026-05-02'),
       awardAmount: award,
-      fundingSources,
+      tags,
       periodStart: d('2026-07-01'),
       periodEnd: d('2027-06-30'),
       reportDueDay: 12,
@@ -163,7 +163,7 @@ async function main() {
     'DEMO-26IS-RYS',
     'grant',
     'In-School Youth Coding Pathway',
-    ['Youth Workforce Fund'],
+    ['funding-source:youth-workforce-fund'],
     125000,
     [
       ['personnel', 'staff-salaries', 0, 'N/A'],
@@ -188,7 +188,7 @@ async function main() {
     'DEMO-26IS-HTC',
     'contract',
     'Out-of-School Youth IT Support',
-    ['Adult Training Fund'],
+    ['funding-source:adult-training-fund'],
     90000,
     [
       ['supplies', 'program-costs', 3000, 'Lab supplies.'],
@@ -217,9 +217,33 @@ async function main() {
         enrolledAt: d('2026-07-06'),
       },
     })
+  // ── Tags ── The default Funding source type and one of Riverbend's own, and a tag or two per participant.
+  await prisma.workspace.update({
+    where: { id: riverbend.id },
+    data: {
+      tagTypes: [
+        ...(DEFAULT_TAG_TYPES as object[]),
+        {
+          key: 'age-group',
+          label: 'Age group',
+          appliesTo: ['payroll', 'participant'],
+          values: [
+            { key: 'under-18', label: 'Under 18' },
+            { key: '18-to-24', label: '18 to 24' },
+          ],
+        },
+      ],
+    },
+  })
+  const tag = (id: string, tags: string[]) =>
+    prisma.participant.update({ where: { id }, data: { tags } })
+  const youth = 'funding-source:youth-workforce-fund'
   const jordan = await participant(rys.id, '900001', 'Jordan Sample', 'new')
   const riley = await participant(rys.id, '900002', 'Riley Example', 'carryover')
   const casey = await participant(rys.id, '900003', 'Casey Demo', 'new')
+  await tag(jordan.id, [youth, 'age-group:under-18'])
+  await tag(riley.id, ['funding-source:adult-training-fund', 'age-group:18-to-24'])
+  await tag(casey.id, [youth, 'age-group:under-18'])
   await participant(htc.id, '900101', 'Taylor Placeholder', 'new')
 
   // ── Documents (small fictional PDFs) ──
@@ -339,9 +363,7 @@ async function main() {
     preparedByName?: string
     authorizedByName?: string
     authorizedAt?: Date
-    reviewedById?: string
-    reviewedAt?: Date
-    review?: Prisma.InputJsonValue
+    closingNote?: string
   }
   const month = async (
     engagementId: string,
@@ -351,10 +373,12 @@ async function main() {
     lines: Line[],
     extra: Extra = {}
   ) => {
-    const report = await prisma.monthlyReport.upsert({
+    // A draft while its lines go in: the database refuses a line in a closed or submitted month (migration
+    // 20261015001100_month_lock). The month takes its status at the end.
+    let report = await prisma.monthlyReport.upsert({
       where: { engagementId_period: { engagementId, period } },
-      update: { status, ...extra },
-      create: { engagementId, period, status, dueDate: dueDate(period, 12), ...extra },
+      update: { status: 'draft' },
+      create: { engagementId, period, status: 'draft', dueDate: dueDate(period, 12) },
     })
     const statement = await doc(
       workspaceId,
@@ -474,6 +498,10 @@ async function main() {
         await attach(reg.id, 'register')
       }
     }
+    report = await prisma.monthlyReport.update({
+      where: { id: report.id },
+      data: { status, ...extra },
+    })
     return { report, statement }
   }
 
@@ -516,12 +544,12 @@ async function main() {
     docs,
   })
 
-  // July: approved, complete.
+  // July: closing approved, submitted, complete.
   const july = await month(
     rys.id,
     riverbend.id,
     '2026-07',
-    'approved',
+    'submitted',
     [
       accounting('RYS-1', '2026-07-02', 540, '18.0%'),
       rent('RYS-2', '2026-07-15', 648),
@@ -555,22 +583,11 @@ async function main() {
       submittedAt: d('2026-08-10'),
       preparedByName: 'Dana Okafor',
       authorizedByName: 'Sam Whitfield',
-      authorizedAt: d('2026-08-10'),
-      reviewedById: 'demo-sam',
-      reviewedAt: d('2026-08-14'),
-      review: {
-        receivedOn: '2026-08-10',
-        newServicesEntered: true,
-        newEnrollmentsEntered: true,
-        servicesInProgress: true,
-        caseNotesChecked: true,
-        fileReviewCompleted: true,
-        siteVisitConducted: false,
-        invoiceNumber: 'IV-26-0412',
-      },
+      authorizedAt: d('2026-08-07'),
+      closingNote: 'Approved at the monthly finance meeting',
     }
   )
-  // August: submitted, the funder's decision not recorded yet.
+  // August: closing approved, then submitted.
   await month(
     rys.id,
     riverbend.id,
@@ -609,7 +626,7 @@ async function main() {
       submittedAt: d('2026-09-11'),
       preparedByName: 'Dana Okafor',
       authorizedByName: 'Sam Whitfield',
-      authorizedAt: d('2026-09-11'),
+      authorizedAt: d('2026-09-09'),
     }
   )
   // September: the draft with problems, due tomorrow.
@@ -810,9 +827,26 @@ async function main() {
           actorName: 'dana.okafor@riverbend.example',
           resource: 'report',
           subjectId: july.report.id,
+          action: 'review',
+          description:
+            'Approved the month-end closing of July 2026 for In-School Youth Coding Pathway',
+          changes: [
+            { field: 'Status', before: 'draft', after: 'closed' },
+            { field: 'Approved by' },
+            { field: 'Approved on', before: null, after: '2026-08-07' },
+            { field: 'Note' },
+          ],
+          createdAt: d('2026-08-07'),
+        },
+        {
+          workspaceId: riverbend.id,
+          actorId: 'demo-dana',
+          actorName: 'dana.okafor@riverbend.example',
+          resource: 'report',
+          subjectId: july.report.id,
           action: 'submit',
           description: 'Submitted July 2026 of In-School Youth Coding Pathway, signed',
-          changes: [{ field: 'Status', before: 'draft', after: 'submitted' }],
+          changes: [{ field: 'Status', before: 'closed', after: 'submitted' }],
           createdAt: d('2026-08-10'),
         },
         {
@@ -825,21 +859,65 @@ async function main() {
           description: 'Opened a bank statement for July 2026',
           createdAt: d('2026-08-13'),
         },
-        {
-          workspaceId: riverbend.id,
-          actorId: 'demo-sam',
-          actorName: ownerEmail,
-          resource: 'report',
-          subjectId: july.report.id,
-          action: 'review',
-          description:
-            "Recorded the funder's approval of July 2026 of In-School Youth Coding Pathway",
-          changes: [{ field: 'Status', before: 'submitted', after: 'approved' }],
-          createdAt: d('2026-08-14'),
-        },
       ],
     })
   }
+
+  // ── Emailed receipts ── Riverbend's receipts address, each engagement's code for a subject line, and a few emails in
+  // the receipts inbox: one to file by hand, one refused, one that failed. Fictional senders and subjects only.
+  await prisma.workspace.update({
+    where: { id: riverbend.id },
+    data: { receiptsAddress: 'riverbend-youth' },
+  })
+  await prisma.engagement.update({ where: { id: rys.id }, data: { code: 'RYS26' } })
+  await prisma.engagement.update({ where: { id: htc.id }, data: { code: 'HTC26' } })
+  for (const r of [
+    {
+      emailId: 'demo-email-1',
+      status: 'unmatched',
+      fromAddress: 'dana.okafor@riverbend.example',
+      subject: 'Receipt RYS26 July bus passes',
+      receivedAt: new Date('2026-10-06T14:12:00Z'),
+      engagementId: rys.id,
+      senderUserId: null,
+      rejectReason: 'July 2026 of In-School Youth Coding Pathway is submitted',
+      error: null,
+      attempts: 1,
+    },
+    {
+      emailId: 'demo-email-2',
+      status: 'rejected',
+      fromAddress: 'someone@unknown-sender.example',
+      subject: 'Invoice attached',
+      receivedAt: new Date('2026-10-08T09:40:00Z'),
+      engagementId: null,
+      senderUserId: null,
+      rejectReason: 'not a member',
+      error: null,
+      attempts: 1,
+    },
+    {
+      emailId: 'demo-email-3',
+      status: 'failed',
+      fromAddress: 'dana.okafor@riverbend.example',
+      subject: 'RYS26 lab supplies',
+      receivedAt: new Date('2026-10-09T16:05:00Z'),
+      engagementId: null,
+      senderUserId: null,
+      rejectReason: null,
+      error: 'The email provider answered 503',
+      attempts: 5,
+    },
+  ])
+    await prisma.inboundReceipt.upsert({
+      where: { emailId: r.emailId },
+      update: {},
+      create: {
+        ...r,
+        workspaceId: riverbend.id,
+        toAddress: 'riverbend-youth@receipts.example.org',
+      },
+    })
 
   console.log(
     `Seeded Riverbend (3 months, 3 participants) and Harbor Tech (1 month). Personas: ${people.map((p) => p.id).join(', ')}`

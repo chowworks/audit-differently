@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@ad/types": "*",
+    "@anthropic-ai/sdk": "^0.134.0",
     "@aws-sdk/client-s3": "^3.1041.0",
     "@aws-sdk/s3-request-presigner": "^3.1041.0",
     "@clerk/backend": "^3.4.4",
@@ -35,10 +36,14 @@
     "@nestjs/throttler": "^6.7.1",
     "@prisma/client": "^5.22.0",
     "dotenv": "^17.4.1",
+    "exceljs": "^4.4.0",
     "fflate": "^0.8.2",
     "helmet": "^8.3.0",
+    "mailauth": "^5.0.3",
+    "pdf-lib": "^1.17.1",
     "reflect-metadata": "^0.2.0",
-    "rxjs": "^7.8.0"
+    "rxjs": "^7.8.0",
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",

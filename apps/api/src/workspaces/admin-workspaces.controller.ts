@@ -1,4 +1,14 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common'
+import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common'
 import type { AdminWorkspaceDetail, AdminWorkspaceDto, Role } from '@ad/types'
 import { AdminGuard } from '../auth/admin.guard'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
@@ -43,10 +53,27 @@ export class AdminWorkspacesController {
   async setLists(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { fundingSources: string[] }
+    @Body()
+    body: {
+      budgetItems?: unknown
+      tagTypes?: unknown
+      receiptsAddress?: unknown
+      readEmailedReceiptsWithAi?: unknown
+    }
   ): Promise<AdminWorkspaceDetail> {
     const admin = await this.callers.loadAdmin(userId)
-    await this.workspaces.setLists(admin, id, body.fundingSources)
+    // The receipts address is the owners' alone (WorkspacesService.setReceiptsAddress): refused before any list saves.
+    if (body.receiptsAddress !== undefined)
+      throw new ForbiddenException("Only the workspace's owners set its receipts address")
+    // So is reading emailed receipts with AI: the yes for the workspace's own records is its owners' to give.
+    if (body.readEmailedReceiptsWithAi !== undefined)
+      throw new ForbiddenException(
+        "Only the workspace's owners turn on reading emailed receipts with AI"
+      )
+    // Each card saves its own list: the budget items or the tags.
+    if (body.budgetItems !== undefined)
+      await this.workspaces.setBudgetItems(admin, id, body.budgetItems)
+    if (body.tagTypes !== undefined) await this.workspaces.setTagTypes(admin, id, body.tagTypes)
     return this.workspaces.adminGet(admin, id)
   }
 

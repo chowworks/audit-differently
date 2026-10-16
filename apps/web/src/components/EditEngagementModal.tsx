@@ -10,6 +10,7 @@ import {
 } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
 import { Button, ErrorNote, Field, Modal, MoneyInput, inputClass } from '@/components/ui'
+import { TagPicker } from '@/components/Tags'
 
 const day = (iso: string | null) => (iso ? iso.slice(0, 10) : '')
 
@@ -50,12 +51,13 @@ export function EditEngagementModal({
     solicitation: c.solicitation ?? '',
     funder: c.funder ?? '',
     funderContact: c.funderContact ?? '',
-    fundingSources: c.fundingSources,
+    tags: c.tags,
     requestedAmount: c.requestedAmount,
     proposalSubmittedOn: day(c.proposalSubmittedOn),
     awardedOn: day(c.awardedOn),
     awardAmount: c.awardAmount,
     number: c.number ?? '',
+    code: c.code ?? '',
     periodStart: day(c.periodStart),
     periodEnd: day(c.periodEnd),
     reportDueDay: c.reportDueDay,
@@ -97,7 +99,6 @@ export function EditEngagementModal({
       setBusy(false)
     }
   }
-  const options = [...new Set([...c.fundingOptions, ...c.fundingSources])]
   const text = (k: keyof EngagementInput, label: string, hint?: string, className?: string) => (
     <Field label={label} hint={hint} className={className}>
       <input
@@ -139,6 +140,17 @@ export function EditEngagementModal({
               ))}
             </select>
           </Field>
+          <Field
+            label="Engagement code"
+            hint="Put it in the subject of an emailed receipt to file it here, e.g. Receipt CP26"
+          >
+            <input
+              className={`${inputClass} ad-mono`}
+              value={form.code ?? ''}
+              maxLength={20}
+              onChange={(e) => set('code', e.target.value.toUpperCase())}
+            />
+          </Field>
         </div>
         {group(
           'proposal',
@@ -147,28 +159,16 @@ export function EditEngagementModal({
             {text('solicitation', 'Proposal name', undefined, 'sm:col-span-2')}
             {text('funder', 'Funding organization', 'Who awards it and audits it')}
             {text('funderContact', 'Funding organization contact')}
-            <fieldset className="ad-field sm:col-span-2">
-              <span>Source of funds</span>
-              <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
-                {options.map((f) => (
-                  <label key={f} className="inline-flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={form.fundingSources?.includes(f) ?? false}
-                      onChange={() =>
-                        set(
-                          'fundingSources',
-                          form.fundingSources?.includes(f)
-                            ? form.fundingSources.filter((x) => x !== f)
-                            : [...(form.fundingSources ?? []), f]
-                        )
-                      }
-                    />
-                    {f}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
+            <div className="ad-field sm:col-span-2">
+              <span>Tags</span>
+              <TagPicker
+                types={c.tagTypes}
+                target="engagement"
+                value={form.tags ?? []}
+                onChange={(tags) => set('tags', tags)}
+              />
+              <small>The monthly report form prints them under Source of funds.</small>
+            </div>
             <Field label="Amount requested">
               <MoneyInput
                 value={form.requestedAmount ?? null}

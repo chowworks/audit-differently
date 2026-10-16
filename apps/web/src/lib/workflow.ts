@@ -1,5 +1,11 @@
 import type { DocumentDto, DocumentKind, EngagementSummary, ReportSummary } from '@ad/types'
-import { DEFAULT_ELIGIBILITY_ITEMS, type EligibilityItemDef, type ParticipantDto } from '@ad/types'
+import {
+  DEFAULT_ELIGIBILITY_ITEMS,
+  ENGAGEMENT_TRACKS,
+  type EligibilityItemDef,
+  type EngagementTrack,
+  type ParticipantDto,
+} from '@ad/types'
 import { periodLabel, shortDate } from './format'
 
 /**
@@ -17,7 +23,8 @@ export type StepKey =
   | 'submission'
   | 'audit'
 
-export type StepState = 'done' | 'current' | 'todo' | 'later'
+/** `skipped`: a record the engagement does not keep (`tracks`); greyed out and counted nowhere. */
+export type StepState = 'done' | 'current' | 'todo' | 'later' | 'skipped'
 
 export interface RecordItem {
   key: string
@@ -53,6 +60,8 @@ export interface Step {
 export interface Workflow {
   steps: Step[]
   doneCount: number
+  /** The steps this engagement uses: all eight, less the ones before where it starts. */
+  total: number
   current: Step
   readiness: { have: number; need: number; pct: number }
   nextUp: { label: string; href: string } | null
@@ -90,13 +99,13 @@ const STEP_TEXT: Record<StepKey, { title: string; blurb: string; help: string }>
     title: 'Monthly ledger and proof',
     blurb:
       'Each month: record what you spent against the approved lines and attach the proof as you go.',
-    help: 'For each expense the auditor wants the invoice, the proof it was paid, and the allocation worksheet when a cost is shared. Attach them the day you record the expense and the month closes itself.',
+    help: 'For each expense the auditor wants the invoice, the proof it was paid, and the allocation worksheet when a cost is shared. Attach them the day you record the expense and the month is ready for its month-end closing.',
   },
   submission: {
     title: 'Signed report, submitted by the due day',
     blurb:
-      "Print the funder's form, sign it, submit it, record the funder's decision, and keep the signed copy with the month.",
-    help: 'Reports are due on the 12th unless another date was agreed by email. Keep that email with the month if the date moved. When the funder answers, record its decision here.',
+      "Get the month-end closing approved, then sign the funder's form, keep the signed copy with the month, and submit it by the due day.",
+    help: "The month-end closing is your company's own approval of the month, usually your CEO's, often given offline: record who approved it and when. Then the report goes to the funder. Reports are due on the 12th unless another date was agreed by email. Keep that email with the month if the date moved.",
   },
   audit: {
     title: 'Final audit package',
@@ -134,8 +143,8 @@ export function expectedPeriods(c: EngagementSummary, today: Date): string[] {
   return out
 }
 
-const submitted = (r: ReportSummary) => r.status !== 'draft'
-const approved = (r: ReportSummary) => r.status === 'approved' || r.status === 'paid'
+const submitted = (r: ReportSummary) => r.status === 'submitted'
+const closed = (r: ReportSummary) => r.status !== 'draft'
 
 /** The required items of the checklist a participant still lacks. */
 export function missingItems(p: ParticipantDto, items: EligibilityItemDef[]): EligibilityItemDef[] {
@@ -148,6 +157,27 @@ export function eligibilityComplete(
   items: EligibilityItemDef[] = DEFAULT_ELIGIBILITY_ITEMS
 ): boolean {
   return missingItems(p, items).length === 0
+}
+
+/**
+ * The month's signed copy that counts: the newest one uploaded after its latest reopening (any, if it was never
+ * reopened). An older one is the copy that was submitted before the month was reopened, kept as history.
+ */
+export function signedCopyOf(
+  documents: DocumentDto[],
+  period: string,
+  lastReopenedAt?: string | null
+): DocumentDto | undefined {
+  let found: DocumentDto | undefined
+  for (const d of documents)
+    if (
+      d.kind === 'signed-report' &&
+      d.period === period &&
+      (!lastReopenedAt || d.uploadedAt > lastReopenedAt) &&
+      (!found || d.uploadedAt > found.uploadedAt)
+    )
+      found = d
+  return found
 }
 
 export function workflow(
@@ -200,6 +230,7 @@ export function workflow(
     note,
     href: `${here}#${key}`,
   })
+  const kept = (t: EngagementTrack) => (c.tracks ?? ENGAGEMENT_TRACKS).includes(t)
   const periods = expectedPeriods(c, today)
   const started = periods.length > 0
   const ended = !!c.periodEnd && monthOf(c.periodEnd) < today.toISOString().slice(0, 7)
@@ -245,7 +276,7 @@ export function workflow(
   const submissionRecords: RecordItem[] = periods.map((p) => {
     const r = byPeriod.get(p)
     const month = periodLabel(p)
-    const signed = doc('signed-report', p)
+    const signed = signedCopyOf(c.documents, p, r?.lastReopenedAt)
     const isSubmitted = !!r && submitted(r)
     const late = !!r && !!r.submittedAt && r.submittedAt > r.dueDate
     const done = isSubmitted && !!signed
@@ -258,26 +289,26 @@ export function workflow(
       document: signed,
       task: !r
         ? `Start ${month} before its report is due`
-        : !isSubmitted
-          ? `Submit the ${month} report by ${shortDate(r.dueDate)}`
+        : !closed(r)
+          ? `Get the ${month} month-end closing approved`
           : !signed
             ? `Save the signed copy of the ${month} report`
-            : approved(r) || r.status === 'denied'
-              ? `${month} is submitted and answered`
-              : `Record the funder's decision on ${month}`,
+            : !isSubmitted
+              ? `Submit the ${month} report by ${shortDate(r.dueDate)}`
+              : `${month} is submitted`,
       note: !r
         ? 'month not started'
-        : !isSubmitted
-          ? 'not submitted'
+        : !closed(r)
+          ? 'month-end closing not approved'
           : !signed
-            ? 'submitted, signed copy not on file'
-            : late
-              ? 'submitted late'
-              : approved(r)
-                ? 'approved for payment'
-                : r.status === 'denied'
-                  ? 'denied'
-                  : 'submitted, decision not recorded',
+            ? isSubmitted
+              ? 'submitted, signed copy not on file'
+              : 'closing approved, signed copy not on file'
+            : !isSubmitted
+              ? 'signed, not submitted'
+              : late
+                ? 'submitted late'
+                : 'submitted',
     }
   })
 
@@ -377,7 +408,7 @@ export function workflow(
     {
       key: 'contract',
       records: [
-        file('contract', 'contract', 'Signed contract'),
+        ...(kept('contract') ? [file('contract', 'contract', 'Signed contract')] : []),
         fact(
           'contract',
           'period',
@@ -409,6 +440,8 @@ export function workflow(
   // Done when every record is in; the first step not done is where you are.
   let currentSet = false
   const steps: Step[] = defs.map((d, i) => {
+    if ((d.key === 'proposal' || d.key === 'award-letter') && !kept(d.key))
+      return { key: d.key, n: i + 1, ...STEP_TEXT[d.key], state: 'skipped', records: d.records }
     const allDone = d.records.length > 0 && d.records.every((r) => r.done)
     let state: StepState = d.state
     if (allDone) state = 'done'
@@ -428,9 +461,13 @@ export function workflow(
   })
   const current = steps.find((s) => s.state === 'current') ?? steps[steps.length - 1]
   const doneCount = steps.filter((s) => s.state === 'done').length
+  const total = steps.filter((s) => s.state !== 'skipped').length
 
   // Readiness: records that exist today over records the audit will ask for today (the index itself excluded).
-  const counted = steps.flatMap((s) => s.records).filter((r) => r.key !== 'audit:index')
+  const counted = steps
+    .filter((s) => s.state !== 'skipped')
+    .flatMap((s) => s.records)
+    .filter((r) => r.key !== 'audit:index')
   const have = counted.reduce((t, r) => t + (r.count ? r.count.have : r.done ? 1 : 0), 0)
   const need = counted.reduce((t, r) => t + (r.count ? r.count.need : 1), 0)
   const pct = need === 0 ? 0 : Math.round((have / need) * 100)
@@ -438,7 +475,7 @@ export function workflow(
   const next = current.records.find((r) => !r.done)
   const nextUp = next ? { label: next.task, href: next.href ?? here } : null
 
-  return { steps, doneCount, current, readiness: { have, need, pct }, nextUp }
+  return { steps, doneCount, total, current, readiness: { have, need, pct }, nextUp }
 }
 
 /** The next report that is still owed: its month, due date and, if it exists, the report. */

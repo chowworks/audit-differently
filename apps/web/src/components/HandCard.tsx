@@ -3,11 +3,14 @@ import { Link } from 'react-router-dom'
 /** "Need a hand?": a short, plain-words note for the bookkeeper, tied to where they are. Navy, like the header. */
 export function HandCard({
   title = 'Need a hand?',
+  icon = '?',
   lead,
   children,
   more,
 }: {
   title?: string
+  /** The sign in the yellow circle; "?" unless the card is about one thing (an envelope for email). */
+  icon?: string
   /** The one-line takeaway, in bold. */
   lead: string
   children: React.ReactNode
@@ -17,8 +20,11 @@ export function HandCard({
   return (
     <aside className="ad-hand" aria-label={title}>
       <div className="ad-hand-head">
-        <span className="ad-hand-icon" aria-hidden="true">
-          ?
+        <span
+          className={`ad-hand-icon ${icon === '?' ? '' : 'ad-hand-icon-emoji'}`}
+          aria-hidden="true"
+        >
+          {icon}
         </span>
         <h3>{title}</h3>
       </div>

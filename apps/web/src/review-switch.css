@@ -75,3 +75,7 @@
     transition: none;
   }
 }
+
+.rsw-raised {
+  bottom: 60px;
+}

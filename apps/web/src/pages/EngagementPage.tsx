@@ -1,13 +1,14 @@
 import { Fragment, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
-  BUDGET_CATEGORY_LABELS,
   ENGAGEMENT_KIND_LABELS,
   REPORT_LINE_LABELS,
+  tagValueLabel,
   type AuditPackagePartsDto,
   type DocumentDto,
   type DocumentKind,
   type EngagementDetail,
+  type EngagementTrack,
   type ParticipantDto,
   type ReportSummary,
   type WorkspaceDto,
@@ -17,6 +18,7 @@ import { money, nextPeriod, periodLabel, shortDate } from '@/lib/format'
 import {
   daysUntil,
   nextDue,
+  signedCopyOf,
   workflow,
   type RecordItem,
   type Step,
@@ -26,6 +28,8 @@ import { Button, Card, Chip, Empty, ErrorNote, Modal, Notice, StatusChip } from 
 import { DeleteModal } from '@/components/DeleteModal'
 import { AttachModal } from '@/components/AttachModal'
 import { AddParticipantModal } from '@/components/AddParticipantModal'
+import { BudgetLineModal, recheckNotice } from '@/components/BudgetLineModal'
+import { ImportTransactionsModal } from '@/components/ImportTransactionsModal'
 import { DocumentMenuModal } from '@/components/DocumentMenuModal'
 import { EditEngagementModal } from '@/components/EditEngagementModal'
 import { HandCard } from '@/components/HandCard'
@@ -71,6 +75,11 @@ export function EngagementPage() {
   const [addingParticipant, setAddingParticipant] = useState(false)
   const [participantsOpen, setParticipantsOpen] = useState<{ fileFor?: string } | null>(null)
   const [monthsOpen, setMonthsOpen] = useState<'ledger' | 'submission' | null>(null)
+  const [importing, setImporting] = useState(false)
+  // The budget line being changed, or 'new' to add one.
+  const [budgetLine, setBudgetLine] = useState<
+    EngagementDetail['budgetLines'][number] | 'new' | null
+  >(null)
   const [menu, setMenu] = useState<{
     doc: DocumentDto
     kind: DocumentKind
@@ -100,6 +109,13 @@ export function EngagementPage() {
       setBusy(null)
     }
   }
+  // A record the engagement did not keep comes back into use.
+  const keep = (t: EngagementTrack) =>
+    run(async () =>
+      setData(
+        await api.patch<EngagementDetail>(`/engagements/${c.id}`, { tracks: [...c.tracks, t] })
+      )
+    )
   const addMonth = () =>
     run(async () => {
       const report = await api.post<ReportSummary>(`/engagements/${c.id}/reports`, { period: next })
@@ -152,7 +168,7 @@ export function EngagementPage() {
     key === 'proposal' ? 'proposal' : key === 'award-letter' ? 'award-letter' : 'contract'
   const facts = [
     c.funder ? `Funded by ${c.funder}` : 'Funder not named yet',
-    c.fundingSources.length ? c.fundingSources.join(', ') : null,
+    c.tags.length ? c.tags.map((t) => tagValueLabel(c.tagTypes, t)).join(', ') : null,
     c.periodStart && c.periodEnd
       ? `${shortDate(c.periodStart)} to ${shortDate(c.periodEnd)}`
       : null,
@@ -169,33 +185,66 @@ export function EngagementPage() {
         step={s}
         canManage={c.canManage}
         onRecord={(kind, title) => setRecord({ kind, title })}
-        onFact={() => setEditing(editFor(s.key))}
+        onFact={(r) =>
+          // The budget is entered line by line in its own section, not in the Details modal.
+          r.key !== 'contract:budget'
+            ? setEditing(editFor(s.key))
+            : c.budgetLines.length
+              ? document.getElementById('budget')?.scrollIntoView({ behavior: 'smooth' })
+              : setBudgetLine('new')
+        }
         onOpen={(d, kind) => openMenu(d, kind)}
+        onUse={() => keep(s.key as EngagementTrack)}
       >
+        {s.key === 'contract' && !c.tracks.includes('contract') && (
+          <p className="text-sm text-soft">
+            Signed contract not kept for this engagement.{' '}
+            {c.canManage && (
+              <Button size="sm" kind="ghost" onClick={() => keep('contract')}>
+                Keep it
+              </Button>
+            )}
+          </p>
+        )}
         {s.key === 'contract' && (
           <div id="budget" className="mt-3">
-            <p className="ad-group-title">Approved budget · {money(budgetTotal)}</p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="ad-group-title !mb-0">Approved budget · {money(budgetTotal)}</p>
+              {c.canManage && (
+                <Button size="sm" onClick={() => setBudgetLine('new')}>
+                  + Add line
+                </Button>
+              )}
+            </div>
             {c.budgetLines.length === 0 && (
-              <p className="text-sm text-soft">No budget lines yet.</p>
+              <p className="text-sm text-soft">
+                No budget lines yet.
+                {c.canManage && ' Add one line per item of the approved budget.'}
+              </p>
             )}
             {c.budgetLines.length > 0 && (
               <table className="ad-table">
                 <tbody>
-                  {c.budgetLines
-                    .filter((b) => b.amount > 0)
-                    .map((b) => (
-                      <tr key={b.category}>
-                        <td>
-                          <span className="font-semibold">
-                            {BUDGET_CATEGORY_LABELS[b.category]}
-                          </span>
-                          <span className="ad-table-sub">
-                            {b.narrative} · reports as {REPORT_LINE_LABELS[b.reportLine]}
-                          </span>
+                  {c.budgetLines.map((b) => (
+                    <tr key={b.id}>
+                      <td>
+                        <span className="font-semibold">{b.label}</span>
+                        <span className="ad-table-sub">
+                          {[b.narrative, `reports as ${REPORT_LINE_LABELS[b.reportLine]}`]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                      </td>
+                      <td className="ad-num">{money(b.amount)}</td>
+                      {c.canManage && (
+                        <td className="ad-num">
+                          <Button size="sm" kind="ghost" onClick={() => setBudgetLine(b)}>
+                            Change
+                          </Button>
                         </td>
-                        <td className="ad-num">{money(b.amount)}</td>
-                      </tr>
-                    ))}
+                      )}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             )}
@@ -240,11 +289,19 @@ export function EngagementPage() {
               onClick: () => setMonthsOpen(s.key as 'ledger' | 'submission'),
             }}
             extra={
-              s.key === 'ledger' &&
-              canAddMonth && (
-                <Button size="sm" onClick={addMonth} disabled={!!busy}>
-                  + Start {periodLabel(next)}
-                </Button>
+              s.key === 'ledger' && (
+                <>
+                  {canAddMonth && (
+                    <Button size="sm" onClick={addMonth} disabled={!!busy}>
+                      + Start {periodLabel(next)}
+                    </Button>
+                  )}
+                  {c.canManage && c.periodStart && c.periodEnd && (
+                    <Button size="sm" onClick={() => setImporting(true)}>
+                      Import transactions
+                    </Button>
+                  )}
+                </>
               )
             }
           />
@@ -266,7 +323,7 @@ export function EngagementPage() {
               <p className="ad-group-title">What the auditor will ask for</p>
               <ul className="ad-checklist">
                 {w.steps
-                  .filter((s2) => s2.key !== 'audit')
+                  .filter((s2) => s2.key !== 'audit' && s2.state !== 'skipped')
                   .map((s2) => {
                     const have = s2.records.filter((r) => r.done).length
                     const all = s2.records.length > 0 && have === s2.records.length
@@ -353,7 +410,7 @@ export function EngagementPage() {
   return (
     <>
       <nav className="ad-crumbs" aria-label="Breadcrumb">
-        <Link to="/workspaces">Manage workspaces</Link> /{' '}
+        <Link to="/workspaces">My workspaces</Link> /{' '}
         <Link to={`/workspaces/${c.workspaceId}`}>{c.workspaceName}</Link> / {c.name}
       </nav>
 
@@ -429,14 +486,12 @@ export function EngagementPage() {
             <p className="ad-eyebrow !mb-0">Your workflow</p>
             <p className="text-lg font-extrabold text-navy">
               {w.doneCount}{' '}
-              <span className="text-sm font-semibold text-soft">
-                of {w.steps.length} steps complete
-              </span>
+              <span className="text-sm font-semibold text-soft">of {w.total} steps complete</span>
             </p>
           </div>
           <div className="min-w-[200px] flex-1">
             <div className="ad-progress">
-              <i style={{ width: `${(w.doneCount / w.steps.length) * 100}%` }} />
+              <i style={{ width: `${(w.doneCount / w.total) * 100}%` }} />
             </div>
           </div>
           <Chip tone={readinessTone}>{w.readiness.pct}% audit ready</Chip>
@@ -548,10 +603,31 @@ export function EngagementPage() {
       {addingParticipant && (
         <AddParticipantModal
           engagementId={c.id}
+          tagTypes={c.tagTypes}
           onClose={() => setAddingParticipant(false)}
           onAdded={(p) => {
             setAddingParticipant(false)
             setData((d) => (d ? withParticipant(d, p) : d))
+          }}
+        />
+      )}
+      {importing && (
+        <ImportTransactionsModal
+          engagementId={c.id}
+          onClose={() => setImporting(false)}
+          onImported={(result) => setData(result.engagement)}
+        />
+      )}
+      {budgetLine && (
+        <BudgetLineModal
+          engagement={c}
+          line={budgetLine === 'new' ? undefined : budgetLine}
+          onClose={() => setBudgetLine(null)}
+          onSaved={(saved) => {
+            setBudgetLine(null)
+            setData(saved)
+            const text = recheckNotice(saved)
+            setNotice(text ? { tone: 'danger', text } : null)
           }}
         />
       )}
@@ -725,15 +801,37 @@ function StepRow({
   onRecord,
   onFact,
   onOpen,
+  onUse,
   children,
 }: {
   step: Step
   canManage: boolean
   onRecord: (kind: DocumentKind, title: string) => void
-  onFact: () => void
+  onFact: (r: RecordItem) => void
   onOpen: (d: DocumentDto, kind: DocumentKind) => void
+  onUse: () => void
   children?: React.ReactNode
 }) {
+  if (step.state === 'skipped')
+    return (
+      <li id={step.key} className="ad-step ad-step-skipped">
+        <span className="ad-step-dot" aria-hidden="true">
+          {step.n}
+        </span>
+        <div className="ad-step-body">
+          <span className="ad-step-n">Step {step.n}</span>
+          <b className="ad-step-title">{step.title}</b>
+          <Chip tone="muted" title="Not kept for this engagement; the audit package says so">
+            not used
+          </Chip>
+          {canManage && (
+            <Button size="sm" kind="ghost" onClick={onUse}>
+              Use this step
+            </Button>
+          )}
+        </div>
+      </li>
+    )
   // These steps draw their own records below the blurb.
   const custom = step.key === 'ledger' || step.key === 'submission' || step.key === 'participants'
   const stateChip =
@@ -790,7 +888,7 @@ function RecordChip({
   r: RecordItem
   canManage: boolean
   onRecord: (kind: DocumentKind, title: string) => void
-  onFact: () => void
+  onFact: (r: RecordItem) => void
   onOpen: (d: DocumentDto, kind: DocumentKind) => void
 }) {
   if (r.waived)
@@ -834,7 +932,7 @@ function RecordChip({
     )
   if (r.field && canManage)
     return (
-      <button type="button" className="ad-chip ad-chip-missing" onClick={onFact}>
+      <button type="button" className="ad-chip ad-chip-missing" onClick={() => onFact(r)}>
         + {r.label}
       </button>
     )
@@ -968,7 +1066,7 @@ function ThisMonth({
   const due = nextDue(c, today)
   if (!due) return null
   const r = due.report
-  const signed = c.documents.find((d) => d.kind === 'signed-report' && d.period === due.period)
+  const signed = signedCopyOf(c.documents, due.period, r?.lastReopenedAt)
   const days = daysUntil(due.dueDate, today)
   const items: { label: string; done: boolean; bad?: boolean; note?: string }[] = [
     { label: 'Month started', done: !!r },
@@ -983,12 +1081,9 @@ function ThisMonth({
       bad: !!r && r.openBlockers > 0,
       note: r && r.openBlockers > 0 ? `${r.openBlockers} blocking` : undefined,
     },
+    { label: 'Month-end closing approved', done: !!r && r.status !== 'draft' },
     { label: 'Signed report on file', done: !!signed },
-    { label: `Submitted to ${c.funder ?? 'the funder'}`, done: !!r && r.status !== 'draft' },
-    {
-      label: "Funder's decision recorded",
-      done: !!r && (r.status === 'approved' || r.status === 'paid' || r.status === 'denied'),
-    },
+    { label: `Submitted to ${c.funder ?? 'the funder'}`, done: !!r && r.status === 'submitted' },
   ]
   const ready = items.filter((i) => i.done).length
   return (

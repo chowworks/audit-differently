@@ -1,15 +1,18 @@
 import { useState } from 'react'
-import type { ParticipantDto } from '@ad/types'
+import type { ParticipantDto, TagType } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
 import { Button, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
+import { TagPicker, typesFor } from '@/components/Tags'
 
 /** A participant of the engagement, by the funder's id and the name the team uses. */
 export function AddParticipantModal({
   engagementId,
+  tagTypes,
   onClose,
   onAdded,
 }: {
   engagementId: string
+  tagTypes: TagType[]
   onClose: () => void
   onAdded: (participant: ParticipantDto) => void
 }) {
@@ -17,6 +20,7 @@ export function AddParticipantModal({
   const [participantId, setParticipantId] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [enrollmentStatus, setEnrollmentStatus] = useState<'new' | 'carryover'>('new')
+  const [tags, setTags] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const save = async (ev: React.FormEvent) => {
@@ -28,6 +32,7 @@ export function AddParticipantModal({
         participantId,
         displayName,
         enrollmentStatus,
+        tags,
       })
       onAdded(added)
     } catch (e) {
@@ -66,6 +71,13 @@ export function AddParticipantModal({
             <option value="carryover">Carried over from last year</option>
           </select>
         </Field>
+        {typesFor(tagTypes, 'participant').length > 0 && (
+          // Not a <label>: a label holding buttons would press the first when its words are clicked.
+          <div className="ad-field">
+            <span>Tags</span>
+            <TagPicker types={tagTypes} target="participant" value={tags} onChange={setTags} />
+          </div>
+        )}
         <div className="flex justify-end gap-2">
           <Button type="button" onClick={onClose}>
             Cancel

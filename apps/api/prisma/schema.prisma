@@ -19,20 +19,32 @@ datasource db {
 // refuses a row without one. The funder (a state agency, a board) is a name on the engagement, not an actor.
 
 model Workspace {
-  id                String       @id @default(uuid())
-  name              String
-  // The lists this workspace's owners keep: the "source of funds" boxes an engagement may tick.
-  fundingSources    String[]     @default([])
+  id                        String           @id @default(uuid())
+  name                      String
+  // The budget items an engagement may use ({ key, label, reportLine }[], DEFAULT_BUDGET_ITEMS in packages/types):
+  // the key never changes, so a rename keeps every engagement's lines. The column default is the defaults.
+  budgetItems               Json             @default(dbgenerated())
+  // The owners' tag types ({ key, label, appliesTo, values: { key, label }[] }[], TagType in packages/types), "Funding
+  // source" among them (DEFAULT_TAG_TYPES for a new workspace). Keys never change, so a rename keeps every record's tags.
+  tagTypes                  Json             @default("[]")
+  // The local part of the workspace's receipts address (`<receiptsAddress>@<RECEIPTS_DOMAIN>`), unique; null until set,
+  // then kept: an owner sets it once and nobody changes it through the API (migration 20261015001200).
+  receiptsAddress           String?          @unique
+  // The owners' setting: an emailed receipt (no person present to say yes) is read with AI when its text does not
+  // give everything. Off until an owner turns it on (migration 20261016000400); the platform admin never sets it.
+  readEmailedReceiptsWithAi Boolean          @default(false)
   // The terms the owner accepted creating the workspace (TERMS_VERSION in packages/types); null before this was recorded.
-  termsVersion      String?
-  termsAcceptedAt   DateTime?
-  termsAcceptedById String?
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
-  memberships       Membership[]
-  engagements       Engagement[]
-  documents         Document[]
-  suggestions       Suggestion[]
+  termsVersion              String?
+  termsAcceptedAt           DateTime?
+  termsAcceptedById         String?
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
+  memberships               Membership[]
+  engagements               Engagement[]
+  documents                 Document[]
+  suggestions               Suggestion[]
+  importMappings            ImportMapping[]
+  inboundReceipts           InboundReceipt[]
 }
 
 // Something a member asked for: today, an addition to one of the workspace's lists. Kept so the product can
@@ -47,6 +59,51 @@ model Suggestion {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, createdAt])
+}
+
+// How a kind of exported transactions file maps to expense lines, saved by name ("QuickBooks mapping") and offered on
+// the next import of a file with the same columns. Holds no row of any file (migration 20261015000600).
+model ImportMapping {
+  id          String    @id @default(uuid())
+  workspaceId String
+  name        String
+  headers     String[]  @default([]) // the file's column names
+  columns     Json      @default("{}") // ImportColumns in packages/types: which column holds each field
+  categories  Json      @default("{}") // category in the file -> budget item key, or 'skip'
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+}
+
+// The queue of emailed receipts (migration 20261015001000): written by the webhook before anyone knows whose it is
+// (workspaceId null, trusted work only), then processed by the worker in the API. Holds the envelope, never a file.
+model InboundReceipt {
+  id               String      @id @default(uuid())
+  emailId          String      @unique // the email provider's id
+  status           String      @default("received") // INBOUND_RECEIPT_STATUSES in packages/types
+  attempts         Int         @default(0)
+  nextAttemptAt    DateTime    @default(now())
+  error            String? // why the last attempt failed, or which attachments were skipped
+  fromAddress      String?
+  toAddress        String?
+  subject          String?
+  receivedAt       DateTime
+  workspaceId      String? // set by trusted work with the verified sender; never changes after
+  senderUserId     String? // the member who sent it, once verified
+  engagementId     String? // where it was filed; cleared when the engagement is deleted (migration 20261015001200)
+  documentIds      String[]    @default([])
+  filedAttachments String[]    @default([]) // the provider's attachment ids already filed, so a retry files none twice
+  rejectReason     String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @default(now()) @updatedAt
+  workspace        Workspace?  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  engagement       Engagement? @relation(fields: [engagementId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextAttemptAt])
+  @@index([workspaceId, receivedAt])
 }
 
 model User {
@@ -79,23 +136,25 @@ model Membership {
 // optional; the workflow (apps/web/src/lib/workflow.ts) reads what is on file.
 
 model Engagement {
-  id                     String          @id @default(uuid())
+  id                     String           @id @default(uuid())
   workspaceId            String
-  kind                   String          @default("grant") // ENGAGEMENT_KINDS in packages/types
+  kind                   String           @default("grant") // ENGAGEMENT_KINDS in packages/types
   name                   String // the program or project, as the team calls it
   funder                 String? // who awards and audits it, e.g. a state workforce board
   funderContact          String? // the funder's contact for this engagement, as written on the award letter
   solicitation           String? // the request for proposals this answered, by name or number
-  requestedAmount        Decimal?        @db.Decimal(12, 2)
+  requestedAmount        Decimal?         @db.Decimal(12, 2)
   proposalSubmittedOn    DateTime?
   awardedOn              DateTime? // the award letter's date
-  awardAmount            Decimal?        @db.Decimal(12, 2)
+  awardAmount            Decimal?         @db.Decimal(12, 2)
   number                 String? // the funder's contract number, once the contract exists
+  // What an emailed receipt's subject names to pick this engagement: capitals, digits and hyphens, unique in the workspace.
+  code                   String?
   periodStart            DateTime?
   periodEnd              DateTime?
-  fundingSources         String[]        @default([]) // the "source of funds" boxes ticked, from the workspace list
+  tags                   String[]         @default([]) // `<type key>:<value key>`, of the types that apply to engagements
   // Day of the following month the monthly report is due (the form says the 12th); a month can override it.
-  reportDueDay           Int             @default(12)
+  reportDueDay           Int              @default(12)
   // The contract's indirect-cost terms in words (rate, base, or "none"), so the indirect-as-direct check is a
   // rule and not a guess.
   indirectTerms          String?
@@ -109,21 +168,25 @@ model Engagement {
   authorizerOrganization String?
   // The items a participant's file must hold for this program ({ key, label, required }[]); empty means the
   // defaults in packages/types (ELIGIBILITY_ITEMS).
-  eligibilityItems       Json            @default("[]")
-  status                 String          @default("proposed") // ENGAGEMENT_STATUSES in packages/types
+  eligibilityItems       Json             @default("[]")
+  status                 String           @default("proposed") // ENGAGEMENT_STATUSES in packages/types
+  // The records kept besides the financials (ENGAGEMENT_TRACKS); a step left out is not used.
+  tracks                 String[]         @default(["proposal", "award-letter", "contract"])
   // Records that do not exist for this engagement, with the reason, keyed by document kind (e.g. no award
   // letter because the funder sent the contract directly). A documented absence is a record the audit accepts.
-  waivers                Json            @default("{}")
-  createdAt              DateTime        @default(now())
-  updatedAt              DateTime        @updatedAt
-  workspace              Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  waivers                Json             @default("{}")
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+  workspace              Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   budgetLines            BudgetLine[]
   monthlyReports         MonthlyReport[]
   expenses               Expense[]
   participants           Participant[]
   documents              Document[]
+  inboundReceipts        InboundReceipt[]
 
   @@unique([workspaceId, number])
+  @@unique([workspaceId, code])
   @@index([workspaceId])
 }
 
@@ -147,61 +210,92 @@ model BudgetLine {
 // ── Monthly reports and expenses ────────────────────────────────────────────
 
 model MonthlyReport {
-  id               String       @id @default(uuid())
-  workspaceId      String? // set by trigger
-  engagementId     String
-  period           String // 'YYYY-MM', the month the expenses belong to
-  status           String       @default("draft") // REPORT_STATUSES
-  dueDate          DateTime
-  submittedAt      DateTime?
-  preparedByName   String?
-  authorizedByName String?
-  authorizedAt     DateTime?
-  comments         String?
-  // The funder's review section of the form as it came back: received date, the verification boxes, invoice
-  // number. The bookkeeper records it; the funder does not sign in.
-  review           Json?
-  reviewedById     String? // who recorded the funder's decision
-  reviewedAt       DateTime?
-  deniedReason     String?
-  isFinal          Boolean      @default(false)
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
-  engagement       Engagement   @relation(fields: [engagementId], references: [id], onDelete: Cascade)
-  expenses         Expense[]
-  wexPayments      WexPayment[]
-  checks           Check[]
+  id                    String            @id @default(uuid())
+  workspaceId           String? // set by trigger
+  engagementId          String
+  period                String // 'YYYY-MM', the month the expenses belong to
+  status                String            @default("draft") // REPORT_STATUSES: draft, closed, submitted
+  dueDate               DateTime
+  submittedAt           DateTime?
+  preparedByName        String?
+  // Who approved the month-end closing for the company, and on what day (they sign the form as "Authorized by").
+  // The bookkeeper records it; the approver is often not a user.
+  authorizedByName      String?
+  authorizedAt          DateTime?
+  comments              String?
+  closingNote           String?
+  sentBackReason        String? // why the month-end closing was last sent back
+  sentBackAt            DateTime? // when, and by whom (staff email): who pressed Send back, or who changed the budget
+  sentBackByEmail       String?
+  editsRequestedAt      DateTime? // edits asked for on a draft month, before its closing is approved
+  editsRequestedByEmail String?
+  editsRequestComment   String?
+  isFinal               Boolean           @default(false)
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  engagement            Engagement        @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  expenses              Expense[]
+  wexPayments           WexPayment[]
+  checks                Check[]
+  reopenings            ReportReopening[]
 
   @@unique([engagementId, period])
   @@index([workspaceId])
   @@index([workspaceId, status, dueDate])
 }
 
+// A submitted month reopened to correct it (migration 20261015001500), kept for good: when, by whom and why, and
+// what it undid (the submission, the month-end closing approval, the signed copy that went to the funder).
+// Append-only: members read and add one in their own name; it goes only with its month.
+model ReportReopening {
+  id               String        @id @default(uuid())
+  workspaceId      String? // set by trigger
+  monthlyReportId  String
+  reopenedAt       DateTime      @default(now())
+  // A plain id, as DataAccessLog.actorId: the history outlives the person; the email is kept with it.
+  reopenedById     String
+  reopenedByEmail  String
+  reason           String // at most 500 characters
+  submittedAt      DateTime // the submission this reopening undid
+  approvedByName   String?
+  approvedAt       DateTime?
+  // The signed copy on file for that submission, a plain id; the API never replaces or removes it.
+  signedDocumentId String?
+  monthlyReport    MonthlyReport @relation(fields: [monthlyReportId], references: [id], onDelete: Cascade)
+
+  @@index([monthlyReportId, reopenedAt])
+  @@index([workspaceId])
+}
+
 // One row per expense per report line. A shared cost split between two lines is two rows with one item number.
 model Expense {
-  id              String            @id @default(uuid())
-  workspaceId     String? // set by trigger
-  engagementId    String
-  monthlyReportId String
-  itemNumber      String // the team's own numbering, e.g. 'ISY-12'
-  date            DateTime
-  vendor          String
-  memo            String?
-  account         String? // the general-ledger account, as text
-  totalCost       Decimal           @db.Decimal(12, 2)
-  allocatedAmount Decimal           @db.Decimal(12, 2) // the program's share charged to this line
-  allocationType  String            @default("direct") // ALLOCATION_TYPES
-  allocationNote  String? // e.g. '32.84% of payroll hours in January'
-  reportLine      String // REPORT_LINES
-  createdById     String?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-  engagement      Engagement        @relation(fields: [engagementId], references: [id], onDelete: Cascade)
-  monthlyReport   MonthlyReport     @relation(fields: [monthlyReportId], references: [id], onDelete: Cascade)
-  documents       ExpenseDocument[]
-  checks          Check[]
+  id                String            @id @default(uuid())
+  workspaceId       String? // set by trigger
+  engagementId      String
+  monthlyReportId   String
+  itemNumber        String // the team's own numbering, e.g. 'ISY-12'
+  date              DateTime
+  vendor            String
+  memo              String?
+  account           String? // the general-ledger account, as text
+  totalCost         Decimal           @db.Decimal(12, 2)
+  allocatedAmount   Decimal           @db.Decimal(12, 2) // the program's share charged to this line
+  allocationType    String            @default("direct") // ALLOCATION_TYPES
+  allocationNote    String? // e.g. '32.84% of payroll hours in January'
+  reportLine        String // REPORT_LINES
+  tags              String[]          @default([]) // `<type key>:<value key>`, from Workspace.tagTypes
+  // The hash of the imported file row this came from (date, amount, payee, memo, reference); null when typed.
+  importFingerprint String?
+  createdById       String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  engagement        Engagement        @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  monthlyReport     MonthlyReport     @relation(fields: [monthlyReportId], references: [id], onDelete: Cascade)
+  documents         ExpenseDocument[]
+  checks            Check[]
 
   @@unique([engagementId, itemNumber, reportLine])
+  @@unique([engagementId, importFingerprint])
   @@index([workspaceId])
   @@index([monthlyReportId])
 }
@@ -212,24 +306,31 @@ model Expense {
 // records, enrollment forms, pay stubs), which sets how it may be served (CLAUDE.md, "Data rules").
 
 model Document {
-  id           String                @id @default(uuid())
-  workspaceId  String
-  engagementId String?
-  kind         String // DOCUMENT_KINDS
-  sensitivity  String                @default("financial") // 'financial' | 'personal'
-  fileName     String
-  contentType  String
-  size         Int
-  sha256       String
-  storageKey   String                @unique
-  period       String? // 'YYYY-MM' when the document belongs to one month (a statement, a register)
-  uploadedById String
-  uploadedAt   DateTime              @default(now())
-  workspace    Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  engagement   Engagement?           @relation(fields: [engagementId], references: [id], onDelete: SetNull)
-  expenses     ExpenseDocument[]
-  participants ParticipantDocument[]
-  wexPayments  WexPaymentDocument[]
+  id               String                @id @default(uuid())
+  workspaceId      String
+  engagementId     String?
+  kind             String // DOCUMENT_KINDS
+  sensitivity      String                @default("financial") // 'financial' | 'personal'
+  fileName         String
+  contentType      String
+  size             Int
+  sha256           String
+  storageKey       String                @unique
+  period           String? // 'YYYY-MM' when the document belongs to one month (a statement, a register)
+  uploadedById     String
+  uploadedAt       DateTime              @default(now())
+  // What was read from a receipt or invoice (financial only; never a personal document) and by what:
+  // 'text' (the PDF's own text), 'ai', or 'person'. Dismissed: "not for this grant", out of the unmatched list.
+  receiptAmount    Decimal?              @db.Decimal(12, 2)
+  receiptDate      DateTime?             @db.Date
+  receiptVendor    String?
+  receiptReadBy    String?
+  receiptDismissed Boolean               @default(false)
+  workspace        Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  engagement       Engagement?           @relation(fields: [engagementId], references: [id], onDelete: SetNull)
+  expenses         ExpenseDocument[]
+  participants     ParticipantDocument[]
+  wexPayments      WexPaymentDocument[]
 
   @@index([workspaceId, period])
   @@index([engagementId])
@@ -239,6 +340,8 @@ model ExpenseDocument {
   expenseId   String
   documentId  String
   purpose     String // DOCUMENT_PURPOSES
+  /// The statement line marked as this item's payment: { page, x, y, width, height, text? } in PDF points (migration 20261015000800)
+  mark        Json?
   workspaceId String? // set by trigger
   expense     Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
   document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -261,6 +364,7 @@ model Participant {
   displayName      String
   enrollmentStatus String                @default("new") // 'new' | 'carryover'
   currentStatus    String                @default("active") // 'active' | 'offboarded' | 'carry-over'
+  tags             String[]              @default([]) // personal data: logged by field name only
   enrolledAt       DateTime?
   exitedAt         DateTime?
   createdAt        DateTime              @default(now())
@@ -295,6 +399,7 @@ model WexPayment {
   payPeriodEnd    DateTime
   hours           Decimal?             @db.Decimal(8, 2)
   grossAmount     Decimal              @db.Decimal(12, 2)
+  tags            String[]             @default([])
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
   monthlyReport   MonthlyReport        @relation(fields: [monthlyReportId], references: [id], onDelete: Cascade)
@@ -311,6 +416,8 @@ model WexPaymentDocument {
   wexPaymentId String
   documentId   String
   purpose      String // 'timesheet' | 'register' | 'payment' (the paystub or deposit advice)
+  /// As ExpenseDocument.mark: the bank statement line this payment was paid on
+  mark         Json?
   workspaceId  String? // set by trigger
   wexPayment   WexPayment @relation(fields: [wexPaymentId], references: [id], onDelete: Cascade)
   document     Document   @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -377,8 +484,8 @@ model DataAccessLog {
 // 20261012000300; a person reads and inserts only their own rows.
 
 model TermsAcceptance {
-  id         String   @id @default(uuid())
-  userId     String
+  id          String   @id @default(uuid())
+  userId      String
   fingerprint String // the Terms' version: the hash of their wording, see src/auth/terms-fingerprint.ts
   acceptedAt  DateTime @default(now())
 
