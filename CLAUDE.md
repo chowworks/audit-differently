@@ -114,19 +114,35 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   Until then, demo with the fictional seed only.
 - **Two sensitivity tiers** on `Document` (`DOCUMENT_SENSITIVITY` in `packages/types`): `financial` (invoices,
   statements, registers, allocation sheets) and `personal` (eligibility records, enrollment forms, pay stubs).
-  Personal documents: signed URLs that expire in 60 seconds and always force a download, never an inline
-  preview or thumbnail, visible to owners and auditors only (`PERSONAL_DOCUMENT_ROLES`; a bookkeeper
-  attaches them and does not read them back), every read logged, and never part of an export the funder did
-  not ask for by name. Documents may be read to match them: a receipt's amount, date and vendor, a line on a
+  Personal documents: signed URLs that expire in 60 seconds, every read logged, and never part of an export the funder
+  did not ask for by name. **Pay stubs are payroll files** (owner's decision, 2026-10-16): owners, bookkeepers and
+  auditors open them (`personalRolesFor`), they show on the page with their matched line highlighted like a timesheet
+  or a bank statement, and their mark keeps the line's text. **Eligibility records and enrollment forms** stay
+  strict: owners and auditors only (`PERSONAL_DOCUMENT_ROLES`; a bookkeeper attaches them and does not read them
+  back), always a forced download, never an inline preview or thumbnail, never marked.
+  Documents may be read to match them: a receipt's amount, date and vendor, a line on a
   bank statement, a pay stub's pay period and pay (owner's decisions, 2026-10-15 and 2026-10-16). A bank's downloaded PDF has a text layer; a scanned one does not, and the screen says so
   rather than running OCR. Financial receipts and invoices are read for amount, date and vendor (PDF text
   first; Claude only when `ANTHROPIC_API_KEY` is set, `apps/api/src/receipts/read-receipt.ts`); a database check
-  keeps those columns empty on a personal document. A payroll item's link to its bank statement may carry a
-  `mark` (page and box); only financial bank statements are read for lines or marked, exports draw marks on a
-  copy and never claim a mark they could not draw, and the viewer gets the bytes from
-  `GET /payroll/statements/:documentId/file` (members only, every open logged), never from storage directly.
+  keeps those columns empty on a personal document. A payroll item's link to its proof (timesheet, register, pay
+  stub or bank statement) carries its highlights: `marks`, boxes around the exact words a platform admin chose for
+  that proof type (Admin tools → Highlights, `HighlightSetting`, append-only; defaults `DEFAULT_HIGHLIGHTS`), and
+  `mark`, the line found (migrations `20261016001100` to `..1400`). **Every payroll proof stands on its own per
+  item** (owner's decision, 2026-10-16): the viewer, the month bundle and the audit package show each item its own
+  copy (`itemCopy` in `mark-pdf.ts`), drawn on the fly from the untouched original with the file's own highlight
+  notes removed and only that item's highlights; the package also files each shared original once, as stored.
+  Copies never claim a highlight they could not draw, and the viewer gets the bytes through the
+  API (`GET /payroll/statements/:documentId/file`, `GET /payroll-match/:runId/files/:fileId`; members only, every
+  open logged), never from storage directly.
+  "Match payroll & timecards" stages the zip on the server (`PayrollMatchRun`, `PayrollMatchFile`,
+  `apps/api/src/payroll/payroll-match.service.ts`): the browser sends the files, a background job reads each PDF's
+  text lines (`payroll-match.worker.ts`; closing the wizard stops nothing, and reopening picks the run up), the lines
+  are kept on the run only, matches are worked out from them on request, nothing is a `Document` until Save, and
+  Discard or 24 hours removes the run and its staged objects.
 - **Deleting is permanent and owner-only** (`apps/api/src/deletion/`; a bookkeeper or auditor gets 403, another
-  workspace's row 404). An owner deletes an engagement, and the workspace once no engagement remains. The order is
+  workspace's row 404). An owner deletes an engagement, and the workspace once no engagement remains. A month with
+  nothing to submit (a draft with no expense, payroll, file or reopening) is the one smaller delete: an owner removes
+  it from the month's More menu (`DELETE /reports/:id`), logged. The order is
   fixed: `POST .../deletion` plans a full export, split into zips of about 1.5 GB of files each, and `GET .../deletion/:deletionId/parts/:n` sends each part (the audit package plus everything the owner may see: unfiled
   records, budget, months, checks; `AuditPackageService.plan` with `complete`) and writes a `DeletionRecord`; the
   record becomes `downloaded` only when every part's response has finished, and `DELETE` needs that record (this engagement,
@@ -205,7 +221,9 @@ of two.
   `runAsSystem` from `apps/api/src/core/tenant-context.ts`, kept to short, reviewed paths (today: the
   placeholder User row of an owner's invitation, and handing that placeholder's memberships to the real account
   on first sign-in, `GET /me`; and the emailed-receipts queue before a sender is known,
-  `apps/api/src/inbound/inbound.service.ts`, whose filing then runs as the sending member). It sees every workspace and marks the connection `app.system = on`; only the
+  `apps/api/src/inbound/inbound.service.ts`, whose filing then runs as the sending member; and the job that reads a
+  payroll match's files, `apps/api/src/payroll/payroll-match.worker.ts`, which the database lets change only what
+  reading fills, migration `20261016001300`). It sees every workspace and marks the connection `app.system = on`; only the
   `User` and `Membership` write policies and the `User` and `Workspace` read policies admit that mark (no longer
   the `Workspace` insert policy, migration `20261013000200`), and trusted work deletes `pending-` users only
   (migrations `20261011000400` to `..0600`). The invitation claim matches a verified Clerk email only. The
@@ -243,7 +261,7 @@ of two.
   DMARC passing); `apps/api/src/auth/route-gates.spec.ts` lists every
   route and fails on a new one without the guard. Inside the line, a row of another workspace is a 404 from
   the tenant-scoped query (`tenantWhere`), never the row and never a different error; a change needs
-  `WRITE_ROLES` (lists and members: `owner`), opening a personal document `PERSONAL_DOCUMENT_ROLES`, and a
+  `WRITE_ROLES` (lists and members: `owner`), opening a personal document `personalRolesFor` (pay stubs: every member; the rest `PERSONAL_DOCUMENT_ROLES`), and a
   read that returns document or participant rows (an engagement, a month, a document list) writes
   `DataAccessLog`.
 - The database specs run the real migrations on PGlite as the restricted role with exactly its privileges;

@@ -248,13 +248,16 @@ describe('MonthBundleService', () => {
       // RYS-13: the timesheet. The register and the statement are payroll proof, filed once each below.
       HEADER,
       size(SIZES.timesheet),
-      // Payroll proof: the statement (backing RYS-11 and RYS-16), then the register.
+      // Payroll proof: the statement as RYS-11's own copy (its line highlighted), the statement again for RYS-16
+      // (nothing highlighted for it), then the register.
+      HEADER,
+      ...statementPages.map((p) => `${p.getWidth()}x${p.getHeight()}`),
       HEADER,
       ...statementPages.map((p) => `${p.getWidth()}x${p.getHeight()}`),
       HEADER,
       size(SIZES.register),
     ])
-    expect(bundle.files).toBe(7)
+    expect(bundle.files).toBe(8)
 
     const index = text('Index.csv').split('\r\n')
     expect(index[0]).toBe(
@@ -266,7 +269,7 @@ describe('MonthBundleService', () => {
     expect(index.find((l) => l.includes('alloc 11.xlsx'))).toContain(
       '"Supporting files/RYS-11 - Allocation worksheet - alloc 11.xlsx"'
     )
-    // The statement is one record behind two lines: two index rows, one place in the PDF.
+    // The statement backs two lines: two index rows, and each line has its own copy in the PDF.
     const stmt = index.filter((l) => l.includes('2026-09 Bank Statement.pdf'))
     expect(stmt).toHaveLength(2)
     expect(stmt[0]).toContain(
@@ -276,14 +279,14 @@ describe('MonthBundleService', () => {
     expect(index.find((l) => l.includes('Ledger summary'))).toContain('Bundle.pdf, page 3')
   })
 
-  it('draws the marked payroll line on the statement', async () => {
-    const spy = jest.spyOn(marking, 'markPdf')
+  it("draws the marked payroll line on that item's own copy of the statement", async () => {
+    const spy = jest.spyOn(marking, 'itemCopy')
     const { text, entries } = await download('owner')
     expect(spy).toHaveBeenCalledWith(expect.any(Uint8Array), [mark])
     spy.mockRestore()
     const pdf = Object.entries(entries).find(([p]) => p.endsWith('Bundle.pdf'))![1]
     const lines = (await readStatement(Buffer.from(pdf))).lines.map((l) => l.text)
-    expect(lines).toContain('1 marked line highlighted on this statement.')
+    expect(lines).toContain('1 place highlighted on this copy, for RYS-11 alone.')
     expect(text('README.txt')).toContain('highlighted (the stored statement is unchanged).')
     expect(text('README.txt')).not.toContain('NOT DRAWN')
   })
@@ -379,7 +382,7 @@ describe('MonthBundleService', () => {
       resource: 'export',
       subjectId: 'r-1',
       action: 'export',
-      description: 'Downloaded the September 2026 bundle of Coding Pathway: 7 files',
+      description: 'Downloaded the September 2026 bundle of Coding Pathway: 8 files',
     })
   })
 
@@ -422,7 +425,7 @@ describe('MonthBundleService', () => {
     // The copy that was submitted on October 8 is kept as it was uploaded.
     const earlier = entries[`${root}/Earlier submissions/Signed report as submitted 2026-10-08.pdf`]
     expect(Buffer.from(earlier!).equals(await pdfOf(2, SIZES.signed))).toBe(true)
-    expect(bundle.files).toBe(8)
+    expect(bundle.files).toBe(9)
     const rows = text('Reopenings.csv').split('\r\n')
     expect(rows[0]).toBe(
       '"Submitted on","Month-end closing approved by","Month-end closing approved on","Reopened on","Reopened by","Why it was reopened","Signed copy as submitted"'

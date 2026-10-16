@@ -124,12 +124,17 @@ export class ImportsService {
       where: { workspaceId: c.workspaceId },
       orderBy: { updatedAt: 'desc' },
     })
+    // A saved mapping may come from another engagement: its category choices for budget lines this one does not use
+    // are left out, so those categories wait for the person in step 3 instead of refusing the import.
+    const usable = new Set([...this.options(c).map((i) => i.key), IMPORT_SKIP])
     const mappings: ImportMappingDto[] = saved.map((m) => ({
       id: m.id,
       name: m.name,
       headers: m.headers,
       columns: m.columns as ImportColumns,
-      categories: m.categories as ImportCategories,
+      categories: Object.fromEntries(
+        Object.entries(m.categories as ImportCategories).filter(([, to]) => usable.has(to))
+      ),
       matches: sameHeaders(m.headers, table.headers),
     }))
     const match = mappings.find((m) => m.matches)

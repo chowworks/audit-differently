@@ -428,6 +428,80 @@
   .ad-tool-more .ad-tool-title {
     color: var(--muted);
   }
+  /* Matching statistics (AdminMatchStatsPage): two small line graphs side by side, then the table. */
+  .ad-stats-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin: 16px 0;
+  }
+  .ad-stats-chart {
+    margin: 0;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .ad-stats-chart-title {
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .ad-stats-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .ad-stats-legend i,
+  .ad-stats-tip i {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 5px;
+    border-radius: 50%;
+    vertical-align: -1px;
+  }
+  .ad-stats-plot {
+    position: relative;
+  }
+  .ad-stats-plot svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .ad-stats-grid {
+    stroke: var(--line);
+    stroke-width: 1;
+  }
+  .ad-stats-cross {
+    stroke: var(--muted);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+  }
+  .ad-stats-axis {
+    fill: var(--muted);
+    font-size: 11px;
+  }
+  .ad-stats-tip {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
   .ad-actions {
     display: flex;
     flex-wrap: wrap;
@@ -935,6 +1009,22 @@
     margin-top: 2px;
     font-size: 12px;
   }
+  /* The note and its "Show" link (the found line, highlighted on the page) side by side. */
+  .ad-matchcell .ad-match-foot {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .ad-matchcell .ad-match-show {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--navy, #1d3557);
+    text-decoration: underline;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
   /* "Replace this month's payroll files": the option, and the line that says it is under way. */
   .ad-replace-opt {
     display: flex;
@@ -958,6 +1048,32 @@
     background: var(--surface-alt);
     font-size: 14px;
     font-weight: 700;
+  }
+  /* The payroll files being read on the server: how many are done, as words and a bar. */
+  .ad-reading {
+    display: grid;
+    gap: 6px;
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border-left: 4px solid var(--navy);
+    background: var(--surface-alt);
+    font-size: 14px;
+  }
+  .ad-reading small {
+    color: var(--muted);
+  }
+  .ad-reading-bar {
+    display: block;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--line);
+    overflow: hidden;
+  }
+  .ad-reading-bar span {
+    display: block;
+    height: 100%;
+    background: var(--navy);
+    transition: width 0.4s ease;
   }
   /* What a payroll zip holds, folder by folder, once opened: the month page's tiles, one per folder. */
   .ad-zip-head {
@@ -1918,10 +2034,9 @@
     font-size: 12px;
     font-weight: 800;
   }
+  /* A longer step name ("Unmatched payments") wraps rather than being cut off. */
   .ad-stepper-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.25;
     font-weight: 700;
   }
   .ad-stepper > li.ad-stepper-done {
@@ -2433,4 +2548,21 @@
       background: #fff;
     }
   }
+}
+
+/* The full demo workspace's mark, as Learn Differently's: a small cream pill with a star. */
+.ad-demo {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #fff4d6;
+  color: #7a5200;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  vertical-align: middle;
+  cursor: help;
 }

@@ -16,8 +16,9 @@ import {
 } from '@ad/types'
 import { ChecksService } from '../checks/checks.service'
 import { AccessLogService } from '../core/access-log.service'
-import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
+import { allow, staffName, tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { changesOf, type Fields } from '../core/changes'
+import { MatchStatsService } from '../core/match-stats.service'
 import { DocumentsService, type Uploaded } from '../documents/documents.service'
 import { NothingChanged, unlessUnchanged } from '../documents/link'
 import { describe, type StagedFile } from '../documents/staged-file'
@@ -84,7 +85,8 @@ export class ReceiptsService {
     private readonly log: AccessLogService,
     private readonly checks: ChecksService,
     private readonly reports: ReportsService,
-    private readonly documents: DocumentsService
+    private readonly documents: DocumentsService,
+    private readonly stats: MatchStatsService
   ) {}
 
   /**
@@ -100,6 +102,7 @@ export class ReceiptsService {
     kind = 'receipt',
     withAi = false
   ): Promise<ReceiptUploadResult> {
+    const startedAt = new Date()
     const r = await this.reports.editable(caller, reportId)
     if (!isReceiptKind(kind)) throw new BadRequestException('kind must be receipt or invoice')
     if (!files.length) throw new BadRequestException('Choose at least one file')
@@ -118,28 +121,58 @@ export class ReceiptsService {
       kind,
     }
     const staged = []
-    for (const f of files) staged.push(await this.documents.stage(caller, f, body))
-    const reads = await inBatches(staged, READ_AT_ONCE, (s, i) =>
-      readReceipt(
-        {
-          buffer: files[i]!.buffer,
-          contentType: s.data.contentType,
-          sensitivity: s.data.sensitivity,
-        },
-        withAi
-      )
-    )
     let matched = 0
-    for (const [i, s] of staged.entries()) {
-      const read = reads[i]!
-      const doc = await this.store(
-        caller,
-        s,
-        read,
-        (made) => `Uploaded ${describe(made)} to match${readWithAi(read)}`
+    let filed = 0
+    let unread = 0
+    let readMs: number | null = null
+    // Matching statistics: one row for the upload, written once it ends, done or failed (a refused file included).
+    const stat = (outcome: 'done' | 'failed') =>
+      this.stats.record({
+        workspaceId: r.workspaceId!,
+        feature: 'receipts',
+        startedById: caller.userId,
+        startedByEmail: staffName(caller),
+        startedAt,
+        outcome,
+        fileCount: files.length,
+        totalBytes: files.reduce((n, f) => n + f.size, 0),
+        readMs,
+        items: filed,
+        matched,
+        missing: filed - matched,
+        failed: unread,
+      })
+    try {
+      for (const f of files) staged.push(await this.documents.stage(caller, f, body))
+      const readFrom = Date.now()
+      const reads = await inBatches(staged, READ_AT_ONCE, (s, i) =>
+        readReceipt(
+          {
+            buffer: files[i]!.buffer,
+            contentType: s.data.contentType,
+            sensitivity: s.data.sensitivity,
+          },
+          withAi
+        )
       )
-      if (await this.autoMatch(caller, doc.id)) matched++
+      readMs = Date.now() - readFrom
+      unread = reads.filter((x) => x.amount == null).length
+      for (const [i, s] of staged.entries()) {
+        const read = reads[i]!
+        const doc = await this.store(
+          caller,
+          s,
+          read,
+          (made) => `Uploaded ${describe(made)} to match${readWithAi(read)}`
+        )
+        filed++
+        if (await this.autoMatch(caller, doc.id)) matched++
+      }
+    } catch (e) {
+      await stat('failed')
+      throw e
     }
+    await stat('done')
     return { uploaded: staged.length, matched, report: await this.reports.fresh(caller, r.id) }
   }
 

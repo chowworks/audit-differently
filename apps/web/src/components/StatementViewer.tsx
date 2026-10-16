@@ -42,17 +42,20 @@ function toMark(v: PageViewport, page: number, b: Box): StatementMark {
 }
 
 /**
- * A bank statement's page drawn in the browser with pdf.js, from its bytes as the API serves them (which logs the read),
+ * A payroll file's page drawn in the browser with pdf.js, from its bytes as the API serves them (which logs the read),
  * with the marked line highlighted. With `onDraw`, the person drags a box on the page to mark the line by hand.
- * Financial documents only: a personal document is never previewed, so this shows nothing for one.
+ * Financial documents and pay stubs only: any other personal document is never previewed, so this shows nothing for one.
  */
 export function StatementViewer({
   doc,
+  src,
   page: startPage = 1,
   mark,
   onDraw,
 }: {
-  doc: DocumentDto
+  doc: Pick<DocumentDto, 'id' | 'sensitivity'> & { kind?: string }
+  /** Where the bytes come from, when not a filed bank statement: a payroll match's staged file. */
+  src?: string
   page?: number
   mark?: StatementMark | null
   onDraw?: (mark: StatementMark) => void
@@ -65,7 +68,8 @@ export function StatementViewer({
   const [drawing, setDrawing] = useState<{ x: number; y: number; box: Box } | null>(null)
   const [drawn, setDrawn] = useState<Box | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const financial = doc.sensitivity === 'financial'
+  // A pay stub is shown like the other payroll files (owner's decision, 2026-10-16); no other personal document is.
+  const financial = doc.sensitivity === 'financial' || doc.kind === 'paystub'
 
   useEffect(() => setPage(mark?.page ?? startPage), [mark?.page, startPage])
   useEffect(() => setDrawn(null), [page])
@@ -83,7 +87,7 @@ export function StatementViewer({
     ;(async () => {
       try {
         // Through the API with the session's token (which logs the open), never from storage directly.
-        const data = await apiRef.current.bytes(`/payroll/statements/${doc.id}/file`)
+        const data = await apiRef.current.bytes(src ?? `/payroll/statements/${doc.id}/file`)
         if (done) return
         loading = getDocument({ data: new Uint8Array(data) })
         const opened = await loading.promise
@@ -99,7 +103,7 @@ export function StatementViewer({
       setViewport(null)
       void loading?.destroy()
     }
-  }, [doc.id, financial])
+  }, [doc.id, financial, src])
 
   useEffect(() => {
     if (!pdf || !canvas.current) return

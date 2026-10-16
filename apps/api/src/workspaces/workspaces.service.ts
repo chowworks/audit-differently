@@ -120,6 +120,7 @@ export class WorkspacesService {
     w: {
       id: string
       name: string
+      featuredDemo: boolean
       budgetItems: unknown
       tagTypes: unknown
       receiptsAddress: string | null
@@ -131,6 +132,7 @@ export class WorkspacesService {
     return {
       id: w.id,
       name: w.name,
+      featuredDemo: w.featuredDemo,
       myRole: caller.memberships.find((m) => m.workspaceId === w.id)?.role ?? null,
       memberCount: w._count.memberships,
       engagementCount: w._count.engagements,
@@ -646,6 +648,7 @@ async function findOrInvite(
 function adminDto(w: {
   id: string
   name: string
+  featuredDemo: boolean
   createdAt: Date
   termsAcceptedAt: Date | null
   memberships: MemberRow[]
@@ -653,6 +656,7 @@ function adminDto(w: {
   return {
     id: w.id,
     name: w.name,
+    featuredDemo: w.featuredDemo,
     createdAt: w.createdAt.toISOString(),
     memberCount: w.memberships.length,
     members: w.memberships.map(memberDto),

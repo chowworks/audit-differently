@@ -33,6 +33,17 @@ database has no public address and production's keys are never in a local `.env`
    below to it.
 5. `apps/api/scripts/railway-dev-vars.sh --apply` copies the dev keys to `api-dev` and sets the database URLs on
    the private host; then `apps/api/scripts/deploy-dev.sh`. Check `curl https://<domain>/api/health`.
+6. Emailed receipts (optional; off until all three are set). Dev uses **its own Resend account**, never production's:
+   a Full access key reads every email its account received, and this key sits in a `.env`. In the dev account, add
+   the dev receipts subdomain (a `receipts-dev` subdomain, receiving on) and its MX record at the DNS host, add a
+   webhook for `email.received` to `https://<api-dev domain>/api/inbound/resend`, and create a Full access key. Put
+   them in `apps/api/.env` as `RECEIPTS_DOMAIN`, `RESEND_WEBHOOK_SECRET` and `RESEND_RECEIVING_API_KEY`, rerun
+   `railway-dev-vars.sh --apply`, then redeploy `api-dev` (the script sets variables without a deploy). The webhook
+   answers 401 to an unsigned request once it is on. Mail the demo address (`riverbend-youth@<dev receipts
+subdomain>`) from a demo person's verified address to try it.
+   Other developers leave the three blank in their own `.env`: emailed receipts are rows in the shared dev database,
+   so they see them anyway, and a local API with them blank runs no inbound worker. A worker only ever claims mail
+   sent to its own `RECEIPTS_DOMAIN`, so a laptop set up otherwise never takes dev's mail.
 
 ## The one manual bucket step: expire retained copies
 
@@ -60,12 +71,12 @@ The seed makes two fictional workspaces. Sign in as one of these people (they ex
 with these emails; the first sign-in takes over the seeded seat). Sam's seat is the
 test account `test@chowworks.com`.
 
-| Person        | Email                         | Role                  | Sees                                                                                                    |
-| ------------- | ----------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------- |
-| Dana Okafor   | dana.okafor@riverbend.example | bookkeeper, Riverbend | Riverbend's engagement: July and August closed and submitted, September draft with five blocking checks |
-| Sam Whitfield | test@chowworks.com            | owner, Riverbend      | The same, plus personal documents, the people and the lists of the workspace                            |
-| Jules Park    | jules.park@riverbend.example  | auditor, Riverbend    | Everything in Riverbend, read-only, personal documents included                                         |
-| Lee Tanaka    | lee.tanaka@harbortech.example | bookkeeper, Harbor    | Only Harbor Tech's workspace: an engagement missing its proposal and narrative                          |
+| Person        | Email                         | Role                  | Sees                                                                                                 |
+| ------------- | ----------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
+| Dana Okafor   | dana.okafor@riverbend.example | bookkeeper, Riverbend | Riverbend's engagement: July and August closed and submitted, September a draft with blocking checks |
+| Sam Whitfield | test@chowworks.com            | owner, Riverbend      | The same, plus personal documents, the people and the lists of the workspace                         |
+| Jules Park    | jules.park@riverbend.example  | auditor, Riverbend    | Everything in Riverbend, read-only, personal documents included                                      |
+| Lee Tanaka    | lee.tanaka@harbortech.example | bookkeeper, Harbor    | Only Harbor Tech's workspace: an engagement missing its proposal and narrative                       |
 
 The story: as Dana, the overview says September is owed and lists what is missing. Open the engagement:
 steps 1 to 4 are on file (proposal, award letter, narrative, contract), July and August are signed and in,
@@ -73,6 +84,26 @@ September is the month that needs you. Open September, attach the missing alloca
 statement, remove the G&A row the rule flagged as indirect, record the month-end closing as approved by Sam
 Whitfield, attach the signed copy, submit. As Sam, My workspaces shows Riverbend's people, roles and
 the source-of-funds list; "Set up an award" walks the five-step setup, starting at the proposal or the award.
+
+What else the months show, all fictional and drawn by `apps/api/prisma/demo-payroll.ts`:
+
+- **Payroll proof, highlighted.** Each month from August has one pay run (a program coordinator, Morgan Reyes, and
+  the three work-experience youth): a time report, a payroll register, a pay stub per participant and the bank
+  statement. Every link carries the exact words highlighted on it (`marks`, plus the matched line in `mark`), worked
+  out by the API's own reader and matcher (`readStatement`, `matchSlot`, the highlight settings in force), so "Show",
+  the item's proof copy and the audit package draw boxes that sit on the words.
+- **August** is complete: every staff and participant pay item has its timesheet, register and evidence of payment.
+  It was submitted on 09/11, reopened on 09/14 to correct the mileage line (the reopening is on file with the first
+  signed copy), and submitted again on 09/15 with a corrected signed copy.
+- **September** is half matched: Jordan's pay is fully proved; Riley's pay stub is filed but not linked (missing proof
+  of payment); Casey's pay was entered as $300.00 where the stub says $280.00 (proof mismatch); the coordinator's
+  wages, RYS-18, have their timesheet and register but no bank line yet (Unmatched payments). A Bright Path receipt,
+  read from its text, waits in Match receipts for RYS-19.
+- Receipts and invoices carry the amount, date and vendor read from them; expenses and pay carry tags; the workspace
+  has a saved import mapping, "Ledger & Co. export".
+
+The payroll sample zip (`apps/web/public/samples/payroll-sample.zip`) is its own fictional September pay run for
+the same three participants and pay period, for trying "Match payroll & timecards" from the start.
 
 Reset the demo to its starting state (the dev database is shared, so say so first):
 
@@ -87,3 +118,36 @@ in the start command, and the `Postgres-PITR` bucket: switch daily backups and p
 Postgres volume's settings before the first real row. CI applies the file and deploys the API on every push to `main` once the repository variable
 `RAILWAY_PROJECT_READY` is `true` and the secret `RAILWAY_TOKEN` is set. The production secrets (`preserve()`
 values) are set once in Railway by an owner and never written down.
+
+Emailed receipts in production use the main Resend account: the receipts subdomain with its MX record pointing at
+Resend, a webhook for `email.received` to `https://<production API domain>/api/inbound/resend`, and a Full access key
+made for production alone. All three variables are set on the production service only, never in a local `.env`.
+
+### The demo workspace in production
+
+Production comes up with one fictional workspace to show the product: Riverbend Youth Services with DEMO-26IS-RYS,
+the same story as dev (July, August, September above) and nothing of Harbor Tech or the emailed-receipts queue.
+`npm run demo:seed -w @ad/api` loads it (`apps/api/scripts/demo-seed.ts`, which calls `seedDemoWorkspace` in
+`apps/api/prisma/seed.ts`). It is safe on a database with real workspaces because:
+
+- it creates or updates that one workspace only, found by its name and its receipts address (`riverbend-youth`); it
+  empties no table, refreshes the checks of the demo's months only, and writes nothing in another workspace;
+- it refuses, changing nothing, when two workspaces match, when the match has another name or receipts address, or
+  when it holds an engagement whose number does not start with `DEMO-` (a real customer by that name stays untouched);
+- the dev seed (`db:seed`) and `demo:reset` refuse to run in production; only this script does;
+- its files go to the production bucket under the demo workspace's own prefix (the script refuses without
+  `R2_DOCUMENTS_BUCKET`), and its personas are `.example` addresses no one can verify, so no account takes a seat. A
+  platform admin who wants to walk it seats themself from Admin tools, and the log says so.
+
+Run it only with the owner's yes at the time (it writes to the production database), as the database owner, from a
+shell on the production API service, since production's Postgres has no public address:
+
+```bash
+railway ssh -e production -s audit-differently
+# inside the service (it has the service's variables: SCHEMA_DATABASE_URL, the R2 values)
+cd /app && npm run demo:seed -w @ad/api        # prints the database host and stops
+npm run demo:seed -w @ad/api -- --confirm-host <the host it printed>
+```
+
+Re-running it puts the demo back in its starting shape (its months, links and highlights; anything a visitor added
+stays), and each production run writes one access-log line in the demo workspace saying the demo data was loaded.

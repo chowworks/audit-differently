@@ -23,6 +23,7 @@ import type {
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
 import { MAX_UPLOAD_BYTES } from '../documents/documents.service'
+import { sendInline } from './payroll-match.controller'
 import { MAX_PAYROLL_FILES, PayrollService, type PayrollTarget } from './payroll.service'
 
 const target = (t: string): PayrollTarget => {
@@ -88,6 +89,22 @@ export class PayrollController {
     res.setHeader('Content-Disposition', 'inline')
     res.setHeader('Cache-Control', 'no-store')
     res.end(bytes)
+  }
+
+  /** A payroll proof as its item's own copy, highlighted for that item alone. */
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('payroll/:target/:id/proof/:documentId')
+  async proof(
+    @UserId() userId: string,
+    @Param('target') t: string,
+    @Param('id') id: string,
+    @Param('documentId') documentId: string,
+    @Res() res: Response
+  ): Promise<void> {
+    sendInline(
+      res,
+      await this.payroll.proofCopy(await this.callers.load(userId), target(t), id, documentId)
+    )
   }
 
   @Put('payroll/:target/:id/statement')

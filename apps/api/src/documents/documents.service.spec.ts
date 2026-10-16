@@ -40,6 +40,7 @@ const row = (
 })
 const invoice = row('d-inv', 'invoice', 'financial')
 const birthCertificate = row('d-age', 'eligibility-record', 'personal')
+const payStub = row('d-stub', 'paystub', 'personal')
 const contract = row('d-contract', 'contract', 'financial', { engagementId: 'e-1' })
 const attached = row('d-attached', 'contract', 'financial', { engagementId: 'e-1', uses: 1 })
 // Filed under August, whose month-end closing is approved.
@@ -504,6 +505,16 @@ describe('DocumentsService', () => {
     await expect(s.url(member('bookkeeper'), 'd-age')).rejects.toThrow(ForbiddenException)
     expect(storage.getSignedUrl).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
+  })
+
+  it('opens a pay stub, and no other personal record, to a bookkeeper: in the browser for sixty seconds, logged', async () => {
+    const { service: s, prisma, log } = service()
+    prisma.document.findFirst.mockResolvedValueOnce(payStub)
+    expect(await s.url(member('bookkeeper'), 'd-stub')).toEqual({
+      url: `signed:${payStub.storageKey}:60:inline:d-stub.pdf`,
+      expiresInSeconds: 60,
+    })
+    expect(log.entries.map((e) => e.description)).toEqual(['Opened a pay stub (personal)'])
   })
 
   it.each(['owner', 'auditor'] as Role[])(

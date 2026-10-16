@@ -626,7 +626,7 @@ export class EngagementsService {
     awardAmount: unknown
     waivers: unknown
     eligibilityItems: unknown
-    workspace: { name: string }
+    workspace: { name: string; featuredDemo: boolean }
     monthlyReports: Parameters<EngagementsService['reportSummary']>[0][]
     documents: Parameters<typeof documentDto>[0][]
     participants: { documents: { purpose: string }[] }[]
@@ -642,6 +642,7 @@ export class EngagementsService {
       id: c.id,
       workspaceId: c.workspaceId,
       workspaceName: c.workspace.name,
+      workspaceFeaturedDemo: c.workspace.featuredDemo,
       kind: c.kind as EngagementKind,
       name: c.name,
       funder: c.funder,

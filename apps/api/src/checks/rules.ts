@@ -1,11 +1,15 @@
 import {
+  DOCUMENT_KIND_LABELS,
   PAYROLL_REPORT_LINES,
-  REQUIRED_ELIGIBILITY_ITEMS,
   type CheckCode,
   type CheckSeverity,
+  type DocumentKind,
   type DocumentPurpose,
+  type HighlightField,
   type ReportLine,
 } from '@ad/types'
+import { dateSpans } from '../payroll/highlights'
+import { amountPattern } from '../payroll/statement-lines'
 
 /**
  * The compliance rules, as pure functions over one month of a contract. No database, no I/O: the service
@@ -26,16 +30,27 @@ export interface RuleExpense {
   reportLine: ReportLine
   /** Purposes of the documents attached to this expense. */
   documents: DocumentPurpose[]
+  /** Its payroll proofs with the words highlighted on each, for the mismatch rule; none on other lines. */
+  proofs?: RuleProof[]
 }
 
-export interface RuleParticipant {
+/** A payroll proof as linked: what it is for, what kind of file, and the words highlighted on it for its item. */
+export interface RuleProof {
+  purpose: DocumentPurpose
+  kind: string
+  words: string[]
+}
+
+/** A participant's pay for work experience: what proves it, and the words its proofs show. */
+export interface RuleWex {
   id: string
-  participantId: string
-  displayName: string
-  /** Items of the eligibility checklist that have a document on file. */
-  eligibilityItems: string[]
-  /** Whether this month pays the participant for work experience. */
-  paidThisMonth: boolean
+  /** Who and when, as the check says it: "Jordan Sample, 09/07/2026 to 09/20/2026". */
+  label: string
+  grossAmount: number
+  /** YYYY-MM-DD */
+  start: string
+  end: string
+  proofs: RuleProof[]
 }
 
 export interface RuleMonth {
@@ -52,22 +67,56 @@ export interface RuleMonth {
   /** Cumulative billed on earlier reports, per line. */
   previouslyBilled: Partial<Record<ReportLine, number>>
   expenses: RuleExpense[]
+  /** The month's work-experience payments. */
+  wexPayments?: RuleWex[]
+  /** What the platform highlights on each kind of payroll proof (HighlightSetting): the mismatch rule checks those. */
+  highlights?: Partial<Record<string, HighlightField[]>>
   /** ISO date-time of submission, when submitted. */
   submittedAt?: string | null
   /** Expenses from earlier months of the same contract, for duplicate detection. */
   earlierExpenses?: Pick<RuleExpense, 'id' | 'vendor' | 'totalCost' | 'date'>[]
-  /** The engagement's participants, for the eligibility-file rule. */
-  participants?: RuleParticipant[]
-  /** The keys a participant's file must hold for this program; the defaults when absent. */
-  requiredEligibilityItems?: string[]
 }
 
 export interface Finding {
   code: CheckCode
   severity: CheckSeverity
   expenseId?: string
+  wexPaymentId?: string
   participantId?: string
   message: string
+}
+
+const kindWords = (kind: string) => DOCUMENT_KIND_LABELS[kind as DocumentKind] ?? 'proof'
+
+/**
+ * Where a highlighted proof does not show what it proves: the amount (on evidence of payment or a timesheet) or the
+ * pay period (a participant's proofs). Only proofs the matcher highlighted are read, and only for what the platform
+ * highlights on that kind of proof, so a field nobody asked for is never reported missing. A register for a
+ * participant is a company summary that rarely names their pay: its amount is not asked for.
+ */
+function mismatches(
+  item: { amount: number; start?: string; end?: string; participant: boolean },
+  proofs: RuleProof[],
+  highlights: Partial<Record<string, HighlightField[]>>
+): string[] {
+  const out: string[] = []
+  const amount = new RegExp(amountPattern(item.amount).source)
+  for (const p of proofs) {
+    if (!p.words.length) continue
+    const fields = highlights[p.kind] ?? []
+    const words = p.words.join(' ')
+    const asksAmount =
+      fields.includes('amount') &&
+      (p.purpose === 'payment' || (p.purpose === 'timesheet' && item.participant))
+    if (asksAmount && !amount.test(words))
+      out.push(`${money(item.amount)} was not found on its ${kindWords(p.kind)}`)
+    if (item.participant && item.start && fields.includes('payPeriod')) {
+      const dates = new Set(dateSpans(words).map((d) => d.iso))
+      if (!dates.has(item.start) || !dates.has(item.end!))
+        out.push(`the pay period was not found on its ${kindWords(p.kind)}`)
+    }
+  }
+  return out
 }
 
 const INDIRECT_WORDS = /\b(g\s*&\s*a|general\s*(&|and)\s*administrative|indirect|overhead)\b/i
@@ -142,6 +191,19 @@ export function runRules(month: RuleMonth): Finding[] {
         message: `${label}: no bank or card statement, cancelled check or EFT confirmation attached.`,
       })
 
+    if (PAYROLL_REPORT_LINES.has(e.reportLine) && e.proofs)
+      for (const what of mismatches(
+        { amount: e.totalCost, participant: false },
+        e.proofs,
+        month.highlights ?? {}
+      ))
+        findings.push({
+          code: 'proof-mismatch',
+          severity: 'attention',
+          expenseId: e.id,
+          message: `${label}: ${what}. Check the proof is this payment's.`,
+        })
+
     if (e.allocationType !== 'direct' && !has('allocation'))
       findings.push({
         code: 'missing-allocation',
@@ -186,6 +248,44 @@ export function runRules(month: RuleMonth): Finding[] {
       })
   }
 
+  // A participant's pay needs the same three proofs as a staff payroll line, and they must show its pay.
+  for (const w of month.wexPayments ?? []) {
+    const has = (p: DocumentPurpose) => w.proofs.some((d) => d.purpose === p)
+    const label = `${w.label} (${money(w.grossAmount)})`
+    if (!has('timesheet'))
+      findings.push({
+        code: 'missing-timesheet',
+        severity: 'blocker',
+        wexPaymentId: w.id,
+        message: `${label}: no timesheet attached.`,
+      })
+    if (!has('register'))
+      findings.push({
+        code: 'missing-register',
+        severity: 'blocker',
+        wexPaymentId: w.id,
+        message: `${label}: no payroll register attached.`,
+      })
+    if (!has('payment'))
+      findings.push({
+        code: 'missing-proof-of-payment',
+        severity: 'blocker',
+        wexPaymentId: w.id,
+        message: `${label}: no pay stub or deposit advice attached.`,
+      })
+    for (const what of mismatches(
+      { amount: w.grossAmount, start: w.start, end: w.end, participant: true },
+      w.proofs,
+      month.highlights ?? {}
+    ))
+      findings.push({
+        code: 'proof-mismatch',
+        severity: 'attention',
+        wexPaymentId: w.id,
+        message: `${label}: ${what}. Check the proof is this payment's.`,
+      })
+  }
+
   // Budget overrun per line.
   const billedNow: Partial<Record<ReportLine, number>> = {}
   for (const e of month.expenses)
@@ -217,21 +317,6 @@ export function runRules(month: RuleMonth): Finding[] {
         message: `${e.itemNumber}: same vendor, amount and date as another expense (${e.vendor}, ${money(e.totalCost)}, ${e.date}).`,
       })
     else seen.set(k, e.id)
-  }
-
-  // A participant paid for work experience this month must have an eligibility file the auditor can open.
-  const required: readonly string[] = month.requiredEligibilityItems ?? REQUIRED_ELIGIBILITY_ITEMS
-  for (const p of month.participants ?? []) {
-    if (!p.paidThisMonth) continue
-    const missing = required.filter((item) => !p.eligibilityItems.includes(item))
-    if (missing.length === 0) continue
-    const attested = p.eligibilityItems.includes('self-attestation')
-    findings.push({
-      code: 'participant-file-incomplete',
-      severity: attested ? 'info' : 'attention',
-      participantId: p.id,
-      message: `${p.displayName} (${p.participantId}) is paid this month but the eligibility file lacks: ${missing.join(', ')}${attested ? ' (covered by a self-attestation for now).' : '.'}`,
-    })
   }
 
   if (month.submittedAt) {

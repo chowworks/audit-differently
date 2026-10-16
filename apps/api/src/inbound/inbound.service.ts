@@ -17,8 +17,16 @@ import {
 } from '@ad/types'
 import { ClerkService } from '../auth/clerk.service'
 import { AccessLogService } from '../core/access-log.service'
-import { CallerService, allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
+import {
+  CallerService,
+  allow,
+  staffName,
+  tenantWhere,
+  workspaceRole,
+  type Caller,
+} from '../core/caller'
 import { changesOf, monthName, type Fields } from '../core/changes'
+import { MatchStatsService } from '../core/match-stats.service'
 import { identifyCaller, runAsSystem, withTenantContext } from '../core/tenant-context'
 import { looksLike, type Uploaded } from '../documents/documents.service'
 import { describe } from '../documents/staged-file'
@@ -61,8 +69,10 @@ export const STOPPED = 'Filing it stopped part way too many times; run it again'
  * Claims the emailed receipts due now, at most $1, for one worker: a row waiting whose time has come, or one left
  * "processing" by a worker that stopped (its lease, nextAttemptAt, ran out), while it has had fewer than $2 attempts.
  * SKIP LOCKED lets several API processes claim at once without taking the same row; the claim counts the attempt and
- * leases the row for 15 minutes. A row a person is filing by hand ("filing") is never claimed. Parameterized;
- * timestamps are UTC, as Prisma writes them.
+ * leases the row for 15 minutes. A row a person is filing by hand ("filing") is never claimed. Only a row sent to
+ * this process's own receipts domain ($3) is claimed, so an API set up for another domain (a second developer's
+ * laptop on the shared dev database) never takes this one's mail. Parameterized; timestamps are UTC, as Prisma
+ * writes them.
  */
 export const CLAIM_SQL = `UPDATE "InboundReceipt"
    SET "status" = 'processing', "attempts" = "attempts" + 1,
@@ -72,6 +82,7 @@ export const CLAIM_SQL = `UPDATE "InboundReceipt"
    SELECT "id" FROM "InboundReceipt"
     WHERE "status" IN ('received', 'processing') AND "nextAttemptAt" <= (now() AT TIME ZONE 'UTC')
       AND "attempts" < $2
+      AND right(lower("toAddress"), length($3) + 1) = '@' || $3
     ORDER BY "nextAttemptAt"
     LIMIT $1
     FOR UPDATE SKIP LOCKED)
@@ -133,7 +144,8 @@ const EXT: Record<string, string> = {
 
 /**
  * The webhook's event, checked: Resend's `email.received` carries the email's id, sender, recipients and subject, and
- * no body or file (resend.com/docs/webhooks/emails/received). The receipts address is the recipient on our domain.
+ * no body or file (resend.com/docs/webhooks/emails/received). The receipts address is the recipient on our domain;
+ * an email to none of our addresses has none (null), and is not kept.
  */
 export function parseReceived(payload: unknown, domain: string) {
   const p = (payload ?? {}) as { type?: unknown; data?: Record<string, unknown> }
@@ -143,7 +155,7 @@ export function parseReceived(payload: unknown, domain: string) {
   const emailId = typeof d.email_id === 'string' ? d.email_id.trim() : ''
   if (!emailId || emailId.length > 200) throw new BadRequestException('No email id')
   const to = (Array.isArray(d.to) ? d.to : [d.to]).map(addressOf).filter((a): a is string => !!a)
-  const ours = to.find((a) => a.endsWith(`@${domain}`)) ?? to[0] ?? null
+  const ours = to.find((a) => a.endsWith(`@${domain}`)) ?? null
   const at = typeof d.created_at === 'string' ? new Date(d.created_at) : new Date()
   return {
     emailId,
@@ -181,7 +193,8 @@ export class InboundService {
     private readonly receipts: ReceiptsService,
     private readonly engagements: EngagementsService,
     private readonly resend: ResendInbound,
-    private readonly senders: SenderCheck
+    private readonly senders: SenderCheck,
+    private readonly stats: MatchStatsService
   ) {}
 
   // ── The queue ─────────────────────────────────────────────────────────────
@@ -195,6 +208,9 @@ export class InboundService {
     if (!cfg) throw new NotFoundException()
     if ((payload as { type?: unknown } | null)?.type !== 'email.received') return false
     const row = parseReceived(payload, cfg.domain)
+    // Mail to another receipts domain (the other environment's, when one email account serves both) is not ours: it is
+    // ignored, never kept, so no sender or subject of it is stored here.
+    if (!row.toAddress) return false
     // Trusted work: nobody is known yet, and a row with no workspace is app.system's alone (migration 20261015001000).
     await runAsSystem(() =>
       this.prisma.inboundReceipt.createMany({ data: [row], skipDuplicates: true })
@@ -204,10 +220,17 @@ export class InboundService {
 
   /** Claims the rows due now and processes each; the number claimed (0: nothing was due). */
   async runDue(limit = 5): Promise<number> {
+    const cfg = inboundConfig()
+    if (!cfg) return 0
     // Trusted work: the claim reads and leases rows of every workspace, and rows of none.
     const rows = await runAsSystem(async () => {
       await this.prisma.$executeRawUnsafe(EXPIRE_SQL, MAX_ATTEMPTS, STOPPED)
-      return this.prisma.$queryRawUnsafe<InboundReceipt[]>(CLAIM_SQL, limit, MAX_ATTEMPTS)
+      return this.prisma.$queryRawUnsafe<InboundReceipt[]>(
+        CLAIM_SQL,
+        limit,
+        MAX_ATTEMPTS,
+        cfg.domain
+      )
     })
     for (const row of rows) await this.process(row)
     return rows.length
@@ -362,6 +385,7 @@ export class InboundService {
    * whose lease overlapped ever files one twice. The lease is renewed before each file.
    */
   private async file(caller: Caller, row: InboundReceipt, target: Target | null, words: Words) {
+    const startedAt = new Date()
     const workspaceId = row.workspaceId!
     allow(
       workspaceRole(caller, workspaceId, WRITE_ROLES),
@@ -387,6 +411,47 @@ export class InboundService {
     const { accepted, skipped } = await this.pick(metas, row.filedAttachments)
     if (!accepted.length && !row.documentIds.length) throw new Rejected(REJECT.noFiles)
 
+    // Matching statistics: one row per attempt that files (done) or fails, as this member, written once it ends.
+    const counts = { filed: 0, matched: 0, unread: 0, readMs: null as number | null }
+    const stat = (outcome: 'done' | 'failed') =>
+      this.stats.record({
+        workspaceId,
+        feature: 'emailed-receipts',
+        startedById: caller.userId,
+        startedByEmail: staffName(caller),
+        startedAt,
+        outcome,
+        fileCount: accepted.length,
+        totalBytes: accepted.reduce((n, a) => n + a.file.size, 0),
+        readMs: counts.readMs,
+        items: counts.filed,
+        matched: counts.matched,
+        missing: counts.filed - counts.matched,
+        failed: counts.unread,
+      })
+    try {
+      await this.fileAccepted(caller, row, target, words, e, accepted, skipped, counts)
+    } catch (err) {
+      // Refused or left for a person: what became of the email, not a failed run.
+      if (!(err instanceof Rejected) && !(err instanceof Unmatched)) await stat('failed')
+      throw err
+    }
+    await stat('done')
+  }
+
+  /** The rest of `file`: read each accepted attachment, then file each into its draft month and match it. */
+  private async fileAccepted(
+    caller: Caller,
+    row: InboundReceipt,
+    target: Target | null,
+    words: Words,
+    e: { id: string; name: string; periodStart: Date | null; periodEnd: Date | null },
+    accepted: Awaited<ReturnType<InboundService['pick']>>['accepted'],
+    skipped: string[],
+    counts: { filed: number; matched: number; unread: number; readMs: number | null }
+  ) {
+    const workspaceId = row.workspaceId!
+
     // Nobody is present to say yes, so AI reads them only when the workspace's owners turned it on.
     const ws = await this.prisma.workspace.findFirst({
       where: { id: workspaceId },
@@ -394,6 +459,7 @@ export class InboundService {
     })
     const withAi = ws?.readEmailedReceiptsWithAi === true
     const reads: { att: (typeof accepted)[number]; read: ReceiptRead; period: string }[] = []
+    const readFrom = Date.now()
     for (const att of accepted) {
       const read = await readReceipt(
         { buffer: att.file.buffer, contentType: att.file.mimetype, sensitivity: 'financial' },
@@ -402,6 +468,8 @@ export class InboundService {
       const period = target?.period ?? (read.date ?? row.receivedAt.toISOString()).slice(0, 7)
       reads.push({ att, read, period })
     }
+    counts.readMs = Date.now() - readFrom
+    counts.unread = reads.filter((r) => r.read.amount == null).length
     const months = await this.draftMonths(caller, e, [...new Set(reads.map((r) => r.period))])
 
     for (const { att, read, period } of reads) {
@@ -410,7 +478,7 @@ export class InboundService {
         data: { nextAttemptAt: new Date(Date.now() + LEASE_MS) },
       })
       try {
-        await this.receipts.fileOne(
+        const filed = await this.receipts.fileOne(
           caller,
           months.get(period)!,
           att.file,
@@ -432,6 +500,8 @@ export class InboundService {
             })
           }
         )
+        counts.filed++
+        if (filed.matched) counts.matched++
       } catch (err) {
         if (!(err instanceof AlreadyFiled)) throw err
       }

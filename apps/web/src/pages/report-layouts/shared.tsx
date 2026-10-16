@@ -1,9 +1,6 @@
 /*
- * DESIGN EXPERIMENT (?layout=a|b|c on the month page): delete this folder, report-layouts.css, the layout switch in
- * ReportPage.tsx and the ReviewSwitch there once the owner picks one. See "Design experiments" in CLAUDE.md.
- *
- * What the three layouts share: the month's six steps worked out from the data, the single next action, the status
- * panel (who, when, why, what next) and the quiet "More" menu.
+ * The month page's parts: the month's steps worked out from the data, the single next action, the status panel (who,
+ * when, why, what next) and the quiet "More" menu.
  */
 import { useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
@@ -17,16 +14,12 @@ import {
   type WexPaymentDto,
 } from '@ad/types'
 import { money, periodLabel, shortDate } from '@/lib/format'
-import { Button, StatusChip } from '@/components/ui'
+import { FullDemoChip, Button, StatusChip } from '@/components/ui'
 import './report-layouts.css'
 
 /** The page's own work, built in ReportPage and placed by each layout. */
 export interface MonthSections {
-  checks: ReactNode
-  lines: ReactNode
-  ledger: ReactNode
   receipts: ReactNode
-  payroll: ReactNode
   payrollProof: ReactNode
   earlier: ReactNode
 }
@@ -47,7 +40,13 @@ export interface MonthActions {
   downloadBundle: () => void
   deleteExpense: (e: ExpenseDto) => void
   attachPayment: (w: WexPaymentDto, purpose: DocumentPurpose) => void
-  tagPayment: (w: WexPaymentDto) => void
+  /** A participant's pay: change it (who, pay period, hours, gross, tags), or remove it from the month. */
+  editPayment: (w: WexPaymentDto) => void
+  deletePayment: (w: WexPaymentDto) => void
+  /** A staff payroll line's evidence of payment: find its line on the bank statement, for this line alone. */
+  findBankLine: (e: ExpenseDto) => void
+  /** A month with nothing in it: an owner deletes it, after a yes. */
+  deleteMonth: () => void
 }
 
 export interface MonthLayoutProps {
@@ -393,6 +392,12 @@ export function MonthHead({
           </h1>
           <p className="ad-sub !mt-1">
             <span className="ad-mono">{r.engagement.number}</span> · {r.engagement.name}
+            {r.engagement.workspace.featuredDemo && (
+              <>
+                {' '}
+                <FullDemoChip />
+              </>
+            )}
           </p>
           {facts && <MonthFacts r={r} p={p} />}
         </div>
@@ -445,6 +450,13 @@ export function moreItems(r: ReportDetail, act: MonthActions, skip: string[] = [
       label: 'Reopen to correct',
       onClick: act.reopen,
       title: 'Make it a draft again to correct it, then approve the closing and submit it again',
+    })
+  if (r.can.deleteMonth)
+    items.push({
+      key: 'delete',
+      label: 'Delete this month',
+      onClick: act.deleteMonth,
+      title: 'It has no expenses, no payroll and no files, so there is nothing to submit',
     })
   return items.filter((i) => !skip.includes(i.key))
 }

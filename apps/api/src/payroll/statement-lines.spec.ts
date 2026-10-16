@@ -21,6 +21,14 @@ describe('amountPattern', () => {
     expect(amountPattern(224).test('DIRECT DEPOSIT -224.00')).toBe(true)
     expect(amountPattern(224).test('BALANCE 12,224.00')).toBe(false)
   })
+
+  it('finds an amount a payroll export writes with one decimal, and never a bare whole number', () => {
+    expect(amountPattern(165).test('2026-01-24 USD 165.0 11.0')).toBe(true)
+    expect(amountPattern(221.5).test('USD 221.5 14.75')).toBe(true)
+    expect(amountPattern(165).test('USD 165 11.0')).toBe(false)
+    expect(amountPattern(165).test('USD 165.05')).toBe(false)
+    expect(amountPattern(221.25).test('USD 221.2')).toBe(false)
+  })
 })
 
 describe('linesOf', () => {

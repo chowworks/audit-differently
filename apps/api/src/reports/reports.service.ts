@@ -208,6 +208,7 @@ export class ReportsService {
     const signed = currentSignedCopy(signedCopies, r.period, r.reopenings[0]?.reopenedAt)
     const c = r.engagement
     const writer = workspaceRole(caller, c.workspaceId, WRITE_ROLES)
+    const empty = isEmptyMonth(r, await this.prisma.document.count({ where: monthFiles(r) }))
     return {
       id: r.id,
       period: r.period,
@@ -252,7 +253,11 @@ export class ReportsService {
         tags: c.tags,
         reportDueDay: c.reportDueDay,
         awardAmount: c.awardAmount == null ? null : Number(c.awardAmount),
-        workspace: { id: c.workspace.id, name: c.workspace.name },
+        workspace: {
+          id: c.workspace.id,
+          name: c.workspace.name,
+          featuredDemo: c.workspace.featuredDemo,
+        },
         eligibilityItems: eligibilityItemsOf(c),
         reportTo: c.reportTo,
         preparerName: c.preparerName,
@@ -301,6 +306,7 @@ export class ReportsService {
         reopen: writer && r.status === 'submitted',
         attachSigned: writer && !signed,
         readPersonal: workspaceRole(caller, c.workspaceId, [...PERSONAL_DOCUMENT_ROLES]),
+        deleteMonth: empty && workspaceRole(caller, c.workspaceId, ['owner']),
       },
     }
   }
@@ -476,7 +482,7 @@ export class ReportsService {
         move: (tx, documentId) =>
           tx.expenseDocument.update({
             where: key(documentId),
-            data: { purpose, mark: Prisma.DbNull },
+            data: { purpose, mark: Prisma.DbNull, marks: [] },
           }),
       },
       source
@@ -519,13 +525,9 @@ export class ReportsService {
 
   // ── Work experience payroll ───────────────────────────────────────────────
 
-  async addWexPayment(
-    caller: Caller,
-    reportId: string,
-    input: WexPaymentInput
-  ): Promise<ReportDetail> {
-    const r = await this.editable(caller, reportId)
-    const participant = r.engagement.participants.find((p) => p.id === input.participantId)
+  /** A work-experience payment as typed, checked: a participant of this engagement, a pay period, hours, gross pay. */
+  private wexData(r: ReportRow, input: WexPaymentInput, current: string[] = []) {
+    const participant = r.engagement.participants.find((p) => p.id === input?.participantId)
     if (!participant)
       throw new BadRequestException('participantId is not a participant of this engagement')
     const [start, end] = [input.payPeriodStart, input.payPeriodEnd].map((d) => {
@@ -543,15 +545,23 @@ export class ReportsService {
     if (!Number.isFinite(gross) || gross <= 0)
       throw new BadRequestException('grossAmount must be more than $0')
     if (gross >= 1e10) throw new BadRequestException('grossAmount must be under $10,000,000,000')
-    const data = {
-      monthlyReportId: r.id,
+    return {
       participantId: participant.id,
       payPeriodStart: start!,
       payPeriodEnd: end!,
       hours: hours === null ? null : hours.toFixed(2),
       grossAmount: gross.toFixed(2),
-      tags: cleanTags(input.tags, r.engagement.workspace, 'payroll'),
+      tags: cleanTags(input.tags, r.engagement.workspace, 'payroll', current),
     }
+  }
+
+  async addWexPayment(
+    caller: Caller,
+    reportId: string,
+    input: WexPaymentInput
+  ): Promise<ReportDetail> {
+    const r = await this.editable(caller, reportId)
+    const data = { monthlyReportId: r.id, ...this.wexData(r, input) }
     await this.log.change(
       caller,
       (tx) => tx.wexPayment.create({ data }),
@@ -568,27 +578,62 @@ export class ReportsService {
     return this.fresh(caller, r.id)
   }
 
-  /** Changes a payroll item's tags; the month must be open, like any change to its ledger. */
-  async setWexTags(caller: Caller, wexId: string, tags: unknown): Promise<ReportDetail> {
-    const w = await this.prisma.wexPayment.findFirst({
+  /** Changes a work-experience payment: who, the pay period, hours, gross pay and tags. The month must be a draft. */
+  async updateWexPayment(
+    caller: Caller,
+    wexId: string,
+    input: WexPaymentInput
+  ): Promise<ReportDetail> {
+    const existing = await this.prisma.wexPayment.findFirst({
       where: { id: wexId, ...tenantWhere(caller) },
     })
-    if (!w) throw new NotFoundException()
-    const r = await this.editable(caller, w.monthlyReportId)
-    // A request without the list is not "no tags": clearing them is an empty list.
-    if (tags == null) throw new BadRequestException('tags is required; send [] to clear them')
-    const data = { tags: cleanTags(tags, r.engagement.workspace, 'payroll', w.tags) }
-    const changes = changesOf(w, data, WEX_FIELDS)
-    if (changes.length) {
-      await this.log.change(caller, (tx) => tx.wexPayment.update({ where: { id: wexId }, data }), {
-        workspaceId: r.workspaceId!,
-        resource: 'report',
-        subjectId: wexId,
-        action: 'update',
-        description: `Changed the tags of a work-experience payment in ${monthName(r.period)}`,
-        changes,
-      })
-    }
+    if (!existing) throw new NotFoundException()
+    const r = await this.editable(caller, existing.monthlyReportId)
+    const data = this.wexData(r, input, existing.tags)
+    await unlessUnchanged(async () => {
+      await this.log.change(
+        caller,
+        async (tx) => {
+          const before = await tx.wexPayment.findFirst({ where: { id: wexId } })
+          if (!before) throw new NotFoundException()
+          const changes = changesOf(before, data, WEX_FIELDS)
+          if (!changes.length) throw new NothingChanged()
+          await tx.wexPayment.update({ where: { id: wexId }, data })
+          return changes
+        },
+        (changes) => ({
+          workspaceId: r.workspaceId!,
+          resource: 'report',
+          subjectId: wexId,
+          action: 'update',
+          description: `Changed a work-experience payment in ${monthName(r.period)}`,
+          changes,
+        })
+      )
+      await this.checks.refresh(r.id)
+    })
+    return this.fresh(caller, r.id)
+  }
+
+  /**
+   * Removes a work-experience payment from its month, with its links to proof; the documents themselves stay filed
+   * under the month. The month must be a draft.
+   */
+  async deleteWexPayment(caller: Caller, wexId: string): Promise<ReportDetail> {
+    const existing = await this.prisma.wexPayment.findFirst({
+      where: { id: wexId, ...tenantWhere(caller) },
+    })
+    if (!existing) throw new NotFoundException()
+    const r = await this.editable(caller, existing.monthlyReportId)
+    await this.log.change(caller, (tx) => tx.wexPayment.delete({ where: { id: wexId } }), {
+      workspaceId: r.workspaceId!,
+      resource: 'report',
+      subjectId: wexId,
+      action: 'delete',
+      description: `Removed a work-experience payment from ${monthName(r.period)}`,
+      changes: changesOf(existing, null, WEX_FIELDS),
+    })
+    await this.checks.refresh(r.id)
     return this.fresh(caller, r.id)
   }
 
@@ -628,7 +673,7 @@ export class ReportsService {
         move: (tx, documentId) =>
           tx.wexPaymentDocument.update({
             where: key(documentId),
-            data: { purpose, mark: Prisma.DbNull },
+            data: { purpose, mark: Prisma.DbNull, marks: [] },
           }),
       },
       source
@@ -824,6 +869,32 @@ export class ReportsService {
    * submitted (never replaced or removed after this). Every document stays; the corrected signed copy is attached
    * beside it.
    */
+  /**
+   * Deletes a month with nothing in it: a draft with no expenses, no payroll, no file filed under it and no history of
+   * a submission. There is nothing to submit for it, so it goes rather than sit as a report. Owners only, as every
+   * deletion; logged. Anything in the month refuses it: remove that first.
+   */
+  async deleteEmptyMonth(caller: Caller, reportId: string): Promise<{ engagementId: string }> {
+    const r = await this.load(caller, reportId)
+    allow(
+      workspaceRole(caller, r.engagement.workspaceId, ['owner']),
+      'Only an owner deletes a month'
+    )
+    const files = await this.prisma.document.count({ where: monthFiles(r) })
+    if (!isEmptyMonth(r, files))
+      throw new ConflictException(
+        `${monthName(r.period)} is not empty: only a draft month with no expenses, payroll or files can be deleted`
+      )
+    await this.log.change(caller, (tx) => tx.monthlyReport.delete({ where: { id: r.id } }), {
+      workspaceId: r.workspaceId!,
+      resource: 'report',
+      subjectId: r.id,
+      action: 'delete',
+      description: `Deleted ${monthName(r.period)}, a month with nothing to submit`,
+    })
+    return { engagementId: r.engagementId }
+  }
+
   async reopen(caller: Caller, reportId: string, reason: string): Promise<ReportDetail> {
     const r = await this.load(caller, reportId)
     allow(
@@ -898,7 +969,12 @@ export function expenseDto(e: {
   allocationNote: string | null
   reportLine: string
   tags: string[]
-  documents: { purpose: string; mark?: unknown; document: Parameters<typeof documentDto>[0] }[]
+  documents: {
+    purpose: string
+    mark?: unknown
+    marks?: unknown
+    document: Parameters<typeof documentDto>[0]
+  }[]
 }): ExpenseDto {
   return {
     id: e.id,
@@ -917,6 +993,7 @@ export function expenseDto(e: {
       purpose: d.purpose as DocumentPurpose,
       document: documentDto(d.document),
       mark: (d.mark as StatementMark | null | undefined) ?? null,
+      marks: Array.isArray(d.marks) ? (d.marks as StatementMark[]) : [],
     })),
   }
 }
@@ -930,7 +1007,12 @@ function wexDto(w: {
   hours: unknown
   grossAmount: unknown
   tags: string[]
-  documents: { purpose: string; mark?: unknown; document: Parameters<typeof documentDto>[0] }[]
+  documents: {
+    purpose: string
+    mark?: unknown
+    marks?: unknown
+    document: Parameters<typeof documentDto>[0]
+  }[]
 }): WexPaymentDto {
   return {
     id: w.id,
@@ -946,6 +1028,7 @@ function wexDto(w: {
       purpose: d.purpose as DocumentPurpose,
       document: documentDto(d.document),
       mark: (d.mark as StatementMark | null | undefined) ?? null,
+      marks: Array.isArray(d.marks) ? (d.marks as StatementMark[]) : [],
     })),
   }
 }
@@ -972,4 +1055,24 @@ function checkDto(k: {
     participantId: k.participantId,
     wexPaymentId: k.wexPaymentId,
   }
+}
+
+/** The files filed under a month: anything here keeps the month from being deleted. */
+const monthFiles = (r: { engagementId: string; period: string }) => ({
+  engagementId: r.engagementId,
+  period: r.period,
+})
+
+/** A draft month with no expenses, no payroll, no file and no submission behind it: nothing to submit. */
+function isEmptyMonth(
+  r: { status: string; expenses: unknown[]; wexPayments: unknown[]; reopenings: unknown[] },
+  files: number
+): boolean {
+  return (
+    r.status === 'draft' &&
+    !r.expenses.length &&
+    !r.wexPayments.length &&
+    !r.reopenings.length &&
+    files === 0
+  )
 }

@@ -1,6 +1,5 @@
 /*
- * DESIGN EXPERIMENT, option C (?layout=c): the grid's search with type-ahead filters ("tag:",
- * "budget line:" or "line:", "missing:"). Delete with the rest of report-layouts/ once the owner picks a layout (see shared.tsx).
+ * The month page grids' search with type-ahead filters ("tag:", "budget line:" or "line:", "missing:").
  */
 import { useId, useState } from 'react'
 

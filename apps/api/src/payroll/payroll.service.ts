@@ -1,7 +1,15 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common'
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
 import {
   PAYROLL_DOCUMENT_KINDS,
   PAYROLL_REPORT_LINES,
+  personalRolesFor,
+  type Role,
   type PayrollDocumentKind,
   type PayrollLineSearch,
   type PayrollUploadResult,
@@ -12,7 +20,7 @@ import {
 } from '@ad/types'
 import { ChecksService } from '../checks/checks.service'
 import { AccessLogService } from '../core/access-log.service'
-import { tenantWhere, type Caller } from '../core/caller'
+import { tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { changesOf, howMany, monthName, type Fields } from '../core/changes'
 import { documentDto } from '../documents/document.dto'
 import { DocumentsService, keyInWorkspace, type Uploaded } from '../documents/documents.service'
@@ -21,6 +29,7 @@ import { describe } from '../documents/staged-file'
 import { PrismaService } from '../prisma/prisma.service'
 import { ReportsService } from '../reports/reports.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
+import { itemCopy } from './mark-pdf'
 import { linesWithAmount, readStatement } from './statement-lines'
 
 export const MAX_PAYROLL_FILES = 20
@@ -255,6 +264,54 @@ export class PayrollService {
   }
 
   /**
+   * A payroll proof as its item's own copy: the file's own highlight notes removed and only this item's highlights
+   * drawn (its marks, or the line marked by hand), so it stands on its own for the auditor. Any member may open a
+   * financial proof; a pay stub opens to its roles (personalRolesFor). Each open is one read line.
+   */
+  async proofCopy(
+    caller: Caller,
+    target: PayrollTarget,
+    id: string,
+    documentId: string
+  ): Promise<{ bytes: Uint8Array; contentType: string; fileName: string }> {
+    const link =
+      target === 'expense'
+        ? await this.prisma.expenseDocument.findFirst({
+            where: { expenseId: id, documentId, ...tenantWhere(caller) },
+            include: { document: true, expense: true },
+          })
+        : await this.prisma.wexPaymentDocument.findFirst({
+            where: { wexPaymentId: id, documentId, ...tenantWhere(caller) },
+            include: { document: true },
+          })
+    if (!link) throw new NotFoundException()
+    const doc = link.document
+    if (!(PAYROLL_DOCUMENT_KINDS as readonly string[]).includes(doc.kind))
+      throw new BadRequestException('Only a payroll proof opens here')
+    if (
+      doc.sensitivity === 'personal' &&
+      !workspaceRole(caller, doc.workspaceId, [...personalRolesFor(doc.kind)] as Role[])
+    )
+      throw new ForbiddenException('This document opens to owners and auditors only')
+    if (!keyInWorkspace(doc)) throw new NotFoundException()
+    const saved = (Array.isArray(link.marks) ? link.marks : []) as unknown as StatementMark[]
+    const marks = saved.length ? saved : link.mark ? [link.mark as unknown as StatementMark] : []
+    const original = new Uint8Array(await this.storage.read(doc.storageKey))
+    const bytes =
+      doc.contentType === 'application/pdf' ? (await itemCopy(original, marks)).bytes : original
+    const subject =
+      'expense' in link ? `expense ${link.expense.itemNumber}` : 'a work-experience payment'
+    await this.log.log(caller, {
+      workspaceId: doc.workspaceId,
+      resource: 'document',
+      subjectId: doc.id,
+      action: 'read',
+      description: `Opened ${describe(doc)} highlighted for ${subject}`,
+    })
+    return { bytes, contentType: doc.contentType, fileName: doc.fileName }
+  }
+
+  /**
    * "Find the line": searches the text of the month's bank statements for the item's amount and answers each
    * statement's lines where it appears, with the page and the line's box. A statement without text (scanned) says
    * so. Only financial bank statements are read; the search is logged as a read of them. The newest statements are
@@ -369,11 +426,17 @@ export class PayrollService {
             if (link)
               await tx.expenseDocument.update({
                 where: { expenseId_documentId: { expenseId: id, documentId } },
-                data: { purpose: 'payment', mark: value },
+                data: { purpose: 'payment', mark: value, marks: [value] },
               })
             else
               await tx.expenseDocument.create({
-                data: { expenseId: id, documentId, purpose: 'payment', mark: value },
+                data: {
+                  expenseId: id,
+                  documentId,
+                  purpose: 'payment',
+                  mark: value,
+                  marks: [value],
+                },
               })
             return before
           }
@@ -385,11 +448,17 @@ export class PayrollService {
           if (link)
             await tx.wexPaymentDocument.update({
               where: { wexPaymentId_documentId: { wexPaymentId: id, documentId } },
-              data: { purpose: 'payment', mark: value },
+              data: { purpose: 'payment', mark: value, marks: [value] },
             })
           else
             await tx.wexPaymentDocument.create({
-              data: { wexPaymentId: id, documentId, purpose: 'payment', mark: value },
+              data: {
+                wexPaymentId: id,
+                documentId,
+                purpose: 'payment',
+                mark: value,
+                marks: [value],
+              },
             })
           return before
         },

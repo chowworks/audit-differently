@@ -411,7 +411,7 @@ describe('AuditPackageService: payroll lines marked on a bank statement', () => 
     join(__dirname, '../../test/fixtures/statements/riverbend-2026-09-statement.pdf')
   )
   const mark = { page: 2, x: 48, y: 677, width: 520, height: 14.4 }
-  it("highlights the marked line on the package's copy and leaves the stored statement as it is", async () => {
+  it("highlights the line on the item's own copy, files the statement once as stored, and leaves it unchanged", async () => {
     const e = engagement()
     const month = e.monthlyReports[0]!
     const marked = {
@@ -427,11 +427,6 @@ describe('AuditPackageService: payroll lines marked on a bank statement', () => 
                 }
               : x
           ),
-          wexPayments: month.wexPayments.map((w) => ({
-            ...w,
-            // A mark on anything but a bank statement is never drawn (the database refuses one anyway).
-            documents: w.documents.map((d) => (d.document === stub ? { ...d, mark } : d)),
-          })),
         },
       ],
     }
@@ -447,19 +442,25 @@ describe('AuditPackageService: payroll lines marked on a bank statement', () => 
       storage as never
     )
     const plan = await service.plan(caller('owner'), 'e-1')
-    expect([...(plan.marks ?? new Map()).entries()]).toEqual([[statement.storageKey, [mark]]])
+    const [[copyPath, copyMarks]] = [...(plan.marks ?? new Map()).entries()]
+    expect(copyPath).toMatch(
+      /\/Payroll\/RYS-13 - .+\/Evidence of payment - 2026-09 Bank Statement\.pdf$/
+    )
+    expect(copyMarks).toEqual([mark])
     const out = await service.build(caller('owner'), 'e-1')
     const entries = unzipSync(new Uint8Array(out.bytes))
-    const copy =
+    const shared =
       entries[
         `Coding Pathway (DEMO-1)/${MONTH}/Proof of Purchase - Bank Statements/2026-09 Bank Statement.pdf`
       ]!
+    expect(Buffer.from(shared).equals(pdf)).toBe(true)
+    const copy = entries[copyPath]!
     expect(Buffer.from(copy).equals(pdf)).toBe(false)
     expect((await PDFDocument.load(copy)).getPageCount()).toBe(2)
     const copied = Object.entries(entries).find(([p]) => p.endsWith('Jordan pay stub.pdf'))!
     expect(strFromU8(copied[1])).toBe(`bytes of ${stub.storageKey}`)
     const readme = strFromU8(entries['Coding Pathway (DEMO-1)/README.txt']!)
-    expect(readme).toContain('highlighted (the stored statement is unchanged)')
+    expect(readme).toContain('highlighted (the stored files are unchanged)')
     expect(readme).not.toContain('NOT DRAWN')
   })
 
@@ -496,10 +497,12 @@ describe('AuditPackageService: payroll lines marked on a bank statement', () => 
     )
     const out = await service.build(caller('owner'), 'e-1')
     const entries = unzipSync(new Uint8Array(out.bytes))
-    const path = `${MONTH}/Proof of Purchase - Bank Statements/2026-09 Bank Statement.pdf`
+    const path = Object.keys(entries)
+      .find((p) => p.includes('/Payroll/RYS-13 - '))!
+      .slice('Coding Pathway (DEMO-1)/'.length)
     expect(Buffer.from(entries[`Coding Pathway (DEMO-1)/${path}`]!).equals(encrypted)).toBe(true)
     const readme = strFromU8(entries['Coding Pathway (DEMO-1)/README.txt']!)
-    expect(readme).toContain('highlighted where it could be drawn (see MARKED LINES NOT DRAWN)')
+    expect(readme).toContain('highlighted where it could be drawn (see MARKED LINES NOT DRAWN')
     expect(readme).toContain(
       `MARKED LINES NOT DRAWN\n  ${path}\n    The marked lines could not be drawn on this copy (encrypted or damaged):\n      page 2, at 48, 677\n`
     )

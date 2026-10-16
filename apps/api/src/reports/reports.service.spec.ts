@@ -135,7 +135,11 @@ const stored = {
 
 function service(status = 'draft', over: Record<string, unknown> = {}) {
   const prisma = {
-    monthlyReport: { ...scoped({ ...report(status), ...over }), update: jest.fn() },
+    monthlyReport: {
+      ...scoped({ ...report(status), ...over }),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
     expense: {
       ...scoped(stored),
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'x-2', ...data })),
@@ -152,6 +156,7 @@ function service(status = 'draft', over: Record<string, unknown> = {}) {
       ...scoped({ id: 'wx-1', workspaceId: W, monthlyReportId: 'r-1' }),
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'wx-2', ...data })),
       update: jest.fn(),
+      delete: jest.fn(),
     },
     wexPaymentDocument: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -159,6 +164,8 @@ function service(status = 'draft', over: Record<string, unknown> = {}) {
       update: jest.fn(),
     },
     document: {
+      // Files filed under the month: one, unless a test says the month is empty.
+      count: jest.fn().mockResolvedValue(1),
       findMany: jest.fn().mockResolvedValue([document('d-1', W)]),
       // No signed copy on file for the month unless a test says so.
       findFirst: jest.fn(async (args?: { where?: { kind?: string } }) =>
@@ -276,10 +283,9 @@ describe('ReportsService', () => {
     await expect(s.attachToExpense(who, 'x-1', 'invoice', 'd-1')).rejects.toThrow(NotFoundException)
     await expect(s.detachFromExpense(who, 'x-1', 'd-1')).rejects.toThrow(NotFoundException)
     await expect(s.addWexPayment(who, 'r-1', wex)).rejects.toThrow(NotFoundException)
+    await expect(s.updateWexPayment(who, 'wx-1', wex)).rejects.toThrow(NotFoundException)
+    await expect(s.deleteWexPayment(who, 'wx-1')).rejects.toThrow(NotFoundException)
     await expect(s.attachToWex(who, 'wx-1', 'payment', 'd-1')).rejects.toThrow(NotFoundException)
-    await expect(s.setWexTags(who, 'wx-1', ['age-group:under-18'])).rejects.toThrow(
-      NotFoundException
-    )
     await expect(s.submit(who, 'r-1')).rejects.toThrow(NotFoundException)
     await expect(s.approveClosing(who, 'r-1', closing)).rejects.toThrow(NotFoundException)
     await expect(s.sendBack(who, 'r-1', 'Wrong rent')).rejects.toThrow(NotFoundException)
@@ -318,6 +324,7 @@ describe('ReportsService', () => {
       reopen: false,
       attachSigned: false,
       readPersonal: true,
+      deleteMonth: false,
     })
     log.entries.length = 0
     await expect(s.addExpense(who, 'r-1', expense)).rejects.toThrow(ForbiddenException)
@@ -328,10 +335,9 @@ describe('ReportsService', () => {
     )
     await expect(s.detachFromExpense(who, 'x-1', 'd-1')).rejects.toThrow(ForbiddenException)
     await expect(s.addWexPayment(who, 'r-1', wex)).rejects.toThrow(ForbiddenException)
+    await expect(s.updateWexPayment(who, 'wx-1', wex)).rejects.toThrow(ForbiddenException)
+    await expect(s.deleteWexPayment(who, 'wx-1')).rejects.toThrow(ForbiddenException)
     await expect(s.attachToWex(who, 'wx-1', 'payment', 'd-1')).rejects.toThrow(ForbiddenException)
-    await expect(s.setWexTags(who, 'wx-1', ['age-group:under-18'])).rejects.toThrow(
-      ForbiddenException
-    )
     await expect(s.submit(who, 'r-1')).rejects.toThrow(ForbiddenException)
     await expect(s.approveClosing(who, 'r-1', closing)).rejects.toThrow(ForbiddenException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
@@ -353,6 +359,7 @@ describe('ReportsService', () => {
       reopen: false,
       attachSigned: false,
       readPersonal: true,
+      deleteMonth: false,
     })
     closed.log.entries.length = 0
     await expect(closed.service.sendBack(member('auditor'), 'r-1', 'Wrong rent')).rejects.toThrow(
@@ -373,6 +380,7 @@ describe('ReportsService', () => {
       edit: false,
       attachSigned: true,
       readPersonal: true,
+      deleteMonth: false,
     })
     signedOnFile(submitted.prisma, [signedCopy('d-signed', '2026-10-07T00:00:00Z')])
     const detail = await submitted.service.get(owner, 'r-1')
@@ -395,6 +403,7 @@ describe('ReportsService', () => {
       reopen: false,
       attachSigned: true,
       readPersonal: false,
+      deleteMonth: false,
     })
     draft.log.entries.length = 0
     await expect(draft.service.submit(who, 'r-1')).rejects.toThrow(
@@ -419,6 +428,7 @@ describe('ReportsService', () => {
       reopen: false,
       attachSigned: true,
       readPersonal: false,
+      deleteMonth: false,
     })
     closed.log.entries.length = 0
     await expect(closed.service.addExpense(who, 'r-1', expense)).rejects.toThrow(
@@ -1031,40 +1041,90 @@ describe('ReportsService', () => {
       expect(prisma.wexPayment.create).toHaveBeenCalledTimes(1)
     })
 
-    it("tags a payroll item and logs the field by name alone: a participant's pay", async () => {
+    it('changes and removes a work-experience payment, each with its line, and logs pay by field', async () => {
       const { service: s, prisma, log } = service()
-      await s.setWexTags(member('bookkeeper'), 'wx-1', ['age-group:under-18'])
-      expect(prisma.wexPayment.update.mock.calls[0][0].data).toEqual({
-        tags: ['age-group:under-18'],
+      const who = member('bookkeeper')
+      await s.updateWexPayment(who, 'wx-1', { ...wex, grossAmount: 300 })
+      expect(prisma.wexPayment.update.mock.calls[0][0]).toMatchObject({
+        where: { id: 'wx-1' },
+        data: { grossAmount: '300.00' },
       })
-      expect(log.entries).toEqual([
-        {
-          workspaceId: W,
-          resource: 'report',
-          subjectId: 'wx-1',
-          action: 'update',
-          description: 'Changed the tags of a work-experience payment in September 2026',
-          changes: [{ field: 'Tags' }],
-        },
+      await s.deleteWexPayment(who, 'wx-1')
+      expect(prisma.wexPayment.delete).toHaveBeenCalledWith({ where: { id: 'wx-1' } })
+      expect(log.entries.map((e) => [e.action, e.description])).toEqual([
+        ['update', 'Changed a work-experience payment in September 2026'],
+        ['delete', 'Removed a work-experience payment from September 2026'],
       ])
-      expectNoneOf(log.entries, ['Under 18', 'under-18', 'age-group'])
-      await expect(s.setWexTags(member('bookkeeper'), 'wx-1', ['site:north'])).rejects.toThrow(
+      await expect(s.updateWexPayment(who, 'wx-1', { ...wex, grossAmount: 0 })).rejects.toThrow(
         BadRequestException
       )
-      // No list at all is not "no tags": it would erase them.
-      for (const missing of [undefined, null])
-        await expect(s.setWexTags(member('bookkeeper'), 'wx-1', missing)).rejects.toThrow(
-          /tags is required/
-        )
+    })
+
+    it("tags a payroll item in its edit and logs the field by name alone: a participant's pay", async () => {
+      const { service: s, prisma, log } = service()
+      await s.updateWexPayment(member('bookkeeper'), 'wx-1', {
+        ...wex,
+        tags: ['age-group:under-18'],
+      })
+      expect(prisma.wexPayment.update.mock.calls[0][0].data.tags).toEqual(['age-group:under-18'])
+      expect(log.entries[0]!.changes).toContainEqual({ field: 'Tags' })
+      expectNoneOf(log.entries, ['Under 18', 'under-18', 'age-group'])
+      await expect(
+        s.updateWexPayment(member('bookkeeper'), 'wx-1', { ...wex, tags: ['site:north'] })
+      ).rejects.toThrow(BadRequestException)
       expect(prisma.wexPayment.update).toHaveBeenCalledTimes(1)
     })
 
-    it('changes no payroll tags in a month whose closing is approved', async () => {
+    it('changes no payroll item in a month whose closing is approved', async () => {
       const { service: s, prisma } = service('closed')
-      await expect(s.setWexTags(member('owner'), 'wx-1', [youth])).rejects.toThrow(
+      await expect(
+        s.updateWexPayment(member('owner'), 'wx-1', { ...wex, tags: [youth] })
+      ).rejects.toThrow(ConflictException)
+      await expect(s.deleteWexPayment(member('owner'), 'wx-1')).rejects.toThrow(ConflictException)
+      expect(prisma.wexPayment.update).not.toHaveBeenCalled()
+      expect(prisma.wexPayment.delete).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('deleting an empty month', () => {
+    const empty = { expenses: [], wexPayments: [], reopenings: [] }
+
+    it('lets an owner delete a draft with nothing in it, and logs it', async () => {
+      const { service: s, prisma, log } = service('draft', empty)
+      prisma.document.count.mockResolvedValue(0)
+      expect((await s.get(member('owner'), 'r-1')).can.deleteMonth).toBe(true)
+      expect(await s.deleteEmptyMonth(member('owner'), 'r-1')).toEqual({ engagementId: 'e-1' })
+      expect(prisma.monthlyReport.delete).toHaveBeenCalledWith({ where: { id: 'r-1' } })
+      expect(log.entries.map((e) => e.description)).toContain(
+        'Deleted September 2026, a month with nothing to submit'
+      )
+    })
+
+    it('refuses a bookkeeper, and a month with a file, a line or a submission behind it', async () => {
+      const bookkeeper = service('draft', empty)
+      bookkeeper.prisma.document.count.mockResolvedValue(0)
+      expect((await bookkeeper.service.get(member('bookkeeper'), 'r-1')).can.deleteMonth).toBe(
+        false
+      )
+      await expect(
+        bookkeeper.service.deleteEmptyMonth(member('bookkeeper'), 'r-1')
+      ).rejects.toThrow(ForbiddenException)
+      const withFile = service('draft', empty)
+      await expect(withFile.service.deleteEmptyMonth(member('owner'), 'r-1')).rejects.toThrow(
+        /not empty/
+      )
+      const submitted = service('submitted', empty)
+      submitted.prisma.document.count.mockResolvedValue(0)
+      await expect(submitted.service.deleteEmptyMonth(member('owner'), 'r-1')).rejects.toThrow(
         ConflictException
       )
-      expect(prisma.wexPayment.update).not.toHaveBeenCalled()
+      const withLine = service('draft', { ...empty, expenses: [{ id: 'x-1' }] })
+      withLine.prisma.document.count.mockResolvedValue(0)
+      await expect(withLine.service.deleteEmptyMonth(member('owner'), 'r-1')).rejects.toThrow(
+        /not empty/
+      )
+      for (const x of [bookkeeper, withFile, submitted, withLine])
+        expect(x.prisma.monthlyReport.delete).not.toHaveBeenCalled()
     })
   })
 
@@ -1086,8 +1146,8 @@ describe('ReportsService', () => {
     await s.attachToExpense(who, 'x-1', 'payment', 'd-bank')
     expect(prisma.expenseDocument.update).toHaveBeenCalledWith({
       where: { expenseId_documentId: { expenseId: 'x-1', documentId: 'd-bank' } },
-      // A move clears any marked statement line: a mark belongs to evidence of payment only.
-      data: { purpose: 'payment', mark: Prisma.DbNull },
+      // A move clears any marked line and highlights: they belong to the proof it was.
+      data: { purpose: 'payment', mark: Prisma.DbNull, marks: [] },
     })
     expect(prisma.expenseDocument.create).not.toHaveBeenCalled()
     prisma.wexPaymentDocument.findFirst.mockResolvedValue({ purpose: 'timesheet' })

@@ -65,7 +65,6 @@
   margin-top: 4px;
   padding: 16px;
   border: 1px solid var(--line);
-  border-top: 4px solid var(--navy);
   border-radius: var(--radius);
   background: var(--surface);
 }
@@ -78,6 +77,7 @@
   font-weight: 800;
   color: var(--navy);
 }
+/* The red count beside a box's heading: how many are still to do. */
 .mx-count {
   display: inline-grid;
   place-items: center;
@@ -196,14 +196,10 @@ details[open] > summary .mx-toggle-hide {
 
 /* "How Auto-Match decided": a short note, then per payroll item a table with one row per proof: what it is, the
    result, the file and why, coloured as its cell in the grid is. */
-.mx-why-note {
-  display: grid;
-  gap: 2px;
-  margin-bottom: 10px;
-  padding: 8px 12px;
-  border-left: 4px solid var(--navy);
-  background: var(--surface);
+.mx-why-intro {
+  margin: 0 0 10px;
   font-size: 13px;
+  color: var(--muted);
 }
 .mx-why-list {
   display: grid;

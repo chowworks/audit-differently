@@ -182,6 +182,8 @@ function setup(status = 'draft', docs: Doc[] = [], expenses = SEPTEMBER) {
     expense: { findMany: jest.fn().mockResolvedValue([]) },
     check: { findMany: jest.fn().mockResolvedValue([]) },
     document: {
+      // The month's files, for the report's "delete an empty month": never empty here.
+      count: jest.fn().mockResolvedValue(1),
       findFirst: jest.fn(async ({ where }: { where: Record<string, unknown> }) => {
         const d = pick(stored, where)[0]
         return d ? withLinks(d) : null
@@ -238,7 +240,15 @@ function setup(status = 'draft', docs: Doc[] = [], expenses = SEPTEMBER) {
     {} as never,
     {} as never
   )
-  const s = new ReceiptsService(prisma as never, log as never, checks as never, reports, documents)
+  const stats = { record: jest.fn() }
+  const s = new ReceiptsService(
+    prisma as never,
+    log as never,
+    checks as never,
+    reports,
+    documents,
+    stats as never
+  )
   const writes = [
     prisma.document.create,
     prisma.document.update,
@@ -247,7 +257,7 @@ function setup(status = 'draft', docs: Doc[] = [], expenses = SEPTEMBER) {
     prisma.expenseDocument.deleteMany,
     storage.upload,
   ]
-  return { s, prisma, log, links, stored, storage, writes, locks }
+  return { s, prisma, log, links, stored, storage, writes, locks, stats }
 }
 
 const bookkeeper = member('bookkeeper')
@@ -296,6 +306,38 @@ describe('ReceiptsService', () => {
     // The month's page as it now stands: every receipt matched, nothing left to suggest.
     expect(out.report.matching.receipts.every((r) => r.matchedTo.length === 1)).toBe(true)
     expect(out.report.matching.suggestions).toEqual([])
+  })
+
+  it('counts the upload for Matching statistics: counts and sizes only, never a name or an amount', async () => {
+    const { s, stats } = setup()
+    await s.upload(bookkeeper, 'r-sep', RECEIPTS)
+    expect(stats.record).toHaveBeenCalledTimes(1)
+    const [row] = stats.record.mock.calls[0]!
+    expect(row).toMatchObject({
+      workspaceId: W,
+      feature: 'receipts',
+      startedById: bookkeeper.userId,
+      outcome: 'done',
+      fileCount: 3,
+      totalBytes: RECEIPTS.reduce((n, f) => n + f.size, 0),
+      items: 3,
+      matched: 3,
+      missing: 0,
+      failed: 0,
+    })
+    expect(row.readMs).toEqual(expect.any(Number))
+    const text = JSON.stringify(row)
+    for (const secret of ['.pdf', 'Bright Path', '212.18', 'Summit', 'd-1', 'r-sep', 'e-1'])
+      expect(text).not.toContain(secret)
+  })
+
+  it('counts a refused upload as failed, and still refuses it', async () => {
+    const { s, stats } = setup()
+    const fake = { ...RECEIPTS[0]!, buffer: Buffer.from('not a pdf at all'), size: 16 }
+    await expect(s.upload(bookkeeper, 'r-sep', [fake])).rejects.toThrow(BadRequestException)
+    expect(stats.record).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'receipts', outcome: 'failed', fileCount: 1, items: 0 })
+    )
   })
 
   it('reads with AI only when the box is ticked, every time, and says so in the line', async () => {

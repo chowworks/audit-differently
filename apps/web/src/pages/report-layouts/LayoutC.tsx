@@ -1,7 +1,7 @@
 /*
- * DESIGN EXPERIMENT, option C (?layout=c), the owner's own design: four tiles, a seven-step stepper whose problems
- * are red and clickable, then "Expenses & Proof" and "Payroll & Proof", each a grid with a search and filter bar.
- * Receipt matching and payroll proof open as dialogs. Delete once the owner picks a layout (see shared.tsx).
+ * The month page, the owner's own design (chosen 2026-10-16): four tiles, a seven-step stepper whose problems are red
+ * and clickable, then "Expenses & Proof" and "Payroll & Proof", each a grid with a search and filter bar. Receipt
+ * matching and payroll proof open as dialogs.
  */
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
@@ -1045,12 +1045,15 @@ function ProofChips({
   docs,
   testId,
   onAdd,
+  proofOf,
 }: {
   can: boolean
   needed: DocumentPurpose[]
   docs: ExpenseDto['documents']
   testId: string
   onAdd: (purpose: DocumentPurpose) => void
+  /** A payroll item: its proofs open as its own highlighted copies. */
+  proofOf?: { target: 'expense' | 'wex'; id: string }
 }) {
   const have = new Map(docs.map((d) => [d.purpose, d]))
   const extra = docs.filter((d) => !needed.includes(d.purpose))
@@ -1060,7 +1063,9 @@ function ProofChips({
         const d = have.get(purpose)
         return d ? (
           <Chip key={purpose} tone="ok" fill title={d.document.fileName}>
-            <DocumentLink doc={d.document}>✓ {DOCUMENT_PURPOSE_LABELS[purpose]}</DocumentLink>
+            <DocumentLink doc={d.document} proofOf={proofOf}>
+              ✓ {DOCUMENT_PURPOSE_LABELS[purpose]}
+            </DocumentLink>
           </Chip>
         ) : can ? (
           <button
@@ -1193,7 +1198,9 @@ function PayrollSection({
     (row) => missingOf(facts(row).needed, facts(row).docs).length > 0
   ).length
   const addProof = (row: PayRow, purpose: DocumentPurpose) => {
-    if (purpose === 'payment' && hasStatements) return openProof()
+    // A staff line's evidence of payment is its bank line: found for this row alone, not the whole payroll match.
+    if (purpose === 'payment' && row.kind === 'expense' && hasStatements)
+      return act.findBankLine(row.e)
     if (row.kind === 'expense') act.attach(row.e, purpose)
     else act.attachPayment(row.w, purpose)
   }
@@ -1231,7 +1238,7 @@ function PayrollSection({
     >
       <p className="rl-c-sectionnote">
         Timesheet, payroll register and evidence of payment for each payroll line and each
-        participant paid. Pay stubs are personal documents: download only, every read logged.
+        participant paid. Pay stubs are personal records: every read logged.
       </p>
       {all.length > 0 && (
         <FilterBar
@@ -1308,6 +1315,7 @@ function PayrollSection({
                         docs={f.docs}
                         testId={row.kind === 'expense' ? row.e.itemNumber : row.w.participantNumber}
                         onAdd={(purpose) => addProof(row, purpose)}
+                        proofOf={{ target: row.kind, id: row.id }}
                       />
                       <SeeChecks
                         checks={f.checks}
@@ -1332,9 +1340,18 @@ function PayrollSection({
                             </Button>
                           </>
                         ) : (
-                          <Button kind="ghost" onClick={() => act.tagPayment(row.w)}>
-                            tags
-                          </Button>
+                          <>
+                            <Button kind="ghost" onClick={() => act.editPayment(row.w)}>
+                              edit
+                            </Button>
+                            <Button
+                              kind="ghost"
+                              className="text-danger"
+                              onClick={() => act.deletePayment(row.w)}
+                            >
+                              remove
+                            </Button>
+                          </>
                         )}
                       </td>
                     )}

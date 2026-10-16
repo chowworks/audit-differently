@@ -80,7 +80,9 @@ export function DocumentMenuModal({
         {kindLabel(doc.kind)} · uploaded {shortDate(doc.uploadedAt)} ·{' '}
         {Math.max(1, Math.round(doc.size / 1024))} KB
         {doc.sensitivity === 'personal'
-          ? ' · personal record, download only, every read logged'
+          ? doc.kind === 'paystub'
+            ? ' · personal record, every read logged'
+            : ' · personal record, download only, every read logged'
           : ''}
       </p>
       <div className="grid gap-4">

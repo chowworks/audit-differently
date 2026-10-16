@@ -10,6 +10,7 @@ const TRUSTED_CALL_SITES = [
   'documents/documents.controller.ts', // the local-disk file behind a signed token (404 whenever R2 is set)
   'inbound/inbound.service.ts', // emailed receipts before anyone is known: queue, claim, address, sender, outcome
   'me/me.controller.ts', // first sign-in: the User row and the takeover of an invitation's placeholder
+  'payroll/payroll-match.worker.ts', // reading payroll match files: claim, read, write only what was read (20261016001300)
   'workspaces/workspaces.service.ts', // an owner's invitation: the lookup by email and the placeholder
 ]
 

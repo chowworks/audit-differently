@@ -23,6 +23,8 @@ import { AdminWorkspacePage } from '@/pages/AdminWorkspacePage'
 import { AdminWorkspacesPage } from '@/pages/AdminWorkspacesPage'
 import { AdminAdminsPage } from '@/pages/AdminAdminsPage'
 import { AdminEmailPage } from '@/pages/AdminEmailPage'
+import { AdminHighlightsPage } from '@/pages/AdminHighlightsPage'
+import { AdminMatchStatsPage } from '@/pages/AdminMatchStatsPage'
 import { useRole } from '@/hooks/useRole'
 import { Mark } from '@/components/Mark'
 import { Button, Empty, ErrorNote } from '@/components/ui'
@@ -42,6 +44,8 @@ const APP_ROUTES: { path: string; element: ReactNode }[] = [
   { path: '/admin/workspaces', element: <AdminOnly page={<AdminWorkspacesPage />} /> },
   { path: '/admin/workspaces/:id', element: <AdminOnly page={<AdminWorkspacePage />} /> },
   { path: '/admin/email', element: <AdminOnly page={<AdminEmailPage />} /> },
+  { path: '/admin/highlights', element: <AdminOnly page={<AdminHighlightsPage />} /> },
+  { path: '/admin/match-stats', element: <AdminOnly page={<AdminMatchStatsPage />} /> },
   // Older links.
   { path: '/contracts', element: <Navigate to="/workspaces" replace /> },
   { path: '/contracts/:id', element: <ToEngagement /> },
@@ -130,6 +134,8 @@ function SignedIn() {
           <Route path="/admin/workspaces" element={<AdminWorkspacesPage />} />
           <Route path="/admin/workspaces/:id" element={<AdminWorkspacePage />} />
           <Route path="/admin/email" element={<AdminEmailPage />} />
+          <Route path="/admin/highlights" element={<AdminHighlightsPage />} />
+          <Route path="/admin/match-stats" element={<AdminMatchStatsPage />} />
           <Route path="/contact" element={<ContactPage />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>

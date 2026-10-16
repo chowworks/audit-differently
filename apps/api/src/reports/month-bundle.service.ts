@@ -28,7 +28,7 @@ import { howMany, monthName } from '../core/changes'
 import { keyInWorkspace } from '../documents/documents.service'
 import { csv, day, ext, money, safe } from '../engagements/audit-package.service'
 import { zipEntries, type ZipSource } from '../engagements/zip-stream'
-import { markPdf, markPlace, NOT_DRAWN } from '../payroll/mark-pdf'
+import { itemCopy, markPlace, NOT_DRAWN } from '../payroll/mark-pdf'
 import { PrismaService } from '../prisma/prisma.service'
 import {
   currentSignedCopy,
@@ -162,6 +162,14 @@ export interface MonthBundle {
   entries: [string, ZipSource][]
 }
 
+/** A link's highlights: its exact-word marks, or the one line marked before they were kept. */
+const marksOf = (link: { mark?: unknown; marks?: unknown }): StatementMark[] =>
+  Array.isArray(link.marks) && link.marks.length
+    ? (link.marks as StatementMark[])
+    : link.mark
+      ? [link.mark as StatementMark]
+      : []
+
 const isPersonal = (d: Doc) =>
   d.sensitivity === 'personal' || DOCUMENT_SENSITIVITY[d.kind as DocumentKind] === 'personal'
 const kindLabel = (k: string) => DOCUMENT_KIND_LABELS[k as DocumentKind] ?? k
@@ -294,26 +302,37 @@ export class MonthBundleService {
     })
     const month = monthName(r.period)
 
-    // Which record goes where, and what each one supports. A record behind several items is filed once.
+    // Which record goes where, and what each one supports. A record behind several items is filed once, except a
+    // payroll proof highlighted for its item: each item gets its own copy, with only its own highlights, so each copy
+    // stands on its own (owner's decision, 2026-10-16).
     const personalLeftOut = new Set<string>()
     const sections = new Map<string, Section>()
-    const file = (d: Doc, part: Section['part'], support?: Support, mark?: unknown) => {
+    const filedDocs = new Set<string>()
+    const file = (
+      d: Doc,
+      part: Section['part'],
+      support?: Support,
+      link?: { mark?: unknown; marks?: unknown; item: string }
+    ) => {
       if (d.workspaceId !== workspaceId || !keyInWorkspace(d)) throw new NotFoundException()
       if (isPersonal(d)) {
         personalLeftOut.add(d.id)
         return
       }
       const placed = PAYROLL_PROOF.has(d.kind) && part === 'ledger' ? 'payroll' : part
-      const s = sections.get(d.id) ?? {
+      const own = link ? marksOf(link) : []
+      const key = own.length && PAYROLL_PROOF.has(d.kind) ? `${d.id}#${link!.item}` : d.id
+      const s = sections.get(key) ?? {
         part: placed,
         doc: d,
         supports: [],
         marks: [],
         notDrawn: [],
       }
-      sections.set(d.id, s)
+      sections.set(key, s)
+      filedDocs.add(d.id)
       if (support) s.supports.push(support)
-      if (mark && d.kind === 'bank-statement') s.marks.push(mark as StatementMark)
+      if (key !== d.id) s.marks.push(...own)
     }
     const lastReopenedAt = r.reopenings[r.reopenings.length - 1]?.reopenedAt
     const signed = currentSignedCopy(
@@ -338,7 +357,7 @@ export class MonthBundleService {
           ed.document,
           'ledger',
           { item: e.itemNumber, who: e.vendor, purpose: purposeLabel(ed.purpose), amount },
-          ed.mark
+          { mark: ed.mark, marks: ed.marks, item: `expense ${e.id}` }
         )
     }
     for (const w of r.wexPayments)
@@ -352,11 +371,11 @@ export class MonthBundleService {
             purpose: purposeLabel(wd.purpose),
             amount: Number(w.grossAmount),
           },
-          wd.mark
+          { mark: wd.mark, marks: wd.marks, item: `wex ${w.id}` }
         )
     for (const d of monthDocs) {
       if (isPersonal(d)) personalLeftOut.add(d.id)
-      else if (PAYROLL_PROOF.has(d.kind) && !sections.has(d.id))
+      else if (PAYROLL_PROOF.has(d.kind) && !filedDocs.has(d.id))
         file(d, 'payroll', {
           item: "The month's payroll",
           who: '',
@@ -441,7 +460,7 @@ export class MonthBundleService {
               .drawImage(image, { x: (PAGE[0] - w) / 2, y: (PAGE[1] - h) / 2, width: w, height: h })
         }
         if (s.marks.length) {
-          const marked = await markPdf(bytes, s.marks)
+          const marked = await itemCopy(bytes, s.marks)
           bytes = marked.bytes
           s.notDrawn = marked.notDrawn
         }
@@ -479,7 +498,9 @@ export class MonthBundleService {
       const drawn = s.marks.length - s.notDrawn.length
       if (drawn) {
         p.gap()
-        p.line(`${howMany(drawn, 'marked line')} highlighted on this statement.`)
+        p.line(
+          `${howMany(drawn, 'place')} highlighted on this copy, for ${s.supports[0]?.item ?? 'this item'} alone.`
+        )
       }
       if (s.notDrawn.length) {
         p.gap()

@@ -1,6 +1,5 @@
 /*
- * DESIGN EXPERIMENT (?layout=a|b|c on the month page). Delete this whole file with the report-layouts folder once
- * the owner picks a layout. See "Design experiments" in CLAUDE.md.
+ * The month page's layout (LayoutC, the owner's design, chosen 2026-10-16).
  */
 
 /* One green button per screen: inside a layout, every other green button the page's sections draw is navy. Modals
@@ -120,19 +119,7 @@
 }
 
 /* The next action. */
-.rl-nextcard {
-  margin-bottom: 16px;
-  padding: 18px 20px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.rl-nextcard-text {
-  margin: 0 0 12px;
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--navy);
-}
+
 .rl .rl-next {
   white-space: normal;
   text-align: left;
@@ -191,7 +178,7 @@
   cursor: not-allowed;
 }
 
-/* Steps, shared by the stepper (A) and the checklist (B). */
+/* Steps. */
 .rl-step-mark {
   flex: none;
   display: inline-grid;
@@ -221,14 +208,7 @@
 }
 
 /* A: the stepper. */
-.rl-stepper {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0 0 16px;
-  padding: 0;
-  list-style: none;
-}
+
 .rl-step {
   display: flex;
   gap: 8px;
@@ -257,16 +237,8 @@
   color: var(--muted);
   font-weight: 600;
 }
-@media (max-width: 900px) {
-  .rl-stepper {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
+
 @media (max-width: 560px) {
-  .rl-stepper {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: 4px;
-  }
   .rl-step {
     justify-content: center;
     padding: 8px 0 0;
@@ -274,122 +246,6 @@
   .rl-step .rl-step-text {
     display: none;
   }
-}
-
-/* A: folds. */
-.rl-fold {
-  margin-bottom: 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.rl-fold-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 12px;
-  width: 100%;
-  padding: 14px 20px;
-  border: 0;
-  background: transparent;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  border-radius: var(--radius);
-}
-.rl-fold-head:hover {
-  background: var(--surface-alt);
-}
-.rl-fold-chev {
-  color: var(--muted);
-}
-.rl-fold-title {
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--navy);
-}
-.rl-fold-summary {
-  font-size: 13px;
-  color: var(--muted);
-}
-.rl-fold-warn {
-  color: var(--danger);
-  font-weight: 700;
-}
-.rl-fold-body {
-  padding: 0 12px 12px;
-}
-.rl-fold-body > .ad-card:first-child,
-.rl-fold-body > .grid:first-child {
-  margin-top: 0;
-}
-
-/* B: checklist and work. */
-.rl-split {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .rl-split {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-.rl-checklist {
-  margin: 0;
-  padding: 6px;
-  list-style: none;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.rl-check {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 4px;
-  border-radius: 10px;
-}
-.rl-check-on {
-  background: var(--tint);
-}
-.rl-check-pick {
-  display: flex;
-  flex: 1 1 160px;
-  gap: 10px;
-  align-items: center;
-  min-width: 0;
-  padding: 6px;
-  border: 0;
-  background: transparent;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  border-radius: 8px;
-}
-.rl-check-current .rl-step-label {
-  color: var(--primary);
-}
-.rl-check-action {
-  padding-left: 42px;
-}
-.rl-check-action .ad-btn {
-  white-space: normal;
-  text-align: left;
-}
-.rl-work {
-  min-width: 0;
-}
-.rl-work > .ad-card:first-child,
-.rl-work > .rl-work-lead + .ad-card {
-  margin-top: 0;
-}
-.rl-work-lead {
-  margin: 0 0 12px;
-  font-weight: 600;
-  color: var(--navy);
 }
 
 /* C (the owner's design): tiles, a seven-step stepper, two grids with a search and filter bar. */
@@ -425,9 +281,6 @@
 .ad-tile.rl-c-tile-attention,
 .ad-tile.rl-c-tile-late-attention {
   border-top-color: var(--rl-caution);
-}
-.ad-tile.rl-c-tile-attention .ad-tile-value {
-  color: var(--rl-caution); /* owner: same yellow as the border (2026-10-16) */
 }
 .ad-chip.ad-chip-fill.rl-c-chip-caution {
   border-color: var(--rl-caution);

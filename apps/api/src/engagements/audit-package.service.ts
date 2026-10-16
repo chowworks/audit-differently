@@ -4,7 +4,9 @@ import {
   DOCUMENT_PURPOSE_LABELS,
   ENGAGEMENT_TRACK_LABELS,
   ENGAGEMENT_TRACKS,
+  PAYROLL_DOCUMENT_KINDS,
   PERSONAL_DOCUMENT_ROLES,
+  personalRolesFor,
   type DocumentPurpose,
   type Role,
   type StatementMark,
@@ -17,7 +19,7 @@ import { splitParts, streamPart, type ExportObject, type PartLayout } from './ex
 import { staffName, tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { howMany } from '../core/changes'
 import { budgetItemsOf } from '../workspaces/budget-items'
-import { markPdf, markPlace, NOT_DRAWN } from '../payroll/mark-pdf'
+import { itemCopy, markPlace, NOT_DRAWN } from '../payroll/mark-pdf'
 import { PrismaService } from '../prisma/prisma.service'
 import {
   currentSignedCopy,
@@ -47,6 +49,8 @@ const MONTH_SHARED: Record<string, string> = {
   'payroll-register': 'Payroll and Timesheet Reports',
   timesheet: 'Payroll and Timesheet Reports',
 }
+
+const PAYROLL_KINDS: ReadonlySet<string> = new Set(PAYROLL_DOCUMENT_KINDS)
 
 const purposeLabel = (p: string) => DOCUMENT_PURPOSE_LABELS[p as DocumentPurpose] ?? p
 export const safe = (s: string) =>
@@ -176,13 +180,20 @@ export class AuditPackageService {
       ],
     ]
     const seen = new Set<string>()
+    // The highlights each item's own copy of a payroll proof carries, by its path in the package.
     const marks = new Map<string, StatementMark[]>()
     const reopened: string[] = []
-    /** A payroll item's marked line on its bank statement, drawn on the statement's copy in the package. */
-    const markOf = (d: Doc, mark: unknown) => {
-      if (!mark || d.kind !== 'bank-statement' || d.sensitivity !== 'financial') return
-      marks.set(d.storageKey, [...(marks.get(d.storageKey) ?? []), mark as StatementMark])
-    }
+    /** Whether the caller may open this record: a pay stub opens to every member, other personal records to fewer. */
+    const mayOpen = (d: Doc) =>
+      d.sensitivity !== 'personal' ||
+      workspaceRole(caller, c.workspaceId, [...personalRolesFor(d.kind)] as Role[])
+    /** A link's highlights: its exact-word marks, or the one line marked before they were kept. */
+    const marksOf = (link: { mark?: unknown; marks?: unknown }): StatementMark[] =>
+      Array.isArray(link.marks) && link.marks.length
+        ? (link.marks as StatementMark[])
+        : link.mark
+          ? [link.mark as StatementMark]
+          : []
     let count = 0
     /** Writes the file once and returns its path inside the package. */
     const add = async (
@@ -195,7 +206,9 @@ export class AuditPackageService {
         who?: string
         purpose?: string
         amount?: number
-      }
+      },
+      /** This item's highlights: the file goes in as its own copy, drawn with them alone. */
+      itemMarks?: StatementMark[]
     ) => {
       let path = `${root}/${relPath}`
       let n = 2
@@ -203,6 +216,7 @@ export class AuditPackageService {
       seen.add(path)
       if (!keyInWorkspace(doc)) throw new NotFoundException()
       objects.push([path, doc.storageKey, doc.size ?? 0])
+      if (itemMarks?.length) marks.set(path, itemMarks)
       placedDocs.add(doc.id)
       if (doc.sensitivity === 'personal') personalPaths.add(path)
       count++
@@ -309,18 +323,28 @@ export class AuditPackageService {
         const paths: string[] = []
         for (const ed of e.documents) {
           const d = ed.document
-          markOf(d, ed.mark)
           const own = `${folder}/Program Costs/${safe(`${e.itemNumber} - ${e.vendor} - ${money(allocated)} - ${stamp(e.date)} - ${purposeLabel(ed.purpose)}`)}${ext(d.fileName)}`
-          paths.push(
-            await file(d, own, {
-              step: '06 Monthly ledger and proof',
-              month,
-              item: e.itemNumber,
-              who: e.vendor,
-              purpose: purposeLabel(ed.purpose),
-              amount: allocated,
-            })
-          )
+          if (!mayOpen(d)) continue
+          const meta = {
+            step: '06 Monthly ledger and proof',
+            month,
+            item: e.itemNumber,
+            who: e.vendor,
+            purpose: purposeLabel(ed.purpose),
+            amount: allocated,
+          }
+          paths.push(await file(d, own, meta))
+          // A payroll proof highlighted for this line: its own copy too, with only this line's highlights.
+          const mine = marksOf(ed)
+          if (mine.length && PAYROLL_KINDS.has(d.kind))
+            paths.push(
+              await add(
+                `${folder}/Payroll/${safe(`${e.itemNumber} - ${e.vendor}`)}/${purposeLabel(ed.purpose)} - ${safe(d.fileName)}`,
+                d,
+                meta,
+                mine
+              )
+            )
         }
         ledger.push([
           e.itemNumber,
@@ -355,21 +379,22 @@ export class AuditPackageService {
           const paths: string[] = []
           for (const wd of w.documents) {
             const d = wd.document
-            if (d.sensitivity === 'personal' && !personal) continue
-            markOf(d, wd.mark)
-            paths.push(
-              await file(
-                d,
-                `${folder}/WEX Documentation/${safe(who)}/Payroll Verification/${purposeLabel(wd.purpose)} - ${safe(d.fileName)}`,
-                {
-                  step: '06 Payroll verification',
-                  month,
-                  who,
-                  purpose: purposeLabel(wd.purpose),
-                  amount: Number(w.grossAmount),
-                }
-              )
-            )
+            if (!mayOpen(d)) continue
+            const own = `${folder}/WEX Documentation/${safe(who)}/Payroll Verification/${purposeLabel(wd.purpose)} - ${safe(d.fileName)}`
+            const meta = {
+              step: '06 Payroll verification',
+              month,
+              who,
+              purpose: purposeLabel(wd.purpose),
+              amount: Number(w.grossAmount),
+            }
+            // Highlighted for this participant: their own copy, with only their highlights; a shared register or
+            // statement is also filed once, as stored, in its month folder.
+            const mine = marksOf(wd)
+            if (mine.length && PAYROLL_KINDS.has(d.kind)) {
+              if (MONTH_SHARED[d.kind]) await file(d, own, meta)
+              paths.push(await add(own, d, meta, mine))
+            } else paths.push(await file(d, own, meta))
           }
           payroll.push([
             w.participant.displayName,
@@ -490,15 +515,25 @@ export class AuditPackageService {
       )
     }
 
-    // Which marks the package's copies will carry, worked out now so the README says only what is drawn: a statement
-    // with marks is read once here and again when it is written (a month has one or two). The deletion export keeps
-    // the originals, so it reads none here.
+    // Which highlights each item's copy will carry, worked out now so the README says only what is drawn: each file
+    // with highlights is read once here, and again when its copies are written. The deletion export keeps the
+    // originals, so it reads none here.
     const notDrawn = new Map<string, StatementMark[]>()
-    if (!options.complete)
-      for (const [key, ms] of marks) {
-        const marked = await markPdf(new Uint8Array(await this.storage.read(key)), ms)
-        if (marked.notDrawn.length) notDrawn.set(key, marked.notDrawn)
+    if (!options.complete) {
+      const keyOf = new Map(objects.map((o) => [o[0], o[1]]))
+      const byKey = new Map<string, [string, StatementMark[]][]>()
+      for (const [path, ms] of marks) {
+        const key = keyOf.get(path)!
+        byKey.set(key, [...(byKey.get(key) ?? []), [path, ms]])
       }
+      for (const [key, copies] of byKey) {
+        const bytes = new Uint8Array(await this.storage.read(key))
+        for (const [path, ms] of copies) {
+          const marked = await itemCopy(bytes, ms)
+          if (marked.notDrawn.length) notDrawn.set(path, marked.notDrawn)
+        }
+      }
+    }
 
     const readme = [
       `AUDIT PACKAGE: ${c.name}${c.number ? ` (${c.number})` : ''}`,
@@ -519,12 +554,14 @@ export class AuditPackageService {
       '                             each signed copy submitted before, and when, by whom and why it was reopened;',
       '                             Ledger.csv: every line billed that month, with the files behind it;',
       '                             Program Costs: one file per line and proof, named item, vendor, amount, date;',
-      '                             Proof of Purchase - Bank Statements: each statement once, for the lines it backs,',
+      '                             Proof of Purchase - Bank Statements: each statement once, as stored, for the lines it backs;',
+      '                             Payroll and Timesheet Reports: each register and timesheet once, as stored;',
+      '                             Payroll: per staff payroll line, its own copy of each proof, with only that line',
       notDrawn.size
-        ? '                             with each payroll payment it proves highlighted where it could be drawn (see MARKED LINES NOT DRAWN);'
-        : '                             with each payroll payment it proves highlighted (the stored statement is unchanged);',
-      '                             Payroll and Timesheet Reports: each register and timesheet once;',
-      '                             WEX Documentation: per participant paid that month, Payroll Verification',
+        ? '                             highlighted where it could be drawn (see MARKED LINES NOT DRAWN; the stored files are unchanged);'
+        : '                             highlighted (the stored files are unchanged);',
+      '                             WEX Documentation: per participant paid that month, Payroll Verification: their',
+      '                             own copy of each proof, with only their highlights,',
       '                             (the pay stub or other evidence of payment) and Payroll.csv with the figures',
       '  Participants.csv         every participant: id, name, enrollment status, current status, file status',
       personal
@@ -557,8 +594,8 @@ export class AuditPackageService {
       ...(notDrawn.size
         ? [
             'MARKED LINES NOT DRAWN',
-            ...[...notDrawn].flatMap(([key, ms]) => [
-              ...objects.filter((o) => o[1] === key).map((o) => `  ${o[0].slice(root.length + 1)}`),
+            ...[...notDrawn].flatMap(([path, ms]) => [
+              `  ${path.slice(root.length + 1)}`,
               `    ${NOT_DRAWN}`,
               ...ms.map((m) => `      ${markPlace(m)}`),
             ]),
@@ -591,15 +628,15 @@ export class AuditPackageService {
   }
 
   /**
-   * A stored object for the package: a bank statement with marked lines as a highlighted copy, else as stored. A
-   * statement the plan found it cannot mark (encrypted, damaged) goes in as stored, and the README says so. Should a
-   * copy carry fewer marks than the README was written for, the download fails rather than claim them.
+   * A stored object for the package: an item's own copy of a payroll proof, drawn with only its highlights, else the
+   * file as stored. A copy the plan found it cannot draw on (encrypted, damaged) goes in as stored, and the README says
+   * so. Should a copy carry fewer highlights than the README was written for, the download fails rather than claim them.
    */
-  private async object(plan: PackagePlan, key: string): Promise<Uint8Array> {
+  private async object(plan: PackagePlan, key: string, path: string): Promise<Uint8Array> {
     const bytes = new Uint8Array(await this.storage.read(key))
-    const marks = plan.marks?.get(key)
-    if (!marks?.length || plan.notDrawn?.has(key)) return bytes
-    const marked = await markPdf(bytes, marks)
+    const marks = plan.marks?.get(path)
+    if (!marks?.length || plan.notDrawn?.has(path)) return bytes
+    const marked = await itemCopy(bytes, marks)
     if (marked.notDrawn.length) {
       this.logger.error('A statement could not be marked as its plan said it would be')
       throw new Error('A marked statement changed while the package was made')
@@ -614,7 +651,7 @@ export class AuditPackageService {
   ): Promise<{ name: string; bytes: Buffer; files: number; personal: boolean }> {
     const p = await this.plan(caller, engagementId)
     const files: Zippable = { ...p.text }
-    for (const [path, key] of p.objects) files[path] = await this.object(p, key)
+    for (const [path, key] of p.objects) files[path] = await this.object(p, key, path)
     const bytes = zipSync(files, { level: 6 })
     await this.log.log(caller, {
       workspaceId: p.workspaceId,
@@ -632,7 +669,7 @@ export class AuditPackageService {
       ...Object.entries(plan.text),
       ...plan.objects.map(([path, key]): [string, ZipSource] => [
         path,
-        () => this.object(plan, key),
+        () => this.object(plan, key, path),
       ]),
     ]
     return zipEntries(entries)
@@ -645,7 +682,7 @@ export class AuditPackageService {
 
   /** Part `n` of the layout as zip chunks, one stored object in memory at a time. */
   streamPart(plan: PackagePlan, layouts: PartLayout[], n: number): AsyncGenerator<Uint8Array> {
-    return streamPart(plan, layouts, n, (key) => this.object(plan, key))
+    return streamPart(plan, layouts, n, (key, path) => this.object(plan, key, path))
   }
 
   /**
@@ -691,10 +728,10 @@ export interface PackagePlan {
   /** The paths of the personal records the package actually holds. */
   personalPaths: Set<string>
   /**
-   * The marked payroll lines of each bank statement, by storage key: the audit package draws them on its copy. The
-   * deletion export reads the stored objects itself, so it keeps the originals.
+   * The highlights of each item's own copy of a payroll proof, by its path in the package: the audit package draws
+   * them on that copy alone. The deletion export reads the stored objects itself, so it keeps the originals.
    */
   marks?: Map<string, StatementMark[]>
-  /** The marks that cannot be drawn on a statement's copy (encrypted or damaged), by storage key; that copy is as stored. */
+  /** The highlights that cannot be drawn on an item's copy (encrypted or damaged), by path; that copy is as stored. */
   notDrawn?: Map<string, StatementMark[]>
 }

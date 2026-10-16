@@ -36,7 +36,7 @@ import {
   DOCUMENT_KINDS,
   DOCUMENT_SENSITIVITY,
   MONTH_PROOF_KINDS,
-  PERSONAL_DOCUMENT_ROLES,
+  personalRolesFor,
   WRITE_ROLES,
   type DocumentDto,
   type DocumentKind,
@@ -497,29 +497,35 @@ export class DocumentsService {
     await this.dropStored(caller, doc)
   }
 
-  /** A short-lived link to the file. Personal documents: shorter, download only, fewer roles, and logged as such. */
+  /**
+   * A short-lived link to the file. Personal documents: shorter, fewer roles, download only and logged as such, except
+   * a pay stub, which opens in the browser like the other payroll files (owner's decision, 2026-10-16).
+   */
   async url(caller: Caller, id: string): Promise<{ url: string; expiresInSeconds: number }> {
     const doc = await this.prisma.document.findFirst({ where: { id, ...tenantWhere(caller) } })
     if (!doc) throw new NotFoundException()
     const personal = doc.sensitivity === 'personal'
     if (personal) {
-      const roles = [...PERSONAL_DOCUMENT_ROLES] as Role[]
+      const roles = [...personalRolesFor(doc.kind)] as Role[]
       if (!workspaceRole(caller, doc.workspaceId, roles))
-        throw new ForbiddenException('Personal documents are open to owners and auditors only')
+        throw new ForbiddenException(
+          'Personal documents are open to owners and auditors only (pay stubs to bookkeepers too)'
+        )
     }
     const expiresInSeconds = personal ? 60 : 120
+    const download = personal && doc.kind !== 'paystub'
     if (!keyInWorkspace(doc)) throw new NotFoundException()
     const url = await this.storage.getSignedUrl(
       doc.storageKey,
       expiresInSeconds,
-      personal ? { downloadName: doc.fileName } : { inlineName: doc.fileName }
+      download ? { downloadName: doc.fileName } : { inlineName: doc.fileName }
     )
     await this.log.log(caller, {
       workspaceId: doc.workspaceId,
       resource: 'document',
       subjectId: doc.id,
       action: 'read',
-      description: `${personal ? 'Downloaded' : 'Opened'} ${describe(doc)}`,
+      description: `${download ? 'Downloaded' : 'Opened'} ${describe(doc)}`,
     })
     return { url, expiresInSeconds }
   }

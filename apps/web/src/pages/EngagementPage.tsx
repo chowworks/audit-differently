@@ -24,7 +24,17 @@ import {
   type Step,
   type StepKey,
 } from '@/lib/workflow'
-import { Button, Card, Chip, Empty, ErrorNote, Modal, Notice, StatusChip } from '@/components/ui'
+import {
+  FullDemoChip,
+  Button,
+  Card,
+  Chip,
+  Empty,
+  ErrorNote,
+  Modal,
+  Notice,
+  StatusChip,
+} from '@/components/ui'
 import { DeleteModal } from '@/components/DeleteModal'
 import { AttachModal } from '@/components/AttachModal'
 import { AddParticipantModal } from '@/components/AddParticipantModal'
@@ -421,6 +431,7 @@ export function EngagementPage() {
               <p className="ad-eyebrow flex flex-wrap items-center gap-2">
                 <Chip tone="muted">{ENGAGEMENT_KIND_LABELS[c.kind]}</Chip>
                 {c.workspaceName}
+                {c.workspaceFeaturedDemo && <FullDemoChip />}
                 {c.number && (
                   <>
                     {' '}

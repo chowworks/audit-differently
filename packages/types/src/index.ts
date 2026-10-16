@@ -324,7 +324,7 @@ export const CHECK_CODES = [
   'duplicate-item',
   'late-submission',
   'unallowable-category',
-  'participant-file-incomplete',
+  'proof-mismatch',
 ] as const
 export type CheckCode = (typeof CHECK_CODES)[number]
 
@@ -424,6 +424,14 @@ export function tagLabel(types: TagType[], tag: string): string {
 /** Roles that may open a 'personal' document. A bookkeeper attaches them; they do not read them back. */
 export const PERSONAL_DOCUMENT_ROLES: ReadonlySet<Role> = new Set(['owner', 'auditor'])
 
+/**
+ * Roles that may open one personal document of this kind. A pay stub is the one exception: bookkeepers open pay stubs
+ * too, since they keep payroll and already see the stubs in the payroll system (owner's decision, 2026-10-16).
+ * Eligibility records and enrollment forms stay with owners and auditors.
+ */
+export const personalRolesFor = (kind: string): ReadonlySet<Role> =>
+  kind === 'paystub' ? new Set<Role>(['owner', 'bookkeeper', 'auditor']) : PERSONAL_DOCUMENT_ROLES
+
 /** What a contact-form message is about. The contact page's `?topic=` picks one; anything else is 'question'. */
 export const CONTACT_TOPICS = [
   'demo',
@@ -459,7 +467,8 @@ export interface Me {
   termsAccepted: boolean
   /** True when they accepted an older version but not the current one: the prompt says the Terms were updated. */
   termsPreviouslyAccepted: boolean
-  memberships: { workspaceId: string; workspaceName: string; role: Role }[]
+  /** featuredDemo: the full demo workspace, marked "Full demo". */
+  memberships: { workspaceId: string; workspaceName: string; role: Role; featuredDemo?: boolean }[]
 }
 
 export interface Health {
@@ -487,6 +496,8 @@ export interface AttachedDocument<P extends string = string> {
   document: DocumentDto
   /** On a payroll item's bank statement: the line it was paid on, marked on the page. */
   mark?: StatementMark | null
+  /** On a payroll proof: the exact words highlighted for this item (migration 20261016001400); none on older links. */
+  marks?: StatementMark[]
 }
 
 export interface ExpenseInput {
@@ -589,6 +600,8 @@ export interface EngagementSummary {
   id: string
   workspaceId: string
   workspaceName: string
+  /** Its workspace is the full demo: marked "Full demo". */
+  workspaceFeaturedDemo?: boolean
   kind: EngagementKind
   name: string
   funder: string | null
@@ -690,6 +703,8 @@ export interface EngagementInput {
 export interface WorkspaceDto {
   id: string
   name: string
+  /** The full demo workspace: marked "Full demo". */
+  featuredDemo?: boolean
   /** The caller's own role in it. */
   myRole: Role | null
   memberCount: number
@@ -818,6 +833,7 @@ export type TagUses = Record<string, Partial<Record<TagTarget, number>>>
 export interface AdminWorkspaceDto {
   id: string
   name: string
+  featuredDemo?: boolean
   createdAt: string
   memberCount: number
   members: WorkspaceMemberDto[]
@@ -943,7 +959,7 @@ export interface ReportDetail {
     tags: string[]
     reportDueDay: number
     awardAmount: number | null
-    workspace: { id: string; name: string }
+    workspace: { id: string; name: string; featuredDemo?: boolean }
     eligibilityItems: EligibilityItemDef[]
     reportTo: string | null
     preparerName: string | null
@@ -981,6 +997,8 @@ export interface ReportDetail {
     reopen: boolean
     attachSigned: boolean
     readPersonal: boolean
+    /** An owner may delete this month: a draft with no expenses, payroll or files, so nothing to submit. */
+    deleteMonth: boolean
   }
 }
 
@@ -1266,6 +1284,73 @@ export interface AdminInboundDto {
   items: AdminInboundReceiptDto[]
 }
 
+/** The match features counted on Admin tools → Matching statistics (MatchRunStat.feature). */
+export const MATCH_FEATURES = ['payroll', 'receipts', 'emailed-receipts'] as const
+export type MatchFeature = (typeof MATCH_FEATURES)[number]
+export const MATCH_FEATURE_LABELS: Record<MatchFeature, string> = {
+  payroll: 'Payroll match',
+  receipts: 'Receipt upload',
+  'emailed-receipts': 'Emailed receipts',
+}
+/** How a run ended: a payroll match is saved, discarded or expired; a receipt run is done or failed. */
+export type MatchOutcome = 'saved' | 'discarded' | 'expired' | 'done' | 'failed'
+export const MATCH_OUTCOME_LABELS: Record<MatchOutcome, string> = {
+  saved: 'Saved',
+  discarded: 'Discarded',
+  expired: 'Expired',
+  done: 'Done',
+  failed: 'Failed',
+}
+/** The periods the page offers, in days. */
+export const MATCH_STAT_DAYS = [30, 90, 365] as const
+
+/** One finished run: counts, sizes and durations only, with its workspace's name and who started it. */
+export interface MatchStatRowDto {
+  id: string
+  feature: MatchFeature
+  workspaceName: string
+  startedByEmail: string
+  startedAt: string
+  finishedAt: string
+  outcome: MatchOutcome
+  fileCount: number
+  totalBytes: number
+  readMs: number | null
+  durationMs: number
+  /** Payroll items of the month, or receipts filed. */
+  items: number
+  /** Payroll proofs found sure, or receipts matched automatically. */
+  matched: number
+  /** Payroll proofs picked but not sure (0 for receipts). */
+  guessed: number
+  /** Payroll proofs with nothing found, or receipts left unmatched. */
+  missing: number
+  /** Files that could not be read (payroll), or receipts with nothing read from them. */
+  failed: number
+  /** Lines read from the run's bank statements (payroll only). */
+  bankLines: number
+}
+
+/** One day of the line graph (UTC): runs per feature, and the share of what was looked for that was matched. */
+export interface MatchStatDayDto {
+  /** YYYY-MM-DD */
+  day: string
+  runs: Record<MatchFeature, number>
+  /** matched / (matched + guessed + missing) that day, 0 to 1; null on a day with nothing to match. */
+  matchRate: number | null
+}
+
+/** GET /admin/match-stats?days=&feature= */
+export interface AdminMatchStatsDto {
+  days: number
+  feature: MatchFeature | null
+  series: MatchStatDayDto[]
+  /** The newest runs of the period, newest first, at most 200. */
+  rows: MatchStatRowDto[]
+  /** Every run of the period, not only the rows listed. */
+  totals: { runs: number; files: number; bytes: number; matched: number; lookedFor: number }
+}
+
 /** Body of POST /inbound-receipts/:id/file: where a person files an unmatched emailed receipt. */
 export interface FileInboundReceiptRequest {
   engagementId: string
@@ -1302,6 +1387,117 @@ export interface StatementMark {
 /** A line of a bank statement where a payroll item's amount appears. */
 export interface StatementLine extends StatementMark {
   text: string
+}
+
+/** A proof a payroll item needs: its timesheet, its payroll register, and evidence of payment (a participant's pay stub,
+ * a staff line's bank statement line). */
+export type PayrollSlot = 'timesheet' | 'register' | 'stub' | 'bank'
+
+/** The document kind each payroll slot is filled from. */
+export const PAYROLL_SLOT_KIND: Record<PayrollSlot, PayrollDocumentKind> = {
+  timesheet: 'timesheet',
+  register: 'payroll-register',
+  stub: 'paystub',
+  bank: 'bank-statement',
+}
+
+/**
+ * What can be highlighted on a payroll proof for one item (owner's decision, 2026-10-16): the person's name, the pay
+ * period's dates, the pay date, the amount, the item's whole row, or a bank transaction's date.
+ */
+export const HIGHLIGHT_FIELDS = ['name', 'payPeriod', 'payDate', 'amount', 'row', 'date'] as const
+export type HighlightField = (typeof HIGHLIGHT_FIELDS)[number]
+
+export const HIGHLIGHT_FIELD_LABELS: Record<HighlightField, string> = {
+  name: "The person's name",
+  payPeriod: 'The pay period',
+  payDate: 'The pay date',
+  amount: 'The amount',
+  row: "The item's whole row",
+  date: "The transaction's date",
+}
+
+/** The defaults until a platform admin changes them: what an auditor looks for on each proof. */
+export const DEFAULT_HIGHLIGHTS: Record<PayrollDocumentKind, HighlightField[]> = {
+  paystub: ['name', 'payPeriod', 'amount'],
+  timesheet: ['row', 'name', 'payPeriod'],
+  'payroll-register': ['payPeriod', 'payDate', 'amount'],
+  'bank-statement': ['date', 'amount'],
+}
+
+/** The highlights in force for one proof type, and who last set them (null: the defaults). */
+export interface HighlightSettingDto {
+  kind: PayrollDocumentKind
+  fields: HighlightField[]
+  changedByEmail: string | null
+  changedAt: string | null
+}
+
+/** One file of a payroll match run: staged from the zip, or (`staged: false`) a payroll document already on file. */
+export interface PayrollMatchFileDto {
+  id: string
+  kind: PayrollDocumentKind
+  fileName: string
+  pages: number
+  /** No text layer: nothing in it could be read, so it is matched by hand. */
+  scanned: boolean
+  /** Where the background job is with it: waiting, reading, read, or failed (then `error` says why). */
+  status: 'waiting' | 'reading' | 'read' | 'failed'
+  error: string | null
+  staged: boolean
+  personal: boolean
+}
+
+/** The best line one file has for one payroll item's slot, as the server read it. */
+export interface PayrollCandidate {
+  fileId: string
+  /** The line found, or null when the file fits by its dates alone. */
+  mark: StatementLine | null
+  /** The exact words highlighted for this item, as the platform's highlight settings ask. */
+  marks: StatementLine[]
+  /** Name and amount (or pay period and amount) on the file together: enough to save without a second look. */
+  sure: boolean
+  /** Higher fits better; 0 is a file of the right kind that shows nothing of this item. */
+  score: number
+  /** Why, in plain words. */
+  why: string
+}
+
+/** What the server found for one slot of one payroll item: every file that fits, best first, and its pick. */
+export interface PayrollSlotMatch {
+  target: 'expense' | 'wex'
+  id: string
+  slot: PayrollSlot
+  candidates: PayrollCandidate[]
+  /** The candidate Auto-Match chose (its fileId), or null when none fits or two fit equally. */
+  pick: string | null
+  why: string
+}
+
+/** How far the background job is with a run's files. */
+export interface PayrollMatchProgress {
+  total: number
+  read: number
+  failed: number
+}
+
+/** A payroll match run: the files and, for every open slot of every payroll item, what fits. */
+export interface PayrollMatchRunDto {
+  id: string
+  replace: boolean
+  expiresAt: string
+  files: PayrollMatchFileDto[]
+  slots: PayrollSlotMatch[]
+}
+
+/** Save: the proofs chosen, each a file of the run; the server works out its line and highlights, as Show draws them. */
+export interface PayrollMatchSaveInput {
+  links: {
+    target: 'expense' | 'wex'
+    id: string
+    slot: PayrollSlot
+    fileId: string
+  }[]
 }
 
 /** One bank statement searched for an amount. `scanned`: it has no text layer, so nothing could be searched. */

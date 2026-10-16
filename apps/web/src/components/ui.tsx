@@ -337,3 +337,12 @@ export function Stepper<S extends string>({ steps, current }: { steps: readonly 
     </ol>
   )
 }
+
+/** The full demo workspace's mark (as Learn Differently's): fictional data that shows every feature. */
+export function FullDemoChip() {
+  return (
+    <span className="ad-demo" title="Full demo: fictional data that shows every feature">
+      <span aria-hidden="true">⭐ </span>Full demo
+    </span>
+  )
+}

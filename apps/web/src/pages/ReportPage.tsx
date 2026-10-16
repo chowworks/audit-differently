@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   DOCUMENT_PURPOSE_LABELS,
   ALLOCATION_TYPE_LABELS,
@@ -7,7 +7,6 @@ import {
   PAYROLL_REPORT_LINES,
   REPORT_LINES,
   REPORT_LINE_LABELS,
-  type CheckDto,
   type DocumentKind,
   type DocumentPurpose,
   type ExpenseDto,
@@ -32,22 +31,14 @@ import {
   Field,
   Modal,
   Notice,
-  StatusChip,
-  Tile,
   inputClass,
-  severityTone,
 } from '@/components/ui'
 import { DocumentLink } from '@/components/DocumentLink'
 import { AttachModal } from '@/components/AttachModal'
-import { TagChips, TagFilter, TagPicker, TagsModal } from '@/components/Tags'
+import { TagPicker } from '@/components/Tags'
 import { ImportTransactionsModal } from '@/components/ImportTransactionsModal'
 import { MatchReceipts } from '@/components/MatchReceipts'
-import { PayrollProof } from '@/components/PayrollProof'
-// DESIGN EXPERIMENT (?layout=a|b|c): remove with report-layouts/ once one is chosen.
-import { ReviewSwitch } from '@/ReviewSwitch'
-import type { MonthLayoutProps } from './report-layouts/shared'
-import { LayoutA } from './report-layouts/LayoutA'
-import { LayoutB } from './report-layouts/LayoutB'
+import { FindLineModal, PayrollProof } from '@/components/PayrollProof'
 import { LayoutC } from './report-layouts/LayoutC'
 
 /** The document types that can stand as each kind of proof. */
@@ -58,14 +49,6 @@ const KINDS_FOR: Record<DocumentPurpose, DocumentKind[]> = {
   timesheet: ['timesheet'],
   register: ['payroll-register'],
   other: ['other'],
-}
-
-/** The proof each expense needs, by the line it reports on and how it was allocated. */
-function requiredPurposes(e: ExpenseDto): DocumentPurpose[] {
-  const base: DocumentPurpose[] = PAYROLL_REPORT_LINES.has(e.reportLine)
-    ? ['timesheet', 'register', 'payment']
-    : ['invoice', 'payment']
-  return e.allocationType === 'direct' ? base : [...base, 'allocation']
 }
 
 /**
@@ -93,8 +76,8 @@ export function ReportPage() {
   )
   const edit = (e: ExpenseDto) => setEditing({ kind: kindOf(e.reportLine), expense: e })
   const [importing, setImporting] = useState(false)
-  const [tagFilter, setTagFilter] = useState('')
-  const [tagging, setTagging] = useState<WexPaymentDto | null>(null)
+  const [editingWex, setEditingWex] = useState<WexPaymentDto | null>(null)
+  const [findingLine, setFindingLine] = useState<ExpenseDto | null>(null)
   const [attach, setAttach] = useState<Attach | null>(null)
   const [closing, setClosing] = useState<
     'approve' | 'send-back' | 'request-edits' | 'reopen' | null
@@ -103,8 +86,7 @@ export function ReportPage() {
   const [notice, setNotice] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null)
   const [highlight, setHighlight] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [params] = useSearchParams()
-  const layout = params.get('layout')
+  const navigate = useNavigate()
 
   useEffect(() => {
     if (!highlight) return
@@ -117,14 +99,6 @@ export function ReportPage() {
 
   if (error) return <ErrorNote message={error} />
   if (!r) return <Empty>Loading…</Empty>
-
-  const signed = r.signedCopy
-  const reopening = r.reopenings[0]
-  const blockers = r.checks.filter((k) => k.severity === 'blocker')
-  const attention = r.checks.filter((k) => k.severity === 'attention')
-  const infos = r.checks.filter((k) => k.severity === 'info')
-  const billed = r.lines.reduce((t, l) => t + l.billedThisPeriod, 0)
-  const expenses = tagFilter ? r.expenses.filter((e) => e.tags.includes(tagFilter)) : r.expenses
 
   const run = async (fn: () => Promise<ReportDetail>, ok?: string) => {
     setBusy(true)
@@ -178,475 +152,40 @@ export function ReportPage() {
     void run(() => api.del<ReportDetail>(`/expenses/${e.id}`), `${e.itemNumber} removed.`)
   }
 
-  const head = (
-    <>
-      <nav className="ad-crumbs" aria-label="Breadcrumb">
-        <Link to={`/workspaces/${r.engagement.workspace.id}`}>{r.engagement.workspace.name}</Link> /{' '}
-        <Link to={`/engagements/${r.engagement.id}`} className="ad-mono">
-          {r.engagement.number}
-        </Link>{' '}
-        / {periodLabel(r.period)}
-      </nav>
-      <div className="ad-head">
-        <div>
-          <h1 className="ad-h1 flex flex-wrap items-center gap-3">
-            {periodLabel(r.period)} <StatusChip status={r.status} />
-          </h1>
-          <p className="ad-sub">
-            {r.engagement.workspace.name} · <span className="ad-mono">{r.engagement.number}</span> ·{' '}
-            {r.engagement.name}
-          </p>
-          <p className="ad-sub !mt-0">
-            Due {shortDate(r.dueDate)}
-            {r.status !== 'draft' && r.authorizedAt && (
-              <>
-                {' '}
-                · month-end closing approved {shortDate(r.authorizedAt)}
-                {r.authorizedByName ? ` by ${r.authorizedByName}` : ''}
-              </>
-            )}
-            {r.submittedAt && (
-              <>
-                {' '}
-                · submitted {shortDate(r.submittedAt)} by {r.preparedByName}
-              </>
-            )}
-          </p>
-        </div>
-        <div className="ad-actions">
-          {signed ? (
-            <Chip tone="ok" title={signed.fileName}>
-              <DocumentLink doc={signed}>✓ signed copy</DocumentLink>
-            </Chip>
-          ) : r.can.attachSigned ? (
-            <Button onClick={() => setSigning(true)}>Attach signed copy</Button>
-          ) : null}
-          <Link to={`/reports/${r.id}/form`} className="ad-btn-quiet">
-            Funder's form
-          </Link>
-          <Button
-            onClick={() => void downloadBundle()}
-            disabled={busy}
-            title="The signed report, the ledger summary and the supporting records in one zip, to send with the invoice. Personal records are never in it."
-            data-testid="download-bundle"
-          >
-            Download the month's bundle
-          </Button>
-          {r.can.close && (
-            <Button
-              kind="primary"
-              onClick={() => setClosing('approve')}
-              disabled={busy || blockers.length > 0}
-              title={
-                blockers.length
-                  ? `${blockers.length} blocking check(s) first`
-                  : 'Record that the month-end closing is approved'
-              }
-              data-testid="approve-closing"
-            >
-              Approve month-end closing {blockers.length > 0 && `(${blockers.length} blocking)`}
-            </Button>
-          )}
-          {r.can.sendBack && (
-            <Button onClick={() => setClosing('send-back')} disabled={busy}>
-              Send back
-            </Button>
-          )}
-          {r.can.submit && (
-            <Button
-              kind="primary"
-              onClick={submit}
-              disabled={busy || blockers.length > 0}
-              title={
-                blockers.length
-                  ? `${blockers.length} blocking check(s) first`
-                  : 'Submit to the funder'
-              }
-              data-testid="submit"
-            >
-              Submit to the funder {blockers.length > 0 && `(${blockers.length} blocking)`}
-            </Button>
-          )}
-          {r.can.reopen && (
-            <Button
-              onClick={() => setClosing('reopen')}
-              disabled={busy}
-              title="Make it a draft again to correct it, then approve the closing and submit it again"
-              data-testid="reopen"
-            >
-              Reopen to correct
-            </Button>
-          )}
-        </div>
-      </div>
+  /** An empty month: nothing to submit, so an owner deletes it, after a yes, and lands on its engagement. */
+  const deleteMonth = async () => {
+    if (
+      !confirm(
+        `Delete ${periodLabel(r.period)}? It has no expenses, no payroll and no files, so there is nothing to submit. You can start it again later.`
+      )
+    )
+      return
+    setBusy(true)
+    try {
+      const { engagementId } = await api.del<{ engagementId: string }>(`/reports/${r.id}`)
+      navigate(`/engagements/${engagementId}`)
+    } catch (e) {
+      setNotice({ tone: 'danger', text: (e as Error).message })
+      setBusy(false)
+    }
+  }
 
-      {notice && <Notice tone={notice.tone}>{notice.text}</Notice>}
-      {r.status === 'draft' && r.sentBackReason && (
-        <Notice tone="danger">
-          <b>Month-end closing sent back:</b> {r.sentBackReason}
-        </Notice>
-      )}
-      {r.status === 'draft' && !r.sentBackReason && reopening && (
-        <Notice tone="danger">
-          <b>Reopened to correct:</b> {reopening.reason} Correct the month, approve its closing
-          again, attach the corrected signed copy and submit it again.
-        </Notice>
-      )}
-      {r.status === 'closed' && (
-        <Notice tone="ok">
-          <b>Month-end closing approved</b>
-          {r.authorizedByName ? ` by ${r.authorizedByName}` : ''}
-          {r.authorizedAt ? ` on ${shortDate(r.authorizedAt)}` : ''}.
-          {r.closingNote ? ` ${r.closingNote}` : ''} The ledger is locked: send it back to change
-          it. Next, sign the funder's form and submit it.
-        </Notice>
-      )}
+  const deletePayment = (w: WexPaymentDto) => {
+    if (
+      !confirm(
+        `Remove ${w.participantName}'s pay (${money(w.grossAmount)}, ${w.payPeriodStart} to ${w.payPeriodEnd}) from ${periodLabel(r.period)}? Its proof stays filed under the month.`
+      )
+    )
+      return
+    void run(() => api.del<ReportDetail>(`/wex/${w.id}`), `${w.participantName}'s pay removed.`)
+  }
 
-      <div className="ad-tiles">
-        <Tile
-          label="Billed this month"
-          value={money(billed)}
-          note={`${r.expenses.length} expenses`}
-        />
-        <Tile
-          label="Blocking"
-          value={blockers.length}
-          note={blockers.length ? 'Fix before the month-end closing' : 'Nothing blocks the closing'}
-          warn={blockers.length > 0}
-        />
-        <Tile
-          label="Needs attention"
-          value={attention.length}
-          note={attention.length ? 'Worth a look before the funder does' : 'Nothing flagged'}
-        />
-        <Tile
-          label="Due"
-          value={shortDate(r.dueDate)}
-          note={
-            r.submittedAt
-              ? `Submitted ${shortDate(r.submittedAt)}`
-              : `Day ${r.engagement.reportDueDay} of each month`
-          }
-        />
-      </div>
-    </>
-  )
-  const checksCard = (
-    <Card
-      className="lg:col-span-2"
-      title="Checks"
-      aside={
-        <>
-          {blockers.length > 0 ? (
-            <Chip tone="danger" fill>
-              {blockers.length} blocking
-            </Chip>
-          ) : (
-            <Chip tone="ok">nothing blocking</Chip>
-          )}
-          {attention.length > 0 && <Chip tone="warn">{attention.length} attention</Chip>}
-          {infos.length > 0 && <Chip tone="info">{infos.length} info</Chip>}
-        </>
-      }
-    >
-      {r.checks.length === 0 && <Empty>Every rule passes. Ready for the month-end closing.</Empty>}
-      <ul className="ad-checks" data-testid="checks">
-        {r.checks.map((k) => (
-          <CheckRow
-            key={k.id}
-            check={k}
-            onJump={k.expenseId ? () => setHighlight(k.expenseId!) : undefined}
-          />
-        ))}
-      </ul>
-    </Card>
-  )
-  const linesCard = (
-    <Card title="By report line" aside={<b className="text-ink">{money(billed)}</b>}>
-      <table className="ad-table">
-        <thead>
-          <tr>
-            <th>Line</th>
-            <th className="ad-num">This month</th>
-            <th className="ad-num">Left</th>
-          </tr>
-        </thead>
-        <tbody>
-          {r.lines
-            .filter((l) => l.budget > 0 || l.billedThisPeriod > 0 || l.previouslyBilled > 0)
-            .map((l) => (
-              <tr key={l.line}>
-                <td>{l.label}</td>
-                <td className="ad-num font-semibold">{money(l.billedThisPeriod)}</td>
-                <td className={`ad-num ${l.remaining < 0 ? 'font-bold text-danger' : 'text-soft'}`}>
-                  {money(l.remaining)}
-                </td>
-              </tr>
-            ))}
-        </tbody>
-      </table>
-      <p className="mt-3 text-xs text-soft">
-        Budget, previously billed, cumulative and remaining per line are on the{' '}
-        <Link to={`/reports/${r.id}/form`}>funder's form</Link>.
-      </p>
-    </Card>
-  )
-  const ledgerCard = (
-    <Card
-      className="mt-4"
-      title="Ledger"
-      aside={
-        <>
-          {r.expenses.length > 0 && (
-            <TagFilter
-              types={r.tagTypes}
-              target="expense"
-              value={tagFilter}
-              onChange={setTagFilter}
-            />
-          )}
-          {r.can.edit && <Button onClick={() => setImporting(true)}>Import transactions</Button>}
-          {r.can.edit && (
-            <Button
-              kind="primary"
-              onClick={() => setEditing({ kind: 'expense', expense: null })}
-              data-testid="add-expense"
-            >
-              + Add expense
-            </Button>
-          )}
-        </>
-      }
-    >
-      {r.expenses.length === 0 && <Empty>No expenses yet.</Empty>}
-      {r.expenses.length > 0 && expenses.length === 0 && (
-        <Empty>No expense this month has that tag.</Empty>
-      )}
-      {expenses.length > 0 && (
-        <div className="ad-tablewrap">
-          <table className="ad-table">
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>Vendor</th>
-                <th>Line</th>
-                <th className="ad-num">Total</th>
-                <th className="ad-num">Charged</th>
-                <th>Proof</th>
-                {r.can.edit && <th></th>}
-              </tr>
-            </thead>
-            <tbody>
-              {expenses.map((e) => {
-                const have = new Map(e.documents.map((d) => [d.purpose, d]))
-                const required = requiredPurposes(e)
-                const extra = e.documents.filter((d) => !required.includes(d.purpose))
-                const flagged = r.checks.some(
-                  (k) => k.expenseId === e.id && k.severity === 'blocker'
-                )
-                return (
-                  <tr
-                    key={e.id}
-                    id={`expense-${e.id}`}
-                    className={highlight === e.id ? 'ad-row-flash' : undefined}
-                    data-testid={`expense-${e.itemNumber}`}
-                  >
-                    <td className="whitespace-nowrap">
-                      <span className="ad-mono font-semibold">{e.itemNumber}</span>
-                      <span className="ad-table-sub">{e.date}</span>
-                    </td>
-                    <td>
-                      <span className="font-semibold">{e.vendor}</span>
-                      <span className="ad-table-sub">
-                        {e.memo}
-                        {e.account ? ` · ${e.account}` : ''}
-                      </span>
-                      <TagChips types={r.tagTypes} tags={e.tags} />
-                    </td>
-                    <td>
-                      {REPORT_LINE_LABELS[e.reportLine]}
-                      {e.allocationType !== 'direct' && (
-                        <span className="ad-table-sub">
-                          {ALLOCATION_TYPE_LABELS[e.allocationType]}
-                          {e.allocationNote ? `: ${e.allocationNote}` : ''}
-                        </span>
-                      )}
-                    </td>
-                    <td className="ad-num">{money(e.totalCost)}</td>
-                    <td className="ad-num font-semibold">{money(e.allocatedAmount)}</td>
-                    <td>
-                      <div className="flex flex-wrap gap-1">
-                        {required.map((purpose) => {
-                          const d = have.get(purpose)
-                          return d ? (
-                            <Chip key={purpose} tone="ok" title={d.document.fileName}>
-                              <DocumentLink doc={d.document}>
-                                ✓ {DOCUMENT_PURPOSE_LABELS[purpose]}
-                              </DocumentLink>
-                            </Chip>
-                          ) : r.can.edit ? (
-                            <button
-                              key={purpose}
-                              type="button"
-                              className="ad-chip ad-chip-missing"
-                              onClick={() => setAttach({ kind: 'expense', expense: e, purpose })}
-                              data-testid={`attach-${e.itemNumber}-${purpose}`}
-                            >
-                              + {DOCUMENT_PURPOSE_LABELS[purpose]}
-                            </button>
-                          ) : (
-                            <Chip key={purpose} tone="danger">
-                              missing {DOCUMENT_PURPOSE_LABELS[purpose]}
-                            </Chip>
-                          )
-                        })}
-                        {extra.map((d) => (
-                          <Chip key={d.document.id} tone="muted" title={d.document.fileName}>
-                            <DocumentLink doc={d.document}>
-                              {DOCUMENT_PURPOSE_LABELS[d.purpose]}
-                            </DocumentLink>
-                          </Chip>
-                        ))}
-                      </div>
-                      {flagged && (
-                        <span className="ad-table-sub mt-1 font-semibold !text-danger">
-                          Blocking: see checks
-                        </span>
-                      )}
-                    </td>
-                    {r.can.edit && (
-                      <td className="ad-num">
-                        <Button kind="ghost" onClick={() => edit(e)}>
-                          edit
-                        </Button>
-                        <Button
-                          kind="ghost"
-                          className="text-danger"
-                          onClick={() => deleteExpense(e)}
-                          data-testid={`delete-${e.itemNumber}`}
-                        >
-                          remove
-                        </Button>
-                      </td>
-                    )}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Card>
-  )
   const receiptsCard = (
     <MatchReceipts
       report={r}
       onChange={setData}
       onNotice={(text) => setNotice({ tone: 'ok', text })}
     />
-  )
-  const payrollCard = (
-    <Card
-      className="mt-4"
-      title="Payroll verification"
-      aside={
-        <span className="text-xs text-soft">
-          Timesheet, payroll register and evidence of payment for each participant paid. Pay stubs
-          are personal documents: download only, every read logged.
-        </span>
-      }
-    >
-      {r.wexPayments.length === 0 && <Empty>No participant was paid this month.</Empty>}
-      {r.wexPayments.length > 0 && (
-        <div className="ad-tablewrap">
-          <table className="ad-table">
-            <thead>
-              <tr>
-                <th>Participant</th>
-                <th>Pay period</th>
-                <th className="ad-num">Hours</th>
-                <th className="ad-num">Gross</th>
-                <th>Proof</th>
-                <th>Eligibility file</th>
-              </tr>
-            </thead>
-            <tbody>
-              {r.wexPayments.map((w) => {
-                const have = new Map(w.documents.map((d) => [d.purpose, d]))
-                const participant = r.participants.find((p) => p.id === w.participantId)
-                const items = new Set(participant?.documents.map((d) => d.purpose))
-                const missing = r.engagement.eligibilityItems
-                  .filter((i) => i.required)
-                  .filter((i) => !items.has(i.key))
-                return (
-                  <tr key={w.id}>
-                    <td>
-                      <span className="font-semibold">{w.participantName}</span>
-                      <span className="ad-table-sub ad-mono">{w.participantNumber}</span>
-                      <TagChips types={r.tagTypes} tags={w.tags} />
-                      {r.can.edit && (
-                        <Button size="sm" kind="ghost" onClick={() => setTagging(w)}>
-                          tags
-                        </Button>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap">
-                      {w.payPeriodStart} to {w.payPeriodEnd}
-                    </td>
-                    <td className="ad-num">{w.hours ?? '—'}</td>
-                    <td className="ad-num font-semibold">{money(w.grossAmount)}</td>
-                    <td>
-                      <div className="flex flex-wrap gap-1">
-                        {(['timesheet', 'register', 'payment'] as DocumentPurpose[]).map(
-                          (purpose) => {
-                            const d = have.get(purpose)
-                            return d ? (
-                              <Chip key={purpose} tone="ok">
-                                <DocumentLink doc={d.document}>
-                                  ✓ {DOCUMENT_PURPOSE_LABELS[purpose]}
-                                </DocumentLink>
-                              </Chip>
-                            ) : r.can.edit ? (
-                              <button
-                                key={purpose}
-                                type="button"
-                                className="ad-chip ad-chip-missing"
-                                onClick={() => setAttach({ kind: 'wex', payment: w, purpose })}
-                              >
-                                + {DOCUMENT_PURPOSE_LABELS[purpose]}
-                              </button>
-                            ) : (
-                              <Chip key={purpose} tone="danger">
-                                missing {DOCUMENT_PURPOSE_LABELS[purpose]}
-                              </Chip>
-                            )
-                          }
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      {missing.length === 0 ? (
-                        <Chip tone="ok">complete</Chip>
-                      ) : (
-                        <Chip tone={items.has('self-attestation') ? 'info' : 'warn'}>
-                          {missing.length} missing
-                        </Chip>
-                      )}{' '}
-                      <Link
-                        to={`/engagements/${r.engagement.id}#participants`}
-                        className="text-xs font-semibold"
-                      >
-                        file
-                      </Link>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Card>
   )
   const payrollProofCard = (
     <PayrollProof
@@ -689,16 +228,47 @@ export function ReportPage() {
           }}
         />
       )}
-      {tagging && (
-        <TagsModal
-          title={`Tags for ${tagging.participantName}'s pay, ${tagging.payPeriodStart} to ${tagging.payPeriodEnd}`}
-          types={r.tagTypes}
-          target="payroll"
-          tags={tagging.tags}
-          onClose={() => setTagging(null)}
-          onSave={async (tags) => {
-            setData(await api.patch<ReportDetail>(`/wex/${tagging.id}/tags`, { tags }))
-            setTagging(null)
+      {editingWex && (
+        <Modal
+          title={`Edit ${editingWex.participantName}'s pay`}
+          onClose={() => setEditingWex(null)}
+        >
+          <WexForm
+            participants={r.participants}
+            period={r.period}
+            tagTypes={r.tagTypes}
+            initial={{
+              participantId: editingWex.participantId,
+              payPeriodStart: editingWex.payPeriodStart.slice(0, 10),
+              payPeriodEnd: editingWex.payPeriodEnd.slice(0, 10),
+              hours: editingWex.hours,
+              grossAmount: editingWex.grossAmount,
+              tags: editingWex.tags,
+            }}
+            onClose={() => setEditingWex(null)}
+            onSave={async (input) => {
+              setData(await api.patch<ReportDetail>(`/wex/${editingWex.id}`, input))
+              setEditingWex(null)
+              setNotice({ tone: 'ok', text: `${editingWex.participantName}'s pay changed.` })
+            }}
+          />
+        </Modal>
+      )}
+      {findingLine && (
+        <FindLineModal
+          item={{
+            target: 'expense',
+            id: findingLine.id,
+            title: `${findingLine.itemNumber} ${findingLine.vendor}`,
+          }}
+          onClose={() => setFindingLine(null)}
+          onLinked={(report) => {
+            setData(report)
+            setNotice({
+              tone: 'ok',
+              text: `Marked the bank statement line for ${findingLine.itemNumber}.`,
+            })
+            setFindingLine(null)
           }}
         />
       )}
@@ -815,106 +385,37 @@ export function ReportPage() {
     </>
   )
 
-  // DESIGN EXPERIMENT (?layout=a|b|c): delete this block, report-layouts/ and the switch once one is chosen.
-  const switcher = (
-    <ReviewSwitch
-      param="layout"
-      label="Month layout"
-      current={layout && LAYOUTS[layout] ? layout : 'now'}
-      options={[
-        { key: 'now', label: 'Now' },
-        { key: 'a', label: 'A · Stepper' },
-        { key: 'b', label: 'B · Checklist' },
-        { key: 'c', label: 'C · Your design' },
-      ]}
-    />
-  )
-  const Layout = layout ? LAYOUTS[layout] : undefined
-  if (Layout)
-    return (
-      <>
-        <Layout
-          r={r}
-          busy={busy}
-          notice={notice && <Notice tone={notice.tone}>{notice.text}</Notice>}
-          highlight={highlight}
-          sections={{
-            checks: checksCard,
-            lines: linesCard,
-            ledger: ledgerCard,
-            receipts: receiptsCard,
-            payroll: payrollCard,
-            payrollProof: payrollProofCard,
-            earlier,
-          }}
-          act={{
-            addExpense: () => setEditing({ kind: 'expense', expense: null }),
-            addPayroll: () => setEditing({ kind: 'payroll', expense: null }),
-            editExpense: edit,
-            importTransactions: () => setImporting(true),
-            attach: (expense, purpose) => setAttach({ kind: 'expense', expense, purpose }),
-            approve: () => setClosing('approve'),
-            sendBack: () => setClosing('send-back'),
-            requestEdits: () => setClosing('request-edits'),
-            reopen: () => setClosing('reopen'),
-            attachSigned: () => setSigning(true),
-            submit: () => void submit(),
-            downloadBundle: () => void downloadBundle(),
-            deleteExpense,
-            attachPayment: (payment, purpose) => setAttach({ kind: 'wex', payment, purpose }),
-            tagPayment: (w) => setTagging(w),
-          }}
-        />
-        {modals}
-        {switcher}
-      </>
-    )
-
   return (
     <>
-      {head}
-      <div className="grid gap-4 lg:grid-cols-3">
-        {checksCard}
-        {linesCard}
-      </div>
-      {ledgerCard}
-      {receiptsCard}
-      {payrollCard}
-      {payrollProofCard}
-      {earlier}
+      <LayoutC
+        r={r}
+        busy={busy}
+        notice={notice && <Notice tone={notice.tone}>{notice.text}</Notice>}
+        highlight={highlight}
+        sections={{ receipts: receiptsCard, payrollProof: payrollProofCard, earlier }}
+        act={{
+          addExpense: () => setEditing({ kind: 'expense', expense: null }),
+          addPayroll: () => setEditing({ kind: 'payroll', expense: null }),
+          editExpense: edit,
+          importTransactions: () => setImporting(true),
+          attach: (expense, purpose) => setAttach({ kind: 'expense', expense, purpose }),
+          approve: () => setClosing('approve'),
+          sendBack: () => setClosing('send-back'),
+          requestEdits: () => setClosing('request-edits'),
+          reopen: () => setClosing('reopen'),
+          attachSigned: () => setSigning(true),
+          submit: () => void submit(),
+          downloadBundle: () => void downloadBundle(),
+          deleteExpense,
+          attachPayment: (payment, purpose) => setAttach({ kind: 'wex', payment, purpose }),
+          editPayment: (w) => setEditingWex(w),
+          deletePayment,
+          findBankLine: (e) => setFindingLine(e),
+          deleteMonth: () => void deleteMonth(),
+        }}
+      />
       {modals}
-      {switcher}
     </>
-  )
-}
-
-/** DESIGN EXPERIMENT: the layouts under review, by their ?layout= key. */
-const LAYOUTS: Record<string, (p: MonthLayoutProps) => React.JSX.Element> = {
-  a: LayoutA,
-  b: LayoutB,
-  c: LayoutC,
-}
-
-function CheckRow({ check, onJump }: { check: CheckDto; onJump?: () => void }) {
-  return (
-    <li>
-      <Chip tone={severityTone[check.severity]} fill={check.severity === 'blocker'}>
-        {check.severity}
-      </Chip>
-      <div className="flex-1">
-        <span>{check.message}</span>{' '}
-        {onJump && (
-          <button
-            type="button"
-            className="text-xs font-semibold text-accent hover:underline"
-            onClick={onJump}
-          >
-            show
-          </button>
-        )}
-        <span className="ad-mono ml-2 text-xs text-soft">{check.code}</span>
-      </div>
-    </li>
   )
 }
 
@@ -1229,23 +730,28 @@ function WexForm({
   participants,
   period,
   tagTypes,
+  initial,
   onClose,
   onSave,
 }: {
   participants: ParticipantDto[]
   period: string
   tagTypes: TagType[]
+  /** A payment being changed; none for a new one. */
+  initial?: WexPaymentInput
   onClose: () => void
   onSave: (input: WexPaymentInput) => Promise<void>
 }) {
-  const [form, setForm] = useState<WexPaymentInput>({
-    participantId: '',
-    payPeriodStart: `${period}-01`,
-    payPeriodEnd: `${period}-15`,
-    hours: null,
-    grossAmount: 0,
-    tags: [],
-  })
+  const [form, setForm] = useState<WexPaymentInput>(
+    initial ?? {
+      participantId: '',
+      payPeriodStart: `${period}-01`,
+      payPeriodEnd: `${period}-15`,
+      hours: null,
+      grossAmount: 0,
+      tags: [],
+    }
+  )
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const set = <K extends keyof WexPaymentInput>(k: K, v: WexPaymentInput[K]) =>
@@ -1357,15 +863,16 @@ function WexForm({
         </div>
       </fieldset>
       <p className="ad-entry-next">
-        <span className="ad-req">*</span> Required. Next: attach the timesheet, payroll register and
-        pay stub or deposit advice on its row.
+        <span className="ad-req">*</span> Required.
+        {!initial &&
+          ' Next: attach the timesheet, payroll register and pay stub or deposit advice on its row.'}
       </p>
       <div className="flex justify-end gap-2">
         <Button type="button" onClick={onClose}>
           Cancel
         </Button>
         <Button type="submit" kind="primary" disabled={busy || !participants.length}>
-          Add payroll
+          {initial ? 'Save' : 'Add payroll'}
         </Button>
       </div>
     </form>

@@ -103,6 +103,11 @@ const ADMIN = [
   // Email administration: emailed receipts that reached no workspace, or were refused or failed. Metadata only.
   'GET /api/admin/inbound',
   'POST /api/admin/inbound/:id/run-again',
+  // Highlights: what is highlighted on each payroll proof type, for the whole system.
+  'GET /api/admin/highlights',
+  'PUT /api/admin/highlights/:kind',
+  // Matching statistics: counts, sizes and durations of finished match runs, across workspaces.
+  'GET /api/admin/match-stats',
 ]
 
 /** Every other route. A member of another workspace gets 404 from each; the role checks are in the specs beside each service. */
@@ -149,11 +154,13 @@ const GATED = [
   'POST /api/expenses/:id/documents',
   'DELETE /api/expenses/:id/documents/:documentId',
   'POST /api/reports/:id/wex',
-  'PATCH /api/wex/:id/tags',
+  'PATCH /api/wex/:id',
+  'DELETE /api/wex/:id',
   'POST /api/wex/:id/documents',
   'POST /api/reports/:id/closing',
   'POST /api/reports/:id/send-back',
   'POST /api/reports/:id/request-edits',
+  'DELETE /api/reports/:id',
   'POST /api/reports/:id/reopen',
   'POST /api/reports/:id/submit',
   'POST /api/reports/:id/receipts',
@@ -169,6 +176,16 @@ const GATED = [
   'GET /api/payroll/:target/:id/lines',
   'GET /api/payroll/statements/:documentId/file',
   'PUT /api/payroll/:target/:id/statement',
+  'GET /api/payroll/:target/:id/proof/:documentId',
+  'GET /api/payroll-match/:runId/files/:fileId/copy',
+  'POST /api/reports/:id/payroll-match',
+  'GET /api/reports/:id/payroll-match',
+  'GET /api/payroll-match/:runId/progress',
+  'POST /api/payroll-match/:runId/files',
+  'GET /api/payroll-match/:runId',
+  'GET /api/payroll-match/:runId/files/:fileId',
+  'POST /api/payroll-match/:runId/save',
+  'DELETE /api/payroll-match/:runId',
   'POST /api/documents',
   'GET /api/documents/of-workspace/:workspaceId',
   'DELETE /api/documents/:id',

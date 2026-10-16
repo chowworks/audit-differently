@@ -583,57 +583,193 @@
 
       <article
         class="entry"
-        id="request-edits"
-        data-status="review"
-        data-short="Request edits on a month"
-        data-summary="The month's page shows the current step's buttons in one row under its steps, and owners and bookkeepers can ask for edits on a month with a comment."
+        id="match-stats"
+        data-status="shipped"
+        data-short="Matching statistics for admins"
+        data-summary="Platform admins see how often the payroll and receipt matchers run, how big the uploads are, how long they take and how much they match."
       >
         <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-16">Oct 16, 2026</time>
         </div>
-        <h2>Request edits on a month</h2>
+        <h2>Matching statistics for admins</h2>
         <p>
-          Once a month's records are in and nothing blocks it, a row under its steps shows what to
-          do now: approve the month-end closing or request edits, then attach the signed copy, then
-          send it. A sent month says when it was sent, with Reopen to correct.
+          Admin tools has a new Matching statistics page. It shows, for every workspace, how often
+          payroll matches, receipt uploads and emailed receipts run, how big they are, how long they
+          take and how much they match.
         </p>
         <p>
-          Request edits asks for a comment. On a draft, the month stays a draft and the comment
-          shows on it until its closing is approved. On a month whose closing is approved, it sends
-          the closing back, as Send back did, with the comment as the reason.
-        </p>
-        <p>
-          The note at the top of the month now says in one sentence who did what, when and why, and
-          what to do next.
+          A line graph shows runs and the match rate by day, and a table lists each run. Filter by
+          period and feature.
         </p>
         <div class="know">
           <strong>Good to know</strong>
           <ul>
-            <li>Auditors see the sentence and no buttons.</li>
             <li>
-              Each request adds one line to the activity in your name. The comment itself is not
-              copied into it.
+              Only counts, sizes and times are kept: never a file's name, a person's or vendor's
+              name, or an amount.
             </li>
+            <li>Nothing changes for bookkeepers or owners: the matchers work as before.</li>
           </ul>
         </div>
       </article>
 
       <article
         class="entry"
-        id="admin-tools-tiles"
-        data-status="review"
-        data-short="Admin tools, as tiles"
-        data-summary="Admin tools opens on one tile per tool (Manage admins, Manage workspaces, Email administration), and the top bar's Manage workspaces is now My workspaces."
+        id="month-page"
+        data-status="shipped"
+        data-short="A clearer month page"
+        data-summary="The month page opens on what blocks the month, what needs a look and when it is due, then the budget, the month's steps, and two grids for expenses and payroll with their proof."
       >
         <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-16">Oct 16, 2026</time>
+        </div>
+        <h2>A clearer month page</h2>
+        <p>
+          The month page now has one layout. Tiles at the top show what is blocking the month, what
+          needs your attention and when it is due. A budget box shows where spending stands, and a
+          progress bar walks you through the month step by step.
+        </p>
+        <p>
+          Below, two grids, Expenses &amp; Proof and Payroll &amp; Proof, list every line with its
+          proof. Search and filter them to find what still needs work.
+        </p>
+      </article>
+      <article
+        class="entry"
+        id="payroll-upload"
+        data-status="shipped"
+        data-short="Upload and match a month's payroll"
+        data-summary="Upload a month's payroll as one zip; Auto-Match finds each item's timesheet, register and evidence of payment, you match the rest, then Save."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-16">Oct 16, 2026</time>
+        </div>
+        <h2>Upload and match a month's payroll</h2>
+        <p>
+          Put the month's payroll in one zip with four folders: timesheets, payroll registers, pay
+          stubs and bank statements. A sample zip shows the layout. The files are read in the
+          background, so you can close the window and come back.
+        </p>
+        <p>
+          Auto-Match then finds each payroll item's timesheet, register and evidence of payment by
+          the person's name, pay and pay period inside the files. Anything it can't match, you match
+          by hand. Nothing is saved until you press Save.
+        </p>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>
+              You can choose to replace the month's earlier payroll files with the new upload.
+            </li>
+            <li>
+              Staff payments whose bank line wasn't found are listed after matching. Find the line
+              or draw a box around it, now or later, one row at a time from the month page.
+            </li>
+          </ul>
+        </div>
+      </article>
+      <article
+        class="entry"
+        id="highlighted-proof"
+        data-status="shipped"
+        data-short="Highlighted proof for every payroll item"
+        data-summary="The words that prove each payroll item are highlighted, and each person's copy of a shared register or bank statement shows only their own highlights."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-16">Oct 16, 2026</time>
+        </div>
+        <h2>Highlighted proof for every payroll item</h2>
+        <p>
+          Each payroll item's proof now has the exact words that prove it highlighted: the name, pay
+          period, pay date and amount, the person's row on the register, and the bank transaction's
+          date and amount.
+        </p>
+        <p>
+          A shared file, such as a register or a bank statement, gets one copy per person with only
+          that person's highlights, and any highlights already in the file removed. Each copy stands
+          on its own for the auditor, on screen, in the month's bundle and in the audit package.
+        </p>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>
+              Platform admins choose what is highlighted for each kind of proof (Admin tools,
+              Payroll proof highlighting).
+            </li>
+          </ul>
+        </div>
+      </article>
+      <article
+        class="entry"
+        id="payroll-items"
+        data-status="shipped"
+        data-short="Payroll items and their checks"
+        data-summary="Add payroll for staff, a payroll provider or a participant; a participant's pay needs its timesheet, register and pay stub before the month can close."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-16">Oct 16, 2026</time>
+        </div>
+        <h2>Payroll items and their checks</h2>
+        <p>
+          Add payroll for a staff member or a payroll provider, or a participant's work experience
+          pay. Participant pay rows can now be edited and removed.
+        </p>
+        <p>
+          A participant's pay needs its timesheet, payroll register and pay stub before the month
+          can close. A proof that doesn't show the item's amount or pay period is flagged for you to
+          look at.
+        </p>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>
+              Bookkeepers can now open pay stubs. Other personal records stay with owners and
+              auditors.
+            </li>
+            <li>
+              The eligibility file reminder is no longer in the monthly checks. It lives with the
+              participant list in step 5.
+            </li>
+          </ul>
+        </div>
+      </article>
+      <article
+        class="entry"
+        id="empty-months"
+        data-status="shipped"
+        data-short="Delete an empty month"
+        data-summary="An owner can delete a month with nothing in it, and the funder's form follows the funder's own wording."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-16">Oct 16, 2026</time>
+        </div>
+        <h2>Delete an empty month</h2>
+        <p>
+          Started a month by mistake? If it has nothing in it (no expenses, payroll or files), an
+          owner can now delete it.
+        </p>
+        <p>
+          The funder's form page now uses the funder's own wording: its headings, line numbers and
+          review checklist.
+        </p>
+      </article>
+      <article
+        class="entry"
+        id="admin-tools-tiles"
+        data-status="shipped"
+        data-short="Admin tools, as tiles"
+        data-summary="Admin tools opens on one tile per tool (Manage admins, Manage workspaces, Email administration, Payroll proof highlighting), and the top bar's Manage workspaces is now My workspaces."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-16">Oct 16, 2026</time>
         </div>
         <h2>Admin tools, as tiles</h2>
         <p>
           For platform admins, Admin tools in the account menu now opens on one tile per tool:
-          Manage admins, Manage workspaces and Email administration. Each tool has its own page,
-          with a breadcrumb back to Admin tools. Manage admins and Manage workspaces do what the
-          single Admin tools page did before.
+          Manage admins, Manage workspaces, Email administration and Payroll proof highlighting.
+          Each tool has its own page, with a breadcrumb back to Admin tools. In Manage workspaces,
+          an admin sets up a workspace for a customer with its first owner, and manages its people
+          and lists; they never see its records.
         </p>
         <p>
           Email administration is new. It lists the emailed receipts that reached no workspace (an
@@ -665,202 +801,15 @@
           </ul>
         </div>
       </article>
-
-      <article
-        class="entry"
-        id="email-in-receipts"
-        data-status="review"
-        data-short="Email in your receipts"
-        data-summary="Each workspace gets one receipts address; owners and bookkeepers email a receipt there and it is filed into the right month and matched, once the email provider is set up."
-      >
-        <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
-        </div>
-        <h2>Email in your receipts</h2>
-        <p>
-          It is not working yet: it needs the email provider set up for this app first. Until then,
-          the receipts inbox on the workspace page says "not set up yet" and nothing is received.
-        </p>
-        <p>
-          Once it is set up, each workspace has one receipts address that does not change. An owner
-          picks it once under Settings. Owners and bookkeepers email a receipt there from their own
-          address, with the engagement's code in the subject (set it in the engagement's Details).
-          Each PDF, PNG or JPG attachment is filed into the month of the date on the receipt, or the
-          day the email arrived, and matched to its expense when there is one clear match, just as
-          if you had uploaded it yourself.
-        </p>
-        <p>
-          The receipts inbox on the workspace page lists every email your owners and bookkeepers
-          sent and what became of it. One that could not be placed (no code and more than one active
-          engagement, or a closed month) waits there for you: choose the engagement and month and
-          file it. One that failed can be run again.
-        </p>
-        <div class="know">
-          <strong>Good to know</strong>
-          <ul>
-            <li>
-              Only owners and bookkeepers of the workspace can send in receipts, from the address
-              they sign in with. Email from anyone else is refused and not listed, and so is email
-              whose sender cannot be verified.
-            </li>
-            <li>
-              With no code in the subject, a receipt goes to the workspace's only active engagement.
-            </li>
-            <li>
-              Up to 10 attachments of 10 MB each per email; anything else is listed as skipped.
-              Pictures in the body of an email, such as a logo in a signature, are not filed.
-            </li>
-            <li>
-              An emailed receipt is read from its PDF's text. It is read by AI only when an owner
-              turns on "Read emailed receipts with AI" on the receipts address card; it starts off.
-            </li>
-            <li>Nobody gets an email back, and no document is ever sent out by email.</li>
-          </ul>
-        </div>
-        <div class="shots">
-          <figure>
-            <a href="../screenshots/email-receipts/01-inbox.jpg"
-              ><img
-                src="../screenshots/email-receipts/01-inbox.jpg"
-                alt="The receipts inbox before the email provider is connected"
-            /></a>
-          </figure>
-        </div>
-      </article>
-
-      <article
-        class="entry"
-        id="month-bundle"
-        data-status="review"
-        data-short="The month's bundle"
-        data-summary="Download everything that goes with a month's invoice as one zip from the month's page: one PDF with the signed report, a ledger summary and every supporting record in ledger order, plus the spreadsheets and an index."
-      >
-        <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
-        </div>
-        <h2>The month's bundle</h2>
-        <p>
-          A month's page has a new button, "Download the month's bundle". It gives you one zip to
-          send with the invoice. Inside is Bundle.pdf, one PDF in this order: the signed monthly
-          report (or a cover page saying it is not on file yet), a ledger summary with every line
-          and the totals by report line, each line's supporting records in ledger order, then the
-          payroll proof, with each marked payroll line highlighted on its bank statement. Each
-          record starts with a short page naming the item it supports.
-        </p>
-        <p>
-          Spreadsheets and Word files can't go into a PDF, so they sit beside it in a Supporting
-          files folder, named by item number. Index.csv lists every record, the item it supports and
-          the pages it is on. A README says the month's status, who approved the month-end closing
-          and when, and whether it has been submitted.
-        </p>
-        <div class="know">
-          <strong>Good to know</strong>
-          <ul>
-            <li>
-              Only people in the workspace can download it, from the month's page. There is no link
-              to share.
-            </li>
-            <li>
-              Personal records (pay stubs, eligibility records) are never in the bundle, whoever
-              downloads it: the funder did not ask for them. The README says how many were left out.
-            </li>
-            <li>
-              It works for a draft month too, so you can check it before the closing is approved.
-              Every download is in the access log.
-            </li>
-            <li>
-              One bundle holds up to 100 MB of records. For a bigger month, download the audit
-              package from the engagement page.
-            </li>
-          </ul>
-        </div>
-        <div class="shots">
-          <figure>
-            <a href="../screenshots/month-bundle/01-download-button.jpg"
-              ><img
-                src="../screenshots/month-bundle/01-download-button.jpg"
-                alt="The month page with Download the month's bundle"
-            /></a>
-          </figure>
-        </div>
-      </article>
-
-      <article
-        class="entry"
-        id="payroll-proof"
-        data-status="review"
-        data-short="Payroll proof with the line highlighted"
-        data-summary="Upload a month's bank statements, payroll registers and pay stubs at once, then link each payroll item to the bank statement line it was paid on, highlighted on screen and in the audit package."
-      >
-        <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
-        </div>
-        <h2>Payroll proof with the line highlighted</h2>
-        <p>
-          A month's page has a new Payroll proof section. Upload the month's bank statements,
-          payroll registers and pay stubs all at once, saying for each file what it is. Then, for
-          each payroll line and each work-experience payment, choose "Find the line": the month's
-          bank statements are searched for its amount, and you pick the line that pays it.
-        </p>
-        <p>
-          The statement opens on the page with that line highlighted. Confirm, and the statement
-          becomes the item's evidence of payment, with the line marked. "Show" opens it again with
-          the line highlighted, and the audit package gives the auditor a copy of each statement
-          with the marked lines highlighted. The statement you uploaded stays as it was. A
-          password-protected statement cannot be marked: its copy goes in as uploaded, and the
-          package says which page and where each marked line is.
-        </p>
-        <div class="know">
-          <strong>Good to know</strong>
-          <ul>
-            <li>
-              Download statements from your bank as PDFs. A scanned statement can't be searched for
-              its lines, and the page says so: draw the box around the line by hand instead.
-            </li>
-            <li>
-              Pay stubs are personal: stored as uploaded, never read or previewed, and opened by
-              owners and auditors only, as before.
-            </li>
-            <li>
-              Every upload and every marked line is in the activity log. A closed or submitted month
-              takes no uploads or links.
-            </li>
-          </ul>
-        </div>
-        <div class="shots">
-          <figure>
-            <a href="../screenshots/payroll-proof/01-bulk-upload.jpg"
-              ><img
-                src="../screenshots/payroll-proof/01-bulk-upload.jpg"
-                alt="Uploading a month of bank statements at once"
-            /></a>
-          </figure>
-          <figure>
-            <a href="../screenshots/payroll-proof/02-find-the-line.jpg"
-              ><img
-                src="../screenshots/payroll-proof/02-find-the-line.jpg"
-                alt="The payroll line found and highlighted on the bank statement, and the warning for a scanned statement"
-            /></a>
-          </figure>
-          <figure>
-            <a href="../screenshots/payroll-proof/03-linked.jpg"
-              ><img
-                src="../screenshots/payroll-proof/03-linked.jpg"
-                alt="A payroll item with its bank statement line marked"
-            /></a>
-          </figure>
-        </div>
-      </article>
-
       <article
         class="entry"
         id="match-receipts"
-        data-status="review"
+        data-status="shipped"
         data-short="Match receipts"
         data-summary="Upload a month's receipts all at once: each is read for its amount, date and vendor, matched to its expense when only one fits, and the rest wait for you to match, correct or set aside."
       >
         <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-16">Oct 16, 2026</time>
         </div>
         <h2>Match receipts</h2>
         <p>
@@ -908,16 +857,15 @@
           </figure>
         </div>
       </article>
-
       <article
         class="entry"
         id="import-transactions"
-        data-status="review"
+        data-status="shipped"
         data-short="Import transactions"
         data-summary="Bring a month's transactions in from a QuickBooks export or another CSV or Excel file: say which column is which once, map its categories to your budget lines, check the preview, and each row becomes an expense line in the month of its date."
       >
         <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-16">Oct 16, 2026</time>
         </div>
         <h2>Import transactions</h2>
         <p>
@@ -926,11 +874,11 @@
           choose "Import transactions" on the engagement's ledger step or on a month's page.
         </p>
         <p>
-          The import guesses which column is the date, the payee, the amount and the rest; you check
-          each one. Next, choose the budget line each category of the file is charged to, or skip
-          its rows. The preview shows every row: the month it goes to, or why it stays out. Each
-          imported row becomes an expense line in the month of its date, across several months if
-          the file spans them, and goes through the same checks as one you type.
+          The import matches the file's columns to the fields of the expense form; you check each
+          one. Next, choose the budget line each category of the file is charged to, all at once, or
+          skip its rows. The preview shows every row: the month it goes to, or why it stays out.
+          Each imported row becomes an expense line in the month of its date, across several months
+          if the file spans them, and goes through the same checks as one you type.
         </p>
         <div class="know">
           <strong>Good to know</strong>
@@ -959,6 +907,7 @@
               This is a file you export, not a connection to QuickBooks: nothing changes in your
               accounting system.
             </li>
+            <li>No accounting system? Download the sample file, fill it in and import it.</li>
           </ul>
         </div>
         <div class="shots">
@@ -990,16 +939,164 @@
           </figure>
         </div>
       </article>
-
+      <article
+        class="entry"
+        id="email-in-receipts"
+        data-status="shipped"
+        data-short="Email in your receipts"
+        data-summary="Each workspace gets one receipts address; owners and bookkeepers email a receipt there and it is filed into the right month and matched."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-16">Oct 16, 2026</time>
+        </div>
+        <h2>Email in your receipts</h2>
+        <p>
+          Each workspace has one receipts address that does not change. An owner picks it once under
+          Settings. Owners and bookkeepers email a receipt there from their own address, with the
+          engagement's code in the subject (set it in the engagement's Details). Each PDF, PNG or
+          JPG attachment is filed into the month of the date on the receipt, or the day the email
+          arrived, and matched to its expense when there is one clear match, just as if you had
+          uploaded it yourself.
+        </p>
+        <p>
+          The receipts inbox on the workspace page lists every email your owners and bookkeepers
+          sent and what became of it. One that could not be placed (no code and more than one active
+          engagement, or a closed month) waits there for you: choose the engagement and month and
+          file it. One that failed can be run again.
+        </p>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>
+              Only owners and bookkeepers of the workspace can send in receipts, from the address
+              they sign in with. Email from anyone else is refused and not listed, and so is email
+              whose sender cannot be verified.
+            </li>
+            <li>
+              With no code in the subject, a receipt goes to the workspace's only active engagement.
+            </li>
+            <li>
+              Up to 10 attachments of 10 MB each per email; anything else is listed as skipped.
+              Pictures in the body of an email, such as a logo in a signature, are not filed.
+            </li>
+            <li>
+              An emailed receipt is read from its PDF's text. It is read by AI only when an owner
+              turns on "Read emailed receipts with AI" on the receipts address card; it starts off.
+            </li>
+            <li>Nobody gets an email back, and no document is ever sent out by email.</li>
+          </ul>
+        </div>
+        <div class="shots">
+          <figure>
+            <a href="../screenshots/email-receipts/01-inbox.jpg"
+              ><img
+                src="../screenshots/email-receipts/01-inbox.jpg"
+                alt="The receipts inbox before the email provider is connected"
+            /></a>
+          </figure>
+        </div>
+      </article>
+      <article
+        class="entry"
+        id="request-edits"
+        data-status="shipped"
+        data-short="Request edits on a month"
+        data-summary="The month's page shows the current step's buttons in one row under its steps, and owners and bookkeepers can ask for edits on a month with a comment."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-15">Oct 15, 2026</time>
+        </div>
+        <h2>Request edits on a month</h2>
+        <p>
+          Once a month's records are in and nothing blocks it, a row under its steps shows what to
+          do now: approve the month-end closing or request edits, then attach the signed copy, then
+          send it. A sent month says when it was sent, with Reopen to correct.
+        </p>
+        <p>
+          Request edits asks for a comment. On a draft, the month stays a draft and the comment
+          shows on it until its closing is approved. On a month whose closing is approved, it sends
+          the closing back, as Send back did, with the comment as the reason.
+        </p>
+        <p>
+          The note at the top of the month now says in one sentence who did what, when and why, and
+          what to do next.
+        </p>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>Auditors see the sentence and no buttons.</li>
+            <li>
+              Each request adds one line to the activity in your name. The comment itself is not
+              copied into it.
+            </li>
+          </ul>
+        </div>
+      </article>
+      <article
+        class="entry"
+        id="month-bundle"
+        data-status="shipped"
+        data-short="The month's bundle"
+        data-summary="Download everything that goes with a month's invoice as one zip from the month's page: one PDF with the signed report, a ledger summary and every supporting record in ledger order, plus the spreadsheets and an index."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-15">Oct 15, 2026</time>
+        </div>
+        <h2>The month's bundle</h2>
+        <p>
+          A month's page has a new button, "Download the month's bundle". It gives you one zip to
+          send with the invoice. Inside is Bundle.pdf, one PDF in this order: the signed monthly
+          report (or a cover page saying it is not on file yet), a ledger summary with every line
+          and the totals by report line, each line's supporting records in ledger order, then the
+          payroll proof, with each marked payroll line highlighted on its bank statement. Each
+          record starts with a short page naming the item it supports.
+        </p>
+        <p>
+          Spreadsheets and Word files can't go into a PDF, so they sit beside it in a Supporting
+          files folder, named by item number. Index.csv lists every record, the item it supports and
+          the pages it is on. A README says the month's status, who approved the month-end closing
+          and when, and whether it has been submitted.
+        </p>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>
+              Only people in the workspace can download it, from the month's page. There is no link
+              to share.
+            </li>
+            <li>
+              Personal records (pay stubs, eligibility records) are never in the bundle, whoever
+              downloads it: the funder did not ask for them. The README says how many were left out.
+            </li>
+            <li>
+              It works for a draft month too, so you can check it before the closing is approved.
+              Every download is in the access log.
+            </li>
+            <li>
+              One bundle holds up to 100 MB of records. For a bigger month, download the audit
+              package from the engagement page.
+            </li>
+          </ul>
+        </div>
+        <div class="shots">
+          <figure>
+            <a href="../screenshots/month-bundle/01-download-button.jpg"
+              ><img
+                src="../screenshots/month-bundle/01-download-button.jpg"
+                alt="The month page with Download the month's bundle"
+            /></a>
+          </figure>
+        </div>
+      </article>
       <article
         class="entry"
         id="tags"
-        data-status="review"
+        data-status="shipped"
         data-short="Tags"
         data-summary="Owners keep a list of tags, such as a source of funds or an age group, that you put on engagements, expenses, payroll items and participants, and filter by."
       >
         <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-15">Oct 15, 2026</time>
         </div>
         <h2>Tags</h2>
         <p>
@@ -1047,16 +1144,15 @@
           </figure>
         </div>
       </article>
-
       <article
         class="entry"
         id="budget-lines-your-way"
-        data-status="review"
+        data-status="shipped"
         data-short="Budget lines your way"
         data-summary="Budget items are now a list your workspace keeps; each engagement ticks the ones it uses, and you enter and change the approved budget on the engagement page."
       >
         <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-15">Oct 15, 2026</time>
         </div>
         <h2>Budget lines your way</h2>
         <p>
@@ -1116,16 +1212,15 @@
           </figure>
         </div>
       </article>
-
       <article
         class="entry"
         id="month-end-closing"
-        data-status="review"
+        data-status="shipped"
         data-short="Month-end closing"
         data-summary="Each month now has one approval, the month-end closing, given by your own company before the report goes to the funder; recording the funder's decision is gone."
       >
         <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-15">Oct 15, 2026</time>
         </div>
         <h2>Month-end closing</h2>
         <p>
@@ -1181,16 +1276,15 @@
           </figure>
         </div>
       </article>
-
       <article
         class="entry"
         id="choose-what-to-track"
-        data-status="review"
+        data-status="shipped"
         data-short="Choose what to track"
         data-summary="When you set up an engagement, tick the records you keep here; the financials are always kept, and the steps you leave out show greyed out as not used."
       >
         <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-10-15">Oct 15, 2026</time>
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-15">Oct 15, 2026</time>
         </div>
         <h2>Choose what to track</h2>
         <p>
@@ -1235,7 +1329,6 @@
           </figure>
         </div>
       </article>
-
       <article
         class="entry"
         id="what-the-app-does-today"

@@ -19,7 +19,8 @@
     "deploy:start": "prisma migrate deploy && npm run role:ensure && node dist/main.js",
     "deploy:start:dev": "prisma migrate deploy && npm run role:ensure && npm run db:seed && node dist/main.js",
     "role:grant": "ts-node scripts/grant-role.ts",
-    "demo:reset": "ts-node scripts/demo-reset.ts"
+    "demo:reset": "ts-node scripts/demo-reset.ts",
+    "demo:seed": "ts-node scripts/demo-seed.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

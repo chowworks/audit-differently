@@ -226,7 +226,7 @@ export function MatchReceipts({
       {unmatched.length > 0 && (
         <section className="mx-work" aria-label="To match">
           <h3 className="mx-work-title">
-            To match <span className="mx-count">{unmatched.length}</span>
+            Remaining to match: <span className="mx-count">{unmatched.length}</span>
           </h3>
           <MatchPairs k={kit} />
         </section>

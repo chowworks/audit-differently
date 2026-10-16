@@ -20,6 +20,8 @@ datasource db {
 
 model Workspace {
   id                        String           @id @default(uuid())
+  /// The full demo workspace: fictional data that shows every feature, marked "Full demo" (migration 20261016001600)
+  featuredDemo              Boolean          @default(false)
   name                      String
   // The budget items an engagement may use ({ key, label, reportLine }[], DEFAULT_BUDGET_ITEMS in packages/types):
   // the key never changes, so a rename keeps every engagement's lines. The column default is the defaults.
@@ -45,6 +47,7 @@ model Workspace {
   suggestions               Suggestion[]
   importMappings            ImportMapping[]
   inboundReceipts           InboundReceipt[]
+  matchRunStats             MatchRunStat[]
 }
 
 // Something a member asked for: today, an addition to one of the workspace's lists. Kept so the product can
@@ -238,6 +241,7 @@ model MonthlyReport {
   wexPayments           WexPayment[]
   checks                Check[]
   reopenings            ReportReopening[]
+  payrollMatchRuns      PayrollMatchRun[]
 
   @@unique([engagementId, period])
   @@index([workspaceId])
@@ -247,6 +251,84 @@ model MonthlyReport {
 // A submitted month reopened to correct it (migration 20261015001500), kept for good: when, by whom and why, and
 // what it undid (the submission, the month-end closing approval, the signed copy that went to the funder).
 // Append-only: members read and add one in their own name; it goes only with its month.
+// "Match payroll & timecards" (migration 20261016001000): a payroll zip staged while its matches are checked. Nothing
+// in the month changes until Save; discard or 24 hours removes the run, its files and their stored objects.
+model PayrollMatchRun {
+  id              String             @id @default(uuid())
+  workspaceId     String? // set by trigger
+  monthlyReportId String
+  createdById     String
+  createdAt       DateTime           @default(now())
+  replace         Boolean            @default(false)
+  monthlyReport   MonthlyReport      @relation(fields: [monthlyReportId], references: [id], onDelete: Cascade)
+  files           PayrollMatchFile[]
+
+  @@index([monthlyReportId])
+  @@index([workspaceId, createdAt])
+}
+
+model PayrollMatchFile {
+  id          String          @id @default(uuid())
+  workspaceId String? // set by trigger
+  runId       String
+  // A document already on file (a plain id); null for a file staged by this run.
+  documentId  String?
+  kind        String
+  sensitivity String
+  fileName    String
+  contentType String
+  size        Int
+  sha256      String
+  storageKey  String
+  pages       Int             @default(0)
+  scanned     Boolean         @default(false)
+  /// [{ page, text, x, y, width, height }] in PDF points: the file's own text, personal on a pay stub
+  lines       Json            @default("[]")
+  /// The text runs with their boxes: [{ page, str, x, y, w, h }]; a highlight is cut from them
+  items       Json            @default("[]")
+  // Read by the background job (migration 20261016001300): waiting, reading, read or failed.
+  status      String          @default("waiting")
+  attempts    Int             @default(0)
+  leaseUntil  DateTime?
+  error       String?
+  // How long the job took to read it (migration 20261016001500).
+  readMs      Int?
+  createdAt   DateTime        @default(now())
+  run         PayrollMatchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([workspaceId])
+  @@index([status, leaseUntil])
+}
+
+// One finished match run, for Admin tools → Matching statistics (migration 20261016001500): counts, sizes and
+// durations only, never a file name, a name, an amount or a record's id. Append-only.
+model MatchRunStat {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  feature        String // 'payroll' | 'receipts' | 'emailed-receipts'
+  // A plain id, as DataAccessLog.actorId, and the email staff are named by.
+  startedById    String
+  startedByEmail String
+  startedAt      DateTime
+  finishedAt     DateTime  @default(now())
+  outcome        String // payroll: saved | discarded | expired; receipts: done | failed
+  fileCount      Int       @default(0)
+  totalBytes     BigInt    @default(0)
+  readMs         Int?
+  durationMs     Int       @default(0)
+  items          Int       @default(0)
+  matched        Int       @default(0)
+  guessed        Int       @default(0)
+  missing        Int       @default(0)
+  failed         Int       @default(0)
+  bankLines      Int       @default(0)
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([finishedAt])
+  @@index([workspaceId, finishedAt])
+}
+
 model ReportReopening {
   id               String        @id @default(uuid())
   workspaceId      String? // set by trigger
@@ -342,6 +424,8 @@ model ExpenseDocument {
   purpose     String // DOCUMENT_PURPOSES
   /// The statement line marked as this item's payment: { page, x, y, width, height, text? } in PDF points (migration 20261015000800)
   mark        Json?
+  /// The exact words highlighted on this proof for this item: [{ page, x, y, width, height, text }] (migration 20261016001400)
+  marks       Json     @default("[]")
   workspaceId String? // set by trigger
   expense     Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
   document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -418,6 +502,8 @@ model WexPaymentDocument {
   purpose      String // 'timesheet' | 'register' | 'payment' (the paystub or deposit advice)
   /// As ExpenseDocument.mark: the bank statement line this payment was paid on
   mark         Json?
+  /// As ExpenseDocument.marks
+  marks        Json       @default("[]")
   workspaceId  String? // set by trigger
   wexPayment   WexPayment @relation(fields: [wexPaymentId], references: [id], onDelete: Cascade)
   document     Document   @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -534,4 +620,17 @@ model DeletionRecord {
   expiresAt     DateTime
 
   @@index([workspaceId, engagementId])
+}
+
+// What is highlighted on each payroll proof type, set by a platform admin (migration 20261016001400). Append-only:
+// the newest row per kind is in force; a kind with none uses DEFAULT_HIGHLIGHTS. No workspace.
+model HighlightSetting {
+  id             String   @id @default(uuid())
+  kind           String
+  fields         String[]
+  changedById    String
+  changedByEmail String?
+  changedAt      DateTime @default(now())
+
+  @@index([kind, changedAt])
 }

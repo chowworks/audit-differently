@@ -23,6 +23,11 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   'Check',
   // A month's reopenings (migration 20261015001500): append-only, they go only with their month.
   'ReportReopening',
+  // A payroll zip staged while its matches are checked (migration 20261016001000).
+  'PayrollMatchRun',
+  'PayrollMatchFile',
+  // One finished match run, for Admin tools → Matching statistics (migration 20261016001500): counts only.
+  'MatchRunStat',
   'DataAccessLog',
   'Suggestion',
   'ImportMapping',
@@ -34,6 +39,8 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   // No workspace: who made or unmade a platform admin. It is here because its policies read the request's context
   // (app.admin, app.user_id), so a query on it must set that context like any other.
   'PlatformRoleChange',
+  // No workspace: what a platform admin set to highlight on payroll proof. Its insert policy reads app.admin and app.user_id.
+  'HighlightSetting',
 ])
 
 type Fields = Map<string, string> // relation field name -> the model it points at

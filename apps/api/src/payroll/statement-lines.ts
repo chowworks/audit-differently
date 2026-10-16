@@ -9,11 +9,15 @@ export interface StatementText {
   /** No text on any page: a scanned statement (or a photo), so nothing can be searched. */
   scanned: boolean
   lines: StatementLine[]
+  /** The text runs as the PDF places them, page by page: what an exact-word highlight is cut from. */
+  items: PageItem[]
   /** Each page's box [x0, y0, x1, y1], to check a mark drawn by hand. */
   views: number[][]
 }
 
 type Item = { str: string; x: number; y: number; w: number; h: number }
+/** One text run on a page: its text and where it sits, in PDF points from the page's bottom-left corner. */
+export type PageItem = Item & { page: number }
 
 const round = (n: number) => Math.round(n * 100) / 100
 
@@ -72,33 +76,39 @@ export function itemsOf(raw: unknown[]): Item[] {
 }
 
 /**
- * Reads a PDF bank statement's text layer with pdf.js (through unpdf). Never OCR: a statement without text is
- * reported as scanned. The caller passes financial bank statements only.
+ * Reads a PDF's text layer with pdf.js (through unpdf). Never OCR: a file without text is reported as scanned. The
+ * callers pass bank statements, and the payroll files of a payroll match (timesheets, registers, pay stubs), which may
+ * be read to match them.
  */
 export async function readStatement(buffer: Buffer): Promise<StatementText> {
   const { getDocumentProxy } = await import('unpdf')
   const pdf = await getDocumentProxy(new Uint8Array(buffer))
   const lines: StatementLine[] = []
+  const items: PageItem[] = []
   const views: number[][] = []
   const pages = pdf.numPages
   for (let n = 1; n <= Math.min(pages, MAX_STATEMENT_PAGES); n++) {
     const page = await pdf.getPage(n)
     views.push([...page.view])
     const content = await page.getTextContent()
-    lines.push(...linesOf(n, itemsOf(content.items as unknown[])))
+    const upright = itemsOf(content.items as unknown[])
+    lines.push(...linesOf(n, upright))
+    items.push(...upright.map((it) => ({ ...it, page: n })))
   }
   await pdf.loadingTask.destroy()
-  return { pages, scanned: lines.length === 0, lines, views }
+  return { pages, scanned: lines.length === 0, lines, items, views }
 }
 
 /**
- * The amount as a statement prints it: 1,234.56 or 1234.56, with or without a minus sign, a dollar sign or
- * brackets. Never part of a longer number (11,234.56 is not 1,234.56).
+ * The amount as a statement prints it: 1,234.56 or 1234.56 (or 1234.5 for 1234.50), with or without a minus sign, a
+ * dollar sign or brackets. Never part of a longer number (11,234.56 is not 1,234.56).
  */
 export function amountPattern(amount: number): RegExp {
   const [whole, cents] = Math.abs(amount).toFixed(2).split('.') as [string, string]
   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-  const forms = [...new Set([whole, grouped])].map((w) => `${w}\\.${cents}`)
+  // A payroll export may drop a trailing zero (165.0 for 165.00): that form too, never a bare whole number.
+  const tails = cents.endsWith('0') ? [cents, cents[0]!] : [cents]
+  const forms = [...new Set([whole, grouped])].flatMap((w) => tails.map((c) => `${w}\\.${c}`))
   return new RegExp(`(?<![\\d.,])(?:${forms.join('|')})(?!\\d)`)
 }
 
@@ -106,4 +116,24 @@ export function amountPattern(amount: number): RegExp {
 export function linesWithAmount(lines: StatementLine[], amount: number): StatementLine[] {
   const re = amountPattern(amount)
   return lines.filter((l) => re.test(l.text))
+}
+
+/**
+ * The box around part of a text run: characters `from` to `to` of its text. A PDF gives a run's width, not each
+ * letter's, so the part is placed by its share of the characters, with a little margin. Close enough to cover the words
+ * and nothing next to them.
+ */
+export function spanBox(it: PageItem, from: number, to: number): StatementLine {
+  const n = Math.max(1, it.str.length)
+  const x0 = it.x + (it.w * from) / n
+  const x1 = it.x + (it.w * to) / n
+  const h = it.h || 10
+  return {
+    page: it.page,
+    text: it.str.slice(from, to).trim().slice(0, 300),
+    x: round(x0 - 1.5),
+    y: round(it.y - h * 0.3),
+    width: round(x1 - x0 + 3),
+    height: round(h * 1.4),
+  }
 }

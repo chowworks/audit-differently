@@ -191,28 +191,31 @@ function setup() {
       }
       return 0
     }),
-    $queryRawUnsafe: jest.fn(async (sql: string, limit: string | number, max?: number) => {
-      // The filing transaction's locked read of the row.
-      if (sql !== CLAIM_SQL) {
-        const r = rows.find((x) => x.id === limit)
-        return r ? [{ filedAttachments: [...r.filedAttachments] }] : []
+    $queryRawUnsafe: jest.fn(
+      async (sql: string, limit: string | number, max?: number, domain?: string) => {
+        // The filing transaction's locked read of the row.
+        if (sql !== CLAIM_SQL) {
+          const r = rows.find((x) => x.id === limit)
+          return r ? [{ filedAttachments: [...r.filedAttachments] }] : []
+        }
+        seen('claim')
+        const due = rows
+          .filter(
+            (r) =>
+              ['received', 'processing'].includes(r.status) &&
+              r.nextAttemptAt <= new Date() &&
+              r.attempts < max! &&
+              !!r.toAddress?.toLowerCase().endsWith(`@${domain}`)
+          )
+          .slice(0, Number(limit))
+        for (const r of due) {
+          r.status = 'processing'
+          r.attempts++
+          r.nextAttemptAt = new Date(Date.now() + 15 * 60_000)
+        }
+        return due.map((r) => ({ ...r }))
       }
-      seen('claim')
-      const due = rows
-        .filter(
-          (r) =>
-            ['received', 'processing'].includes(r.status) &&
-            r.nextAttemptAt <= new Date() &&
-            r.attempts < max!
-        )
-        .slice(0, Number(limit))
-      for (const r of due) {
-        r.status = 'processing'
-        r.attempts++
-        r.nextAttemptAt = new Date(Date.now() + 15 * 60_000)
-      }
-      return due.map((r) => ({ ...r }))
-    }),
+    ),
     workspace: {
       findFirst: jest.fn(
         async ({ where }: { where: { receiptsAddress?: string; id?: string } }) => {
@@ -323,6 +326,14 @@ function setup() {
   const senders = {
     verify: jest.fn(async () => ({ ...VERDICT })),
   }
+  // Matching statistics: each row with the context it was written in.
+  const statRows: { row: Record<string, unknown>; userId?: string; system?: boolean }[] = []
+  const stats = {
+    record: jest.fn(async (row: Record<string, unknown>) => {
+      const ctx = tenantContext()
+      statRows.push({ row, userId: ctx?.userId, system: ctx?.allWorkspaces })
+    }),
+  }
   const s = new InboundService(
     prisma as never,
     log as never,
@@ -331,7 +342,8 @@ function setup() {
     receipts as never,
     engagementsService as never,
     resend as never,
-    senders as never
+    senders as never,
+    stats as never
   )
   const attach = (id: string, filename: string, buffer: Buffer, size = buffer.length) => {
     blobs.set(`https://inbound.example.org/${id}`, buffer)
@@ -381,6 +393,7 @@ function setup() {
     attach,
     set,
     receive,
+    statRows,
   }
 }
 
@@ -449,6 +462,22 @@ describe('emailed receipts', () => {
       expect(
         t.contexts.filter((c) => c.what === 'enqueue').every((c) => c.ctx?.allWorkspaces)
       ).toBe(true)
+    })
+
+    it("ignores and keeps nothing of an email to another receipts domain (the other environment's)", async () => {
+      const t = setup()
+      await expect(
+        t.s.enqueue({
+          type: 'email.received',
+          data: {
+            email_id: 'em-other',
+            from: 'pat@bright-path.example.org',
+            to: ['bright-path@receipts-other.example.org'],
+            subject: 'Receipt CP26',
+          },
+        })
+      ).resolves.toBe(false)
+      expect(t.rows).toHaveLength(0)
     })
 
     it('ignores any other event type, so the provider never retries it', async () => {
@@ -777,6 +806,43 @@ describe('emailed receipts', () => {
         attempts: MAX_ATTEMPTS,
         error: 'The email provider answered 503',
       })
+    })
+
+    it('counts each filing for Matching statistics, as the member: counts and sizes, never a name or an amount', async () => {
+      const t = ready()
+      t.engagements[1]!.status = 'active'
+      await t.receive()
+      expect(t.statRows).toEqual([
+        {
+          row: expect.objectContaining({
+            workspaceId: W,
+            feature: 'emailed-receipts',
+            startedById: 'u-book',
+            outcome: 'done',
+            fileCount: 1,
+            items: 1,
+            matched: 0,
+            missing: 1,
+            failed: 0,
+          }),
+          userId: 'u-book',
+          system: false,
+        },
+      ])
+      const text = JSON.stringify(t.statRows[0]!.row)
+      for (const secret of ['.pdf', 'Bright Path', '12.5', 'doc-1', 'att-1', 'e-cp', 'CP26'])
+        expect(text).not.toContain(secret)
+    })
+
+    it('counts a filing that failed part way, and none for a refused email', async () => {
+      const t = ready()
+      t.receipts.fileOne.mockRejectedValueOnce(new ProviderError('The email provider answered 500'))
+      await t.receive()
+      expect(t.statRows.map((r) => r.row.outcome)).toEqual(['failed'])
+      const u = setup()
+      u.set.email({ ...GOOD, authentication: { spf: 'pass', dkim: 'pass', dmarc: 'fail' } })
+      await u.receive()
+      expect(u.statRows).toEqual([])
     })
 
     it('files no attachment twice when a later one fails and the email is tried again', async () => {

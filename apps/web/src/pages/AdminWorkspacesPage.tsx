@@ -9,7 +9,17 @@ import {
 import { useApi, useLoad } from '@/hooks/useApi'
 import { ME_CHANGED_EVENT } from '@/services/api'
 import { shortDate } from '@/lib/format'
-import { Button, Card, Chip, Empty, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
+import {
+  FullDemoChip,
+  Button,
+  Card,
+  Chip,
+  Empty,
+  ErrorNote,
+  Field,
+  Modal,
+  inputClass,
+} from '@/components/ui'
 import { HandCard } from '@/components/HandCard'
 import { AdminHow, AdminToolHead } from '@/pages/AdminPage'
 
@@ -62,7 +72,8 @@ function Workspaces() {
                           className="font-bold text-navy no-underline hover:underline"
                         >
                           {w.name}
-                        </Link>
+                        </Link>{' '}
+                        {w.featuredDemo && <FullDemoChip />}
                         <span className="ad-table-sub">
                           Created {shortDate(w.createdAt)} · {w.memberCount}{' '}
                           {w.memberCount === 1 ? 'person' : 'people'}

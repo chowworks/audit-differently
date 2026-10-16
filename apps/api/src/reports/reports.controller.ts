@@ -114,13 +114,18 @@ export class ReportsController {
     return this.reports.addWexPayment(await this.callers.load(userId), id, body)
   }
 
-  @Patch('wex/:id/tags')
-  async setWexTags(
+  @Patch('wex/:id')
+  async updateWex(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { tags?: unknown }
+    @Body() body: WexPaymentInput
   ): Promise<ReportDetail> {
-    return this.reports.setWexTags(await this.callers.load(userId), id, body?.tags)
+    return this.reports.updateWexPayment(await this.callers.load(userId), id, body)
+  }
+
+  @Delete('wex/:id')
+  async deleteWex(@UserId() userId: string, @Param('id') id: string): Promise<ReportDetail> {
+    return this.reports.deleteWexPayment(await this.callers.load(userId), id)
   }
 
   @Post('wex/:id/documents')
@@ -167,6 +172,15 @@ export class ReportsController {
     @Body() body: { comment?: unknown }
   ): Promise<ReportDetail> {
     return this.reports.requestEdits(await this.callers.load(userId), id, body?.comment)
+  }
+
+  /** A month with nothing in it: there is nothing to submit, so an owner deletes it. */
+  @Delete('reports/:id')
+  async deleteEmptyMonth(
+    @UserId() userId: string,
+    @Param('id') id: string
+  ): Promise<{ engagementId: string }> {
+    return this.reports.deleteEmptyMonth(await this.callers.load(userId), id)
   }
 
   @Post('reports/:id/reopen')

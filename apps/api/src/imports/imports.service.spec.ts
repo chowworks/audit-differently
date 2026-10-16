@@ -267,6 +267,27 @@ describe('ImportsService', () => {
     expect(file.mappings[0]).toMatchObject({ name: 'QuickBooks mapping', matches: true })
   })
 
+  it("leaves out a saved mapping's choices for budget lines this engagement does not use", async () => {
+    const saved = {
+      id: 'm-other',
+      name: 'Made on another engagement',
+      headers: ['Date'],
+      columns: COLUMNS,
+      categories: {
+        'Office supplies': 'supplies',
+        'Equipment rental': 'equipment',
+        Fees: 'skip',
+      },
+    }
+    const { s } = service(undefined, [], [saved])
+    const file = await s.read(member('owner'), 'e-1', SAMPLE)
+    // Equipment is no budget line here: that category waits for the person in step 3 rather than refusing the import.
+    expect(file.mappings[0]!.categories).toEqual({
+      'Office supplies': 'supplies',
+      Fees: 'skip',
+    })
+  })
+
   it('places each row in its month, and says why every other row stays out', async () => {
     const { s, writes } = service()
     const p = await s.preview(member('bookkeeper'), 'e-1', SAMPLE, request())

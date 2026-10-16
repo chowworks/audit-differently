@@ -23,6 +23,7 @@ import { useApi, useLoad } from '@/hooks/useApi'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { nextDue, workflow } from '@/lib/workflow'
 import {
+  FullDemoChip,
   Button,
   Card,
   Chip,
@@ -125,7 +126,9 @@ export function WorkspacePage() {
           </span>
           <div>
             <p className="ad-eyebrow">Workspace</p>
-            <h1 className="ad-h1">{w.name}</h1>
+            <h1 className="ad-h1 flex flex-wrap items-center gap-3">
+              {w.name} {w.featuredDemo && <FullDemoChip />}
+            </h1>
             <p className="ad-sub">
               {plural(engagements.length, 'engagement')} ·{' '}
               {plural(w.memberCount, 'person').replace('persons', 'people')}
