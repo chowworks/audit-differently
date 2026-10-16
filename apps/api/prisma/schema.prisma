@@ -428,3 +428,17 @@ model DeletionRecord {
 
   @@index([workspaceId, engagementId])
 }
+
+// ── Health ──────────────────────────────────────────────────────────────────
+// Failures people hit through no fault of their own, counted by the public /api/health/upload-failures and
+// /api/health/server-errors checks (src/core/service-failure-log.ts). When, which kind and the route pattern only: no
+// workspace, person, file name or error message, so not a tenant table. See migration 20261016000100.
+
+model ServiceFailure {
+  id    String   @id @default(uuid())
+  at    DateTime @default(now())
+  kind  String // 'upload' | 'server'
+  route String // method and route pattern, such as 'POST /api/documents'
+
+  @@index([kind, at])
+}

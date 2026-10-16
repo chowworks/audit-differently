@@ -183,7 +183,10 @@ of two.
   otherwise). A path that returns nothing under it is the bug, not the policy.
 - Raw SQL is always parameterized. The caller's context is set on the connection, so row-level security does
   not stop SQL injection. Never build SQL from request values.
-- **Every route carries `AuthenticatedGuard`** except `GET /api/health`, `GET /api/documents/local/:token`
+- **Every route carries `AuthenticatedGuard`** except `GET /api/health` and its failure counts
+  (`/api/health/upload-failures`, `/api/health/server-errors`: status, count and window only, see "Health checks
+  and monitoring"),
+  `GET /api/documents/local/:token`
   (the file behind a signed, expiring token that the gated `/documents/:id/url` issued; local disk only, which
   a deployed API refuses) and `POST /api/contact` (the public contact form: validated, throttled, honeypot,
   sent through Resend, nothing stored or logged); `apps/api/src/auth/route-gates.spec.ts` lists every
@@ -248,6 +251,34 @@ between them:
   data. Say which one you would pick and why, and ask.
 - **Keep it deletable:** put the variants in their own file and CSS with a comment saying so. When the user
   chooses, delete the other options, the switch and the parameter handling in the same change.
+
+## Health checks and monitoring
+
+The API answers three public health routes (`apps/api/src/health/health.controller.ts`): `GET /api/health` (the API
+is up; the CI smoke test reads it), `GET /api/health/upload-failures` (proof uploads that failed through no fault of
+the person) and `GET /api/health/server-errors` (requests answered 5xx), each counting the last 15 minutes of the
+`ServiceFailure` table (`apps/api/src/core/service-failure-log.ts`). Better Stack Uptime watches the last two and
+shows them in the "Audit Differently" section of the shared status page; `ops/monitoring.ts` lists them and CI
+applies it (`docs/monitoring.md`).
+
+**When a change adds or changes something the bookkeeper cannot work without, consider whether a health check
+should cover it**, and say so in the change summary either way. Expand an existing check before adding one; keep
+the list short (today two). A check counts failures people actually hit, not whether a dependency answers a probe.
+
+- A new check: a kind of work whose failure stops people from saving, attaching, opening or submitting records.
+  Not for a new endpoint, admin tool or internal helper. Prefer counting it under an existing kind; a new kind
+  needs its name in the `ServiceFailure_kind_check` constraint (a migration) and in `FailureKind`.
+- Record a failure where it happens with `ServiceFailureLog.record(kind, route)`, unawaited (it never rejects), and
+  only when it is not the request's fault (a 4xx is not counted). A row is when, the kind and the route pattern:
+  never a workspace, person, file name or error message, which go to the API's log. Any 5xx is already counted as
+  `server` by `ServerErrorFilter`.
+- Each check is a `@Get` on `HealthController`, public and unguarded (add it to `PUBLIC` in `route-gates.spec.ts`
+  and to the exceptions in "Tenant isolation"), answering `{ status, failures, windowMinutes }` only, 503 when
+  there was a failure or the count could not be read. It goes through `answer()`, so it times out after 5 seconds
+  and its result is reused for a minute. It reads no workspace data, so it logs nothing to `DataAccessLog` and
+  needs no `runAsSystem`.
+- Better Stack: add the check to `ops/monitoring.ts`, and the next deploy from `main` creates its monitor and its
+  row. The sync never deletes: a removed check is reported in the CI log and removed in Better Stack by hand.
 
 ## Reviewing larger PRs
 
