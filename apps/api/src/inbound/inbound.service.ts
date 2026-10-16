@@ -121,8 +121,9 @@ const STATUS_FIELDS: Fields = { status: { label: 'Status', show: 'text' } }
 
 /** The bare address of `Name <a@b.org>` or `a@b.org`, lowercased; null when there is none. */
 export function addressOf(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const inAngles = /<([^<>\s]+@[^<>\s]+)>/.exec(value)
+  // A header longer than any real one is not read at all, so no pattern runs on attacker-sized input.
+  if (typeof value !== 'string' || value.length > 1000) return null
+  const inAngles = /<([^<>\s@]+@[^<>\s]+)>/.exec(value)
   const bare = (inAngles?.[1] ?? value).trim().toLowerCase()
   return /^[^\s@<>]+@[^\s@<>]+$/.test(bare) && bare.length <= 254 ? bare : null
 }

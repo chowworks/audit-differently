@@ -105,7 +105,8 @@ export class ReceiptsService {
     const startedAt = new Date()
     const r = await this.reports.editable(caller, reportId)
     if (!isReceiptKind(kind)) throw new BadRequestException('kind must be receipt or invoice')
-    if (!files.length) throw new BadRequestException('Choose at least one file')
+    if (!Array.isArray(files) || !files.length)
+      throw new BadRequestException('Choose at least one file')
     if (files.length > MAX_RECEIPTS)
       throw new BadRequestException(`Upload at most ${MAX_RECEIPTS} receipts at a time`)
     for (const f of files) {

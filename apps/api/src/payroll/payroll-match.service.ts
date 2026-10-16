@@ -214,7 +214,8 @@ export class PayrollMatchService {
   ): Promise<PayrollMatchRunDto> {
     const { run, r } = await this.open(caller, runId)
     const list = Array.isArray(kinds) ? kinds : kinds == null ? [] : [kinds]
-    if (!files.length) throw new BadRequestException('Choose at least one file')
+    if (!Array.isArray(files) || !files.length)
+      throw new BadRequestException('Choose at least one file')
     if (files.length > MAX_PAYROLL_FILES)
       throw new BadRequestException(`Send at most ${MAX_PAYROLL_FILES} files at a time`)
     if (run.files.length + files.length > MAX_RUN_FILES)
