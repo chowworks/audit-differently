@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { CheckSeverity, ReportStatus } from '@ad/types'
+import { REPORT_STATUS_LABELS, type CheckSeverity, type ReportStatus } from '@ad/types'
 
 export type Tone = 'ok' | 'warn' | 'danger' | 'info' | 'muted' | 'accent'
 
@@ -29,11 +29,8 @@ export function Chip({
 
 export const statusTone: Record<ReportStatus, Tone> = {
   draft: 'muted',
-  submitted: 'info',
-  'under-review': 'info',
-  approved: 'ok',
-  denied: 'danger',
-  paid: 'ok',
+  closed: 'info',
+  submitted: 'ok',
 }
 
 export const severityTone: Record<CheckSeverity, Tone> = {
@@ -43,11 +40,7 @@ export const severityTone: Record<CheckSeverity, Tone> = {
 }
 
 export function StatusChip({ status }: { status: ReportStatus }) {
-  return (
-    <Chip tone={statusTone[status]} fill={status === 'paid' || status === 'denied'}>
-      {status.replace('-', ' ')}
-    </Chip>
-  )
+  return <Chip tone={statusTone[status]}>{REPORT_STATUS_LABELS[status] ?? status}</Chip>
 }
 
 export function Button({
@@ -56,12 +49,13 @@ export function Button({
   className = '',
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  kind?: 'primary' | 'secondary' | 'danger' | 'ghost'
+  kind?: 'primary' | 'secondary' | 'navy' | 'danger' | 'ghost'
   size?: 'sm'
 }) {
   const kinds = {
     primary: 'ad-btn',
     secondary: 'ad-btn-secondary',
+    navy: 'ad-btn ad-btn-navy',
     danger: 'ad-btn-secondary ad-btn-danger',
     ghost: 'ad-btn-quiet',
   }
@@ -78,12 +72,15 @@ export function Field({
   label,
   children,
   hint,
+  error,
   required,
   className = '',
 }: {
   label: string
   children: React.ReactNode
   hint?: string
+  /** What is wrong with this field, in red under it (replaces the hint while it shows). */
+  error?: string | null
   /** Marks the label with the usual asterisk. */
   required?: boolean
   className?: string
@@ -99,7 +96,13 @@ export function Field({
         )}
       </span>
       {children}
-      {hint && <small>{hint}</small>}
+      {error ? (
+        <small className="ad-field-error" role="alert">
+          {error}
+        </small>
+      ) : (
+        hint && <small>{hint}</small>
+      )}
     </label>
   )
 }
@@ -216,11 +219,14 @@ export function Modal({
   onClose,
   children,
   wide,
+  full,
 }: {
   title: string
   onClose: () => void
   children: React.ReactNode
   wide?: boolean
+  /** As wide as the screen allows, for a grid with several columns to fill in. */
+  full?: boolean
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -230,7 +236,7 @@ export function Modal({
   return (
     <div className="ad-backdrop" onClick={onClose}>
       <div
-        className={`ad-modal ${wide ? 'ad-modal-wide' : ''}`}
+        className={`ad-modal ${wide ? 'ad-modal-wide' : ''} ${full ? 'ad-modal-full' : ''}`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -295,4 +301,48 @@ export function ErrorNote({ message }: { message: string | null }) {
 
 export function Empty({ children }: { children: React.ReactNode }) {
   return <p className="ad-empty">{children}</p>
+}
+
+/**
+ * A flow's steps, as the month page's stepper: each done step green with its number and a ✓ before its name, the
+ * current one outlined in navy, the rest grey. The last step counts as done once reached.
+ */
+export function Stepper<S extends string>({ steps, current }: { steps: readonly S[]; current: S }) {
+  const at = steps.indexOf(current)
+  const last = at === steps.length - 1
+  return (
+    <ol className="ad-stepper" aria-label="Steps">
+      {steps.map((s, i) => {
+        const state = i < at || last ? 'done' : i === at ? 'current' : 'todo'
+        return (
+          <li
+            key={s}
+            className={`ad-stepper-${state}`}
+            aria-current={state === 'current' ? 'step' : undefined}
+          >
+            <span className="ad-stepper-mark" aria-hidden="true">
+              {i + 1}
+            </span>
+            <span className="ad-stepper-label">
+              {state === 'done' && (
+                <span className="ad-stepper-check" aria-hidden="true">
+                  ✓{' '}
+                </span>
+              )}
+              {s}
+            </span>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+/** The full demo workspace's mark (as Learn Differently's): fictional data that shows every feature. */
+export function FullDemoChip() {
+  return (
+    <span className="ad-demo" title="Full demo: fictional data that shows every feature">
+      <span aria-hidden="true">⭐ </span>Full demo
+    </span>
+  )
 }

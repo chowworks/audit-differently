@@ -44,7 +44,7 @@ personal document). Those stay in the API.
   an owner's invitation of a person who has not signed in leaves a placeholder User row as trusted work. The first owner of a
   workspace nobody belongs to is made by `scripts/grant-role.ts`, as the database owner.
 - **Everything the workspace accounts for is its members' to read and write.** Who may submit, record the
-  funder's decision or open a personal document is the application's rule. The access log is written by
+  month-end closing or open a personal document is the application's rule. The access log is written by
   whoever acts, read inside the workspace, and never changed or deleted through the API.
 
 - **A deletion record outlives what it describes.** `DeletionRecord` (who exported and deleted which engagement
@@ -53,6 +53,28 @@ personal document). Those stay in the API.
   `workspaceId` is named by the row (there is no parent to copy it from, so no `_1_set_tenant`), the policy ties
   it to a workspace the writer owns, `_3_keep` stops it being re-pointed, and its status only moves forward
   (exported, downloaded, deleted).
+- **A saved import mapping is the workspace's** (`ImportMapping`, migration `20261015000600`): how a kind of
+  exported transactions file maps to expense lines, saved by name. Like a suggestion it names its workspace itself
+  (a foreign key to `Workspace`, so no `_1_set_tenant`) and goes with it; `_3_keep` stops it being re-pointed.
+  Members read, insert and update it (an auditor saving one is the application's refusal); nobody deletes one
+  through the API, and the platform admin sees none. It holds column names and category names, never a row of a
+  file.
+- **An emailed receipt is nobody's until trusted work says whose** (`InboundReceipt`, migrations `20261015001000`
+  and `..1200`). The provider's webhook writes the row before anyone is known, so it starts with no `workspaceId`:
+  such a row is read, written and removed only under `app.system` (the webhook, the worker's claim, the address
+  lookup). The worker names the workspace only together with the sender, once the sender is a verified owner or
+  bookkeeper of it and DMARC passed (`InboundReceipt_3_keep` refuses the workspace alone), so junk (an unknown
+  address, an unverified sender, a stranger) stays nobody's. Once it names a workspace the row is that workspace's
+  like any record: members read it, and change only what became of it; `_3_keep` lets the workspace and the sender go
+  from unknown to known once, under `app.system`, and keeps everything the email came as. Trusted work removes, after
+  30 days, the rows with no workspace and those `rejected` or `failed`; nothing else but with the workspace. What it
+  files is filed as the member who sent it (the worker runs as that person, no system mark), so their roles and these
+  policies apply as if they had uploaded it. It names its workspace itself (a foreign key, removed with the
+  workspace; no `_1_set_tenant`). The engagement is a foreign key too (`ON DELETE SET NULL`), and
+  `InboundReceipt_4_engagement` keeps it to an engagement of the row's own workspace and clears the filed document
+  ids when it is cleared. A workspace's `receiptsAddress` is set once, by an owner, and then kept
+  (`Workspace_6_receipts_address_kept`; never under `app.admin`; the table's owner may still correct it), so mail sent
+  to it never reaches another workspace.
 
 ## How a request works
 

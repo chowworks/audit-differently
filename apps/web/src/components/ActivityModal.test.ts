@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { csvCell, toCsv } from './ActivityModal'
+import type { ActivityEntry } from '@ad/types'
+import { csvCell, did, toCsv } from './ActivityModal'
 
 describe('the access log CSV', () => {
   it('opens a cell that looks like a formula as text', () => {
@@ -19,5 +20,13 @@ describe('the access log CSV', () => {
         ['pat@example.org', '=1+1'],
       ])
     ).toBe('"Who (email)","Did"\r\n"pat@example.org","\'=1+1"')
+  })
+})
+
+describe('an access log line without a description', () => {
+  it('words an old review line neutrally, whatever it recorded', () => {
+    expect(did({ action: 'review', resource: 'report', description: null } as ActivityEntry)).toBe(
+      'recorded a review of a report'
+    )
   })
 })

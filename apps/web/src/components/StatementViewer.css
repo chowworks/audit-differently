@@ -1,0 +1,34 @@
+/* The bank statement viewer (StatementViewer.tsx): a page drawn by pdf.js with the marked line highlighted. */
+.ad-statement-pages {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.ad-statement-page {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+.ad-statement-page canvas {
+  display: block;
+}
+.ad-statement-overlay {
+  position: absolute;
+  inset: 0;
+}
+.ad-statement-draw {
+  cursor: crosshair;
+  touch-action: none;
+}
+.ad-statement-mark {
+  position: absolute;
+  background: rgba(255, 214, 0, 0.35);
+  outline: 2px solid rgba(217, 140, 0, 0.9);
+  border-radius: 2px;
+  pointer-events: none;
+}

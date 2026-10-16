@@ -1,0 +1,74 @@
+/* Admin tools → Payroll proof highlighting: one long row per proof type (choices, preview); each tick saves. */
+.ad-hl-list {
+  display: grid;
+  gap: 10px;
+}
+.ad-hl-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 170px) minmax(200px, 1fr) minmax(240px, 1.2fr);
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+@media (max-width: 900px) {
+  .ad-hl-row {
+    grid-template-columns: 1fr;
+  }
+}
+.ad-hl-head {
+  display: grid;
+  gap: 2px;
+}
+.ad-hl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ad-hl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
+}
+.ad-hl-chip-on {
+  border-color: var(--navy);
+  background: var(--surface-alt);
+  font-weight: 600;
+}
+/* A fictional sample of the proof, with the chosen parts highlighted as an item's own copy shows them. */
+.ad-hl-doc {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: #333;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+}
+.ad-hl-line {
+  line-height: 1.6;
+}
+.ad-hl-label {
+  display: inline-block;
+  min-width: 96px;
+  margin-right: 8px;
+  color: var(--muted);
+}
+.ad-hl-on {
+  border-radius: 2px;
+  background: rgba(255, 214, 0, 0.45);
+  outline: 1px solid rgba(217, 140, 0, 0.9);
+}

@@ -1,5 +1,12 @@
+import { Prisma } from '@prisma/client'
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
-import { DEFAULT_ELIGIBILITY_ITEMS, type EngagementInput, type Role } from '@ad/types'
+import {
+  DEFAULT_BUDGET_ITEMS,
+  DEFAULT_ELIGIBILITY_ITEMS,
+  DEFAULT_TAG_TYPES,
+  type EngagementInput,
+  type Role,
+} from '@ad/types'
 import { member, OTHER, scoped, stranger, W } from '../core/testing/callers'
 import { expectNoneOf, fakeLog } from '../core/testing/log'
 import { EngagementsService } from './engagements.service'
@@ -15,13 +22,14 @@ const engagement = () => ({
   solicitation: null,
   number: 'DEMO-1',
   status: 'active',
+  tracks: ['proposal', 'award-letter', 'contract'],
   periodStart: new Date('2026-07-01T00:00:00Z'),
   periodEnd: new Date('2027-06-30T00:00:00Z'),
   proposalSubmittedOn: null,
   awardedOn: null,
   requestedAmount: null,
   awardAmount: 125000,
-  fundingSources: [],
+  tags: [] as string[],
   reportDueDay: 12,
   indirectTerms: null,
   reportTo: null,
@@ -32,7 +40,7 @@ const engagement = () => ({
   authorizerOrganization: null,
   eligibilityItems: [],
   waivers: {},
-  workspace: { name: 'Riverbend Youth Services', fundingSources: [] },
+  workspace: { name: 'Riverbend Youth Services', tagTypes: DEFAULT_TAG_TYPES },
   monthlyReports: [],
   documents: [],
   budgetLines: [],
@@ -51,6 +59,7 @@ const engagement = () => ({
 
 function service() {
   const prisma = {
+    workspace: scoped({ id: W, budgetItems: DEFAULT_BUDGET_ITEMS, tagTypes: DEFAULT_TAG_TYPES }),
     engagement: {
       ...scoped(engagement()),
       create: jest.fn().mockResolvedValue({ id: 'e-1' }),
@@ -148,6 +157,80 @@ describe('EngagementsService', () => {
     expect(data).not.toHaveProperty('eligibilityItems')
   })
 
+  it('starts a line of $0 for each budget item it uses, in the list order, and logs them', async () => {
+    const { service: s, prisma, log } = service()
+    await s.create(member('bookkeeper'), { ...input, budgetItems: ['wex', 'travel'] })
+    expect(prisma.engagement.create.mock.calls[0]![0].data.budgetLines).toEqual({
+      create: [
+        { category: 'travel', reportLine: 'program-costs', amount: '0.00', sortOrder: 2 },
+        { category: 'wex', reportLine: 'wex', amount: '0.00', sortOrder: 9 },
+      ],
+    })
+    expect(log.entries.at(-1)!.changes).toContainEqual({
+      field: 'Budget lines',
+      after: 'Travel, Work Experience (WEX)',
+    })
+    // None asked for: no line, as before.
+    await s.create(member('bookkeeper'), input)
+    expect(prisma.engagement.create.mock.calls[1]![0].data).not.toHaveProperty('budgetLines')
+  })
+
+  it("refuses a budget item the workspace does not have, and an auditor's engagement", async () => {
+    const { service: s, prisma, log } = service()
+    await expect(
+      s.create(member('owner'), { ...input, budgetItems: ['travel', 'yacht'] })
+    ).rejects.toThrow(BadRequestException)
+    await expect(
+      s.create(member('auditor'), { ...input, budgetItems: ['travel'] })
+    ).rejects.toThrow(ForbiddenException)
+    expect(prisma.engagement.create).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
+  })
+
+  it('keeps the records it is told to, logs the change, and refuses any other record', async () => {
+    const { service: s, prisma, log } = service()
+    const who = member('bookkeeper')
+    await s.create(who, { ...input, tracks: [] })
+    expect(prisma.engagement.create.mock.calls[0]![0].data).toMatchObject({ tracks: [] })
+    // Stored in the list's own order, whatever order it came in.
+    await s.update(who, 'e-1', { tracks: ['contract', 'proposal'] })
+    expect(prisma.engagement.update.mock.calls[0]![0].data).toMatchObject({
+      tracks: ['proposal', 'contract'],
+    })
+    expect(log.entries.at(-1)!.changes).toContainEqual({
+      field: 'Records kept',
+      before: 'Proposal, Award letter, Signed contract',
+      after: 'Proposal, Signed contract',
+    })
+    await expect(s.update(who, 'e-1', { tracks: ['audit' as never] })).rejects.toThrow(
+      BadRequestException
+    )
+  })
+
+  it('keeps an engagement code in capitals, logs it, and refuses a malformed or doubled one', async () => {
+    const { service: s, prisma, log } = service()
+    const who = member('bookkeeper')
+    await s.update(who, 'e-1', { code: ' cp-26 ' })
+    expect(prisma.engagement.update.mock.calls[0]![0].data).toMatchObject({ code: 'CP-26' })
+    expect(log.entries.at(-1)!.changes).toContainEqual({
+      field: 'Engagement code',
+      before: null,
+      after: 'CP-26',
+    })
+    for (const bad of ['x', 'has space', '-CP', 'C'.repeat(21)])
+      await expect(s.update(who, 'e-1', { code: bad })).rejects.toThrow(BadRequestException)
+    prisma.engagement.update.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('taken', {
+        code: 'P2002',
+        clientVersion: 'x',
+        meta: { target: ['workspaceId', 'code'] },
+      })
+    )
+    await expect(s.update(who, 'e-1', { code: 'YB' })).rejects.toThrow(
+      'Another engagement in this workspace uses the code YB'
+    )
+  })
+
   it.each(['owner', 'bookkeeper'] as Role[])('lets a %s create and change one', async (role) => {
     const { service: s, prisma } = service()
     const who = member(role)
@@ -220,6 +303,21 @@ describe('EngagementsService', () => {
     expectNoneOf(log.entries, ['Pat Preparer', 'to Pat', 'casey@', 'Riley', '900002'])
   })
 
+  it("tags a new participant from the workspace's list, logging the field by name alone", async () => {
+    const { service: s, prisma, log } = service()
+    const who = member('bookkeeper')
+    const tags = ['funding-source:youth-workforce-fund']
+    expect((await s.createParticipant(who, 'e-1', { ...newcomer, tags })).tags).toEqual(tags)
+    expect(prisma.participant.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ tags }) })
+    )
+    expect(log.entries[0]!.changes).toEqual(expect.arrayContaining([{ field: 'Tags' }]))
+    expectNoneOf(log.entries, ['Youth Workforce'])
+    await expect(
+      s.createParticipant(who, 'e-1', { ...newcomer, participantId: '900003', tags: ['under 18'] })
+    ).rejects.toThrow(BadRequestException)
+  })
+
   it('answers a waiver change with the engagement and a new participant with itself, each with one line', async () => {
     const { service: s, log } = service()
     const who = member('bookkeeper')
@@ -232,6 +330,7 @@ describe('EngagementsService', () => {
       displayName: 'Riley Example',
       enrollmentStatus: 'new',
       currentStatus: 'active',
+      tags: [],
       documents: [],
     })
     expect(log.log).not.toHaveBeenCalled()
@@ -275,6 +374,27 @@ describe('EngagementsService', () => {
     expect(log.entries[2]!.changes).toEqual([{ field: 'No signed contract' }])
   })
 
+  it("picks the engagement's funding sources from the workspace's tags, logging them in its words", async () => {
+    const { service: s, prisma, log } = service()
+    const who = member('bookkeeper')
+    await s.create(who, { ...input, tags: ['funding-source:adult-training-fund'] })
+    expect(prisma.engagement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ tags: ['funding-source:adult-training-fund'] }),
+      })
+    )
+    expect(log.entries[0]!.changes).toEqual(
+      expect.arrayContaining([{ field: 'Tags', after: 'Funding source: Adult Training Fund' }])
+    )
+    await s.update(who, 'e-1', { tags: ['funding-source:youth-workforce-fund'] })
+    expect(log.entries[1]!.changes).toEqual([
+      { field: 'Tags', before: null, after: 'Funding source: Youth Workforce Fund' },
+    ])
+    await expect(s.update(who, 'e-1', { tags: ['Youth Workforce Fund'] })).rejects.toThrow(
+      BadRequestException
+    )
+  })
+
   /** What the Details modal sends on Save: every field, as the form holds it. */
   const detailsForm = (): Partial<EngagementInput> => ({
     kind: 'grant',
@@ -282,7 +402,7 @@ describe('EngagementsService', () => {
     solicitation: '',
     funder: 'Demo Workforce Board',
     funderContact: '',
-    fundingSources: [],
+    tags: [],
     requestedAmount: null,
     proposalSubmittedOn: '',
     awardedOn: '',

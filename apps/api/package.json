@@ -19,13 +19,15 @@
     "deploy:start": "prisma migrate deploy && npm run role:ensure && node dist/main.js",
     "deploy:start:dev": "prisma migrate deploy && npm run role:ensure && npm run db:seed && node dist/main.js",
     "role:grant": "ts-node scripts/grant-role.ts",
-    "demo:reset": "ts-node scripts/demo-reset.ts"
+    "demo:reset": "ts-node scripts/demo-reset.ts",
+    "demo:seed": "ts-node scripts/demo-seed.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
     "@ad/types": "*",
+    "@anthropic-ai/sdk": "^0.134.0",
     "@aws-sdk/client-s3": "^3.1041.0",
     "@aws-sdk/s3-request-presigner": "^3.1041.0",
     "@clerk/backend": "^3.4.4",
@@ -35,10 +37,14 @@
     "@nestjs/throttler": "^6.7.1",
     "@prisma/client": "^5.22.0",
     "dotenv": "^17.4.1",
+    "exceljs": "^4.4.0",
     "fflate": "^0.8.2",
     "helmet": "^8.3.0",
+    "mailauth": "^7.3.0",
+    "pdf-lib": "^1.17.1",
     "reflect-metadata": "^0.2.0",
-    "rxjs": "^7.8.0"
+    "rxjs": "^7.8.0",
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",

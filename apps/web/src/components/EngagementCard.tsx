@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom'
 import type { EngagementSummary } from '@ad/types'
 import { money, shortDate } from '@/lib/format'
 import { workflow } from '@/lib/workflow'
-import { Chip } from '@/components/ui'
+import { FullDemoChip, Chip } from '@/components/ui'
 
 /** One engagement on the overview and in a workspace: where it is in the eight steps and what is next. */
 export function EngagementCard({
@@ -32,9 +32,10 @@ export function EngagementCard({
       <div className="ad-card-body ad-grant-card">
         <div className="ad-head !mb-0">
           <div>
-            {(showWorkspace || c.number) && (
+            {(showWorkspace || c.number || c.workspaceFeaturedDemo) && (
               <p className="ad-eyebrow flex flex-wrap items-center gap-2">
                 {showWorkspace && <span>{c.workspaceName}</span>}
+                {c.workspaceFeaturedDemo && <FullDemoChip />}
                 {showWorkspace && c.number && <span>·</span>}
                 {c.number && (
                   <span className="ad-mono normal-case tracking-normal">{c.number}</span>
@@ -62,11 +63,11 @@ export function EngagementCard({
           <div className="mb-1 flex justify-between text-sm">
             <span className="text-soft">Workflow progress</span>
             <b>
-              {w.doneCount} of {w.steps.length} steps
+              {w.doneCount} of {w.total} steps
             </b>
           </div>
           <div className="ad-progress">
-            <i style={{ width: `${(w.doneCount / w.steps.length) * 100}%` }} />
+            <i style={{ width: `${(w.doneCount / w.total) * 100}%` }} />
           </div>
         </div>
         <div className="ad-grant-foot">

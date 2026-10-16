@@ -26,3 +26,18 @@ export const nextPeriod = (period: string) => {
 }
 
 export const titleCase = (s: string) => s.replace(/-/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
+
+/**
+ * A work-experience payment's pay period, short, as the payroll grids' "Date" column shows it:
+ * "Sep 7–20, 2026", or "Sep 27 – Oct 10, 2026" across months.
+ */
+export const payPeriodWords = (start: string, end: string) => {
+  const d = (iso: string) => new Date(`${iso}T00:00:00Z`)
+  const mon = (iso: string) =>
+    d(iso).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
+  const day = (iso: string) => d(iso).getUTCDate()
+  const year = end.slice(0, 4)
+  return start.slice(0, 7) === end.slice(0, 7)
+    ? `${mon(start)} ${day(start)}–${day(end)}, ${year}`
+    : `${mon(start)} ${day(start)} – ${mon(end)} ${day(end)}, ${year}`
+}

@@ -3,11 +3,16 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ENGAGEMENT_KINDS,
   ENGAGEMENT_KIND_LABELS,
+  ENGAGEMENT_TRACKS,
+  ENGAGEMENT_TRACK_LABELS,
+  REPORT_LINE_LABELS,
+  tagValueLabel,
   type DocumentDto,
   type DocumentKind,
   type EngagementDetail,
   type EngagementInput,
   type EngagementKind,
+  type EngagementTrack,
   type WorkspaceDto,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
@@ -23,6 +28,7 @@ import {
   inputClass,
 } from '@/components/ui'
 import { HandCard } from '@/components/HandCard'
+import { TagPicker } from '@/components/Tags'
 
 const KIND_BLURB: Record<EngagementKind, string> = {
   grant: 'Money awarded to run a program. Reports by budget line, proof per expense.',
@@ -30,32 +36,13 @@ const KIND_BLURB: Record<EngagementKind, string> = {
   other: 'Anything else you must account for to a funder.',
 }
 
-type Stage = 'proposal' | 'award' | 'contract'
-const STAGES: { key: Stage; title: string; blurb: string }[] = [
-  {
-    key: 'proposal',
-    title: 'We sent a proposal',
-    blurb: 'Nothing awarded yet. Keep the proposal; the rest comes later.',
-  },
-  {
-    key: 'award',
-    title: 'We have the award letter',
-    blurb: 'The funder said yes. The contract is still being written.',
-  },
-  {
-    key: 'contract',
-    title: 'We have a signed contract',
-    blurb: 'Everything is settled; the months can start.',
-  },
-]
-
 type StepKey = 'what' | 'proposal' | 'award' | 'contract' | 'review'
 const STEPS: { key: StepKey; title: string; blurb: string; help: string; later: string }[] = [
   {
     key: 'what',
     title: 'What are you tracking?',
-    blurb: 'The kind of engagement, its name, which workspace keeps it, and where you are today.',
-    help: 'Most engagements start at the proposal. Say where you are and the next steps ask only for what you have; everything else can be added as it arrives.',
+    blurb: 'The kind of engagement, its name, which workspace keeps it, and what you keep for it.',
+    help: 'Every engagement keeps its financials. Tick the other records you keep here; the steps you leave out show greyed out, and you can bring any of them back later.',
     later: '',
   },
   {
@@ -87,13 +74,44 @@ const STEPS: { key: StepKey; title: string; blurb: string; help: string; later: 
     later: '',
   },
 ]
-const ACTIVE: Record<Stage, StepKey[]> = {
-  proposal: ['what', 'proposal', 'review'],
-  award: ['what', 'proposal', 'award', 'review'],
-  contract: ['what', 'proposal', 'award', 'contract', 'review'],
+/** The setup step that asks for each record kept besides the financials. */
+const STEP_FOR: Partial<Record<EngagementTrack, StepKey>> = {
+  proposal: 'proposal',
+  'award-letter': 'award',
 }
+/** What the financials checkbox covers, in the words of the steps it keeps. */
+const FINANCIALS_BLURB =
+  'Budget narrative, contract dates and approved budget, participants, monthly reports. Always kept.'
 
 type Files = Partial<Record<'proposal' | 'award-letter' | 'contract', File>>
+
+/**
+ * What is posted for a new engagement. A step the person left out sends none of its own fields (they may have typed
+ * some before unticking it); the funder and the amount are asked on another step then, so they always go.
+ */
+export function engagementBody(
+  form: EngagementInput,
+  kind: EngagementKind | null,
+  tracks: EngagementTrack[],
+  budgetItems: string[]
+): EngagementInput {
+  const body: EngagementInput = {
+    ...form,
+    kind: kind ?? 'grant',
+    tracks,
+    requestedAmount: form.requestedAmount || null,
+    awardAmount: form.awardAmount || null,
+    reportDueDay: Number(form.reportDueDay),
+    budgetItems,
+  }
+  if (!tracks.includes('proposal')) {
+    delete body.solicitation
+    delete body.requestedAmount
+    delete body.proposalSubmittedOn
+  }
+  if (!tracks.includes('award-letter')) delete body.awardedOn
+  return body
+}
 
 /** The setup flow for a new engagement: short steps, starting wherever the paperwork is. */
 export function NewEngagementPage() {
@@ -101,7 +119,7 @@ export function NewEngagementPage() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const { data: workspaces } = useLoad<WorkspaceDto[]>('/workspaces')
-  const [stage, setStage] = useState<Stage | null>(null)
+  const [tracks, setTracks] = useState<EngagementTrack[]>([...ENGAGEMENT_TRACKS])
   const [kind, setKind] = useState<EngagementKind | null>(null)
   const [at, setAt] = useState(0) // index into the active steps
   const [form, setForm] = useState<EngagementInput>({
@@ -111,7 +129,7 @@ export function NewEngagementPage() {
     solicitation: '',
     funder: '',
     funderContact: '',
-    fundingSources: [],
+    tags: [],
     requestedAmount: null,
     proposalSubmittedOn: '',
     awardedOn: '',
@@ -125,6 +143,8 @@ export function NewEngagementPage() {
     authorizerName: '',
   })
   const [files, setFiles] = useState<Files>({})
+  // The workspace's budget items this engagement does not use; every item is ticked to start with.
+  const [unticked, setUnticked] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const set = <K extends keyof EngagementInput>(k: K, v: EngagementInput[K]) =>
@@ -138,7 +158,25 @@ export function NewEngagementPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaces])
   const workspace = workspaces?.find((w) => w.id === form.workspaceId)
-  const active = stage ? ACTIVE[stage] : ['what']
+  const budgetItems = (workspace?.budgetItems ?? []).filter((i) => !unticked.includes(i.key))
+  const active: StepKey[] = [
+    'what',
+    ...ENGAGEMENT_TRACKS.flatMap((t) => (tracks.includes(t) && STEP_FOR[t] ? [STEP_FOR[t]!] : [])),
+    'contract',
+    'review',
+  ]
+  // The proposal step asks for the funder and the award step for the amount: when a step is not kept, the
+  // first step that is asks for them instead.
+  const funderHere = active[1]
+  const amountHere = active.includes('award') ? 'award' : 'contract'
+  const toggle = (t: EngagementTrack) =>
+    setTracks((ts) =>
+      ts.includes(t)
+        ? ts.filter((x) => x !== t)
+        : ENGAGEMENT_TRACKS.filter((x) => x === t || ts.includes(x))
+    )
+  const kindWord =
+    kind === 'other' || !kind ? 'engagement' : ENGAGEMENT_KIND_LABELS[kind].toLowerCase()
   const stepKey = active[Math.min(at, active.length - 1)]
   const step = STEPS.find((s) => s.key === stepKey)!
 
@@ -147,27 +185,35 @@ export function NewEngagementPage() {
     if (!kind) problems.push('a kind')
     if (!form.name.trim()) problems.push('a name')
     if (!form.workspaceId) problems.push('a workspace')
-    if (!stage) problems.push('where you are')
   }
-  if (stepKey === 'proposal' && !form.funder?.trim()) problems.push('the funding organization')
-  if (stepKey === 'award' && !(Number(form.awardAmount) > 0)) problems.push('the award amount')
-  if (stepKey === 'contract') {
-    if (!form.periodStart || !form.periodEnd) problems.push('start and end dates')
-    else if (form.periodEnd < form.periodStart) problems.push('an end date after the start')
-  }
+  if (stepKey === funderHere && !form.funder?.trim()) problems.push('the funding organization')
+  // Amounts and dates may not exist yet: the engagement page asks for them until they do.
+  if (
+    stepKey === 'contract' &&
+    form.periodStart &&
+    form.periodEnd &&
+    form.periodEnd < form.periodStart
+  )
+    problems.push('an end date after the start')
 
   const create = async () => {
     setBusy(true)
     setError(null)
     try {
-      const c = await api.post<EngagementDetail>('/engagements', {
-        ...form,
-        kind: kind ?? 'grant',
-        requestedAmount: form.requestedAmount || null,
-        awardAmount: form.awardAmount || null,
-        reportDueDay: Number(form.reportDueDay),
-      })
-      for (const [kind, file] of Object.entries(files) as [DocumentKind, File][]) {
+      const c = await api.post<EngagementDetail>(
+        '/engagements',
+        engagementBody(
+          form,
+          kind,
+          tracks,
+          budgetItems.map((i) => i.key)
+        )
+      )
+      // A file chosen for a record the person then stopped tracking stays behind.
+      const kept = (Object.entries(files) as [DocumentKind, File][]).filter(([k]) =>
+        tracks.includes(k as EngagementTrack)
+      )
+      for (const [kind, file] of kept) {
         const body = new FormData()
         body.append('file', file)
         body.append('workspaceId', c.workspaceId)
@@ -195,10 +241,45 @@ export function NewEngagementPage() {
       />
     </Field>
   )
-  const stageTitle = STAGES.find((s) => s.key === stage)?.title ?? 'Where are you?'
+  // Who funds it: asked on the first step this engagement uses.
+  const funderFields = (
+    <>
+      <Field
+        label="Funding organization"
+        required
+        hint="Who you sent it to; they award it and audit it"
+      >
+        <input
+          className={inputClass}
+          value={form.funder ?? ''}
+          onChange={(e) => set('funder', e.target.value)}
+        />
+      </Field>
+      <Field label="Funding organization contact" hint="A name or email there">
+        <input
+          className={inputClass}
+          value={form.funderContact ?? ''}
+          onChange={(e) => set('funderContact', e.target.value)}
+        />
+      </Field>
+      <div className="ad-field sm:col-span-2">
+        <span>Tags</span>
+        <TagPicker
+          types={workspace?.tagTypes ?? []}
+          target="engagement"
+          value={form.tags ?? []}
+          onChange={(tags) => set('tags', tags)}
+        />
+        <small>
+          The funding programs this is paid from, and any other tag for the engagement. The monthly
+          report form prints them under Source of funds.
+        </small>
+      </div>
+    </>
+  )
   const leave = () => {
     if (
-      at === 0 && !form.name.trim() && !kind && !stage
+      at === 0 && !form.name.trim() && !kind
         ? true
         : confirm('Leave the setup? What you entered here is not saved.')
     )
@@ -211,7 +292,7 @@ export function NewEngagementPage() {
         {workspace ? (
           <Link to={`/workspaces/${workspace.id}`}>{workspace.name}</Link>
         ) : (
-          <Link to="/workspaces">Manage workspaces</Link>
+          <Link to="/workspaces">My workspaces</Link>
         )}{' '}
         / Set up an award
       </nav>
@@ -245,19 +326,6 @@ export function NewEngagementPage() {
                   </li>
                 )
               })}
-              {!stage && (
-                <li className="ad-step ad-step-later">
-                  <span className="ad-step-dot" aria-hidden="true">
-                    …
-                  </span>
-                  <div className="ad-step-body">
-                    <h3 className="ad-step-title">The rest follows your answer</h3>
-                    <p className="ad-step-blurb !mb-0">
-                      Say where you are and only the steps you can fill today appear here.
-                    </p>
-                  </div>
-                </li>
-              )}
             </ol>
           </Card>
           <HandCard lead={step.title}>
@@ -265,7 +333,7 @@ export function NewEngagementPage() {
           </HandCard>
         </div>
 
-        <Card eyebrow={`Step ${at + 1} of ${active.length} · ${stageTitle}`} title={step.title}>
+        <Card eyebrow={`Step ${at + 1} of ${active.length}`} title={step.title}>
           <ErrorNote message={error} />
           {stepKey === 'what' && (
             <div className="grid gap-5">
@@ -320,24 +388,28 @@ export function NewEngagementPage() {
                 )
               )}
               <fieldset className="ad-field">
-                <span>
-                  Where are you in the process today?<i className="ad-req">*</i>
-                </span>
-                <div className="ad-kinds">
-                  {STAGES.map((s) => (
-                    <label key={s.key} className="ad-kind">
+                <span>What do you want to track for this {kindWord}?</span>
+                <div className="grid gap-2 text-sm">
+                  {ENGAGEMENT_TRACKS.map((t) => (
+                    <label key={t} className="inline-flex items-center gap-2">
                       <input
-                        type="radio"
-                        name="stage"
-                        value={s.key}
-                        checked={stage === s.key}
-                        onChange={() => setStage(s.key)}
+                        type="checkbox"
+                        checked={tracks.includes(t)}
+                        onChange={() => toggle(t)}
                       />
-                      <b>{s.title}</b>
-                      <span>{s.blurb}</span>
+                      {ENGAGEMENT_TRACK_LABELS[t]}
                     </label>
                   ))}
+                  <label className="inline-flex items-start gap-2">
+                    <input type="checkbox" className="mt-1" checked disabled />
+                    <span>
+                      Financials <span className="text-soft">· {FINANCIALS_BLURB}</span>
+                    </span>
+                  </label>
                 </div>
+                <small>
+                  What you leave out shows greyed out as not used. You can bring it back later.
+                </small>
               </fieldset>
             </div>
           )}
@@ -356,55 +428,7 @@ export function NewEngagementPage() {
                   autoFocus
                 />
               </Field>
-              <Field
-                label="Funding organization"
-                required
-                hint="Who you sent it to; they award it and audit it"
-              >
-                <input
-                  className={inputClass}
-                  value={form.funder ?? ''}
-                  onChange={(e) => set('funder', e.target.value)}
-                />
-              </Field>
-              <Field label="Funding organization contact" hint="A name or email there">
-                <input
-                  className={inputClass}
-                  value={form.funderContact ?? ''}
-                  onChange={(e) => set('funderContact', e.target.value)}
-                />
-              </Field>
-              <fieldset className="ad-field sm:col-span-2">
-                <span>Source of funds</span>
-                <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
-                  {(workspace?.fundingSources ?? []).map((f) => (
-                    <label key={f} className="inline-flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={form.fundingSources?.includes(f) ?? false}
-                        onChange={() =>
-                          set(
-                            'fundingSources',
-                            form.fundingSources?.includes(f)
-                              ? form.fundingSources.filter((x) => x !== f)
-                              : [...(form.fundingSources ?? []), f]
-                          )
-                        }
-                      />
-                      {f}
-                    </label>
-                  ))}
-                </div>
-                <small>
-                  The funding program you proposed to. Missing one? An owner adds it under{' '}
-                  {workspace ? (
-                    <Link to={`/workspaces/${workspace.id}#settings`}>the workspace settings</Link>
-                  ) : (
-                    'the workspace settings'
-                  )}
-                  .
-                </small>
-              </fieldset>
+              {funderFields}
               <Field label="Amount requested">
                 <MoneyInput
                   value={form.requestedAmount ?? null}
@@ -429,7 +453,8 @@ export function NewEngagementPage() {
 
           {stepKey === 'award' && (
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Award amount" required hint="Often less than you asked for">
+              {funderHere === 'award' && funderFields}
+              <Field label="Award amount" hint="Often less than you asked for">
                 <MoneyInput
                   value={form.awardAmount ?? null}
                   onChange={(v) => set('awardAmount', v)}
@@ -454,6 +479,7 @@ export function NewEngagementPage() {
 
           {stepKey === 'contract' && (
             <div className="grid gap-4 sm:grid-cols-2">
+              {funderHere === 'contract' && funderFields}
               <p className="ad-group-title sm:col-span-2 !mb-0">Contract</p>
               <Field
                 label="Contract number"
@@ -467,7 +493,19 @@ export function NewEngagementPage() {
                   autoFocus
                 />
               </Field>
-              <Field label="Starts" required>
+              {amountHere === 'contract' && (
+                <Field
+                  label="Contract amount"
+                  hint="The total the contract awards"
+                  className="sm:col-span-2"
+                >
+                  <MoneyInput
+                    value={form.awardAmount ?? null}
+                    onChange={(v) => set('awardAmount', v)}
+                  />
+                </Field>
+              )}
+              <Field label="Starts">
                 <input
                   type="date"
                   className={inputClass}
@@ -475,7 +513,7 @@ export function NewEngagementPage() {
                   onChange={(e) => set('periodStart', e.target.value)}
                 />
               </Field>
-              <Field label="Ends" required>
+              <Field label="Ends">
                 <input
                   type="date"
                   className={inputClass}
@@ -483,11 +521,44 @@ export function NewEngagementPage() {
                   onChange={(e) => set('periodEnd', e.target.value)}
                 />
               </Field>
-              {fileField(
-                'contract',
-                'Signed contract',
-                'PDF or DOCX. Optional now; it is step 4 of the workflow.'
-              )}
+              {tracks.includes('contract') &&
+                fileField(
+                  'contract',
+                  'Signed contract',
+                  'PDF or DOCX. Optional now; it is step 4 of the workflow.'
+                )}
+              <fieldset className="ad-field sm:col-span-2">
+                <span>Approved budget lines</span>
+                <div className="grid gap-2 text-sm sm:grid-cols-2">
+                  {(workspace?.budgetItems ?? []).map((i) => (
+                    <label key={i.key} className="inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={!unticked.includes(i.key)}
+                        onChange={() =>
+                          setUnticked((u) =>
+                            u.includes(i.key) ? u.filter((k) => k !== i.key) : [...u, i.key]
+                          )
+                        }
+                      />
+                      <span>
+                        {i.label}{' '}
+                        <span className="text-soft">· {REPORT_LINE_LABELS[i.reportLine]}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <small>
+                  The items this budget uses. You enter each amount on the engagement page, and can
+                  add or remove lines there. Missing one? An owner adds it under{' '}
+                  {workspace ? (
+                    <Link to={`/workspaces/${workspace.id}#settings`}>the workspace settings</Link>
+                  ) : (
+                    'the workspace settings'
+                  )}
+                  .
+                </small>
+              </fieldset>
               <p className="ad-group-title sm:col-span-2 !mb-0 mt-2">Reporting</p>
               <Field
                 label="Monthly report due on day"
@@ -543,14 +614,17 @@ export function NewEngagementPage() {
               <dd>{form.name}</dd>
               <dt>Workspace</dt>
               <dd>{workspace?.name}</dd>
-              <dt>Where you are</dt>
-              <dd>{stageTitle}</dd>
-              <dt>Proposal</dt>
+              <dt>Tracking</dt>
+              <dd>{[...tracks.map((t) => ENGAGEMENT_TRACK_LABELS[t]), 'Financials'].join(', ')}</dd>
+              <dt>{active.includes('proposal') ? 'Proposal' : 'Funder'}</dt>
               <dd>
                 {[
                   form.solicitation?.trim(),
-                  form.funder?.trim() && `to ${form.funder.trim()}`,
-                  form.fundingSources?.length ? form.fundingSources.join(', ') : null,
+                  form.funder?.trim() &&
+                    (active.includes('proposal') ? `to ${form.funder.trim()}` : form.funder.trim()),
+                  form.tags?.length
+                    ? form.tags.map((t) => tagValueLabel(workspace?.tagTypes ?? [], t)).join(', ')
+                    : null,
                   form.requestedAmount ? `${money(Number(form.requestedAmount))} requested` : null,
                   form.proposalSubmittedOn
                     ? `sent ${shortDate(`${form.proposalSubmittedOn}T00:00:00Z`)}`
@@ -562,15 +636,17 @@ export function NewEngagementPage() {
               </dd>
               <dt>Award</dt>
               <dd>
-                {active.includes('award')
-                  ? [
-                      form.awardAmount ? money(Number(form.awardAmount)) : null,
-                      form.awardedOn ? `dated ${shortDate(`${form.awardedOn}T00:00:00Z`)}` : null,
-                      files['award-letter']?.name,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ') || 'nothing yet'
-                  : 'later, when it arrives'}
+                {!tracks.includes('award-letter')
+                  ? `not used${form.awardAmount ? ` · contract amount ${money(Number(form.awardAmount))}` : ''}`
+                  : active.includes('award')
+                    ? [
+                        form.awardAmount ? money(Number(form.awardAmount)) : null,
+                        form.awardedOn ? `dated ${shortDate(`${form.awardedOn}T00:00:00Z`)}` : null,
+                        files['award-letter']?.name,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ') || 'nothing yet'
+                    : 'later, when it arrives'}
               </dd>
               <dt>Contract</dt>
               <dd>
@@ -586,6 +662,10 @@ export function NewEngagementPage() {
                       .filter(Boolean)
                       .join(' · ')
                   : 'later, when it is signed'}
+              </dd>
+              <dt>Budget lines</dt>
+              <dd>
+                {budgetItems.length ? budgetItems.map((i) => i.label).join(', ') : 'none yet'}
               </dd>
             </dl>
           )}

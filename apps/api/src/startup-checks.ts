@@ -12,6 +12,8 @@ import { findTermsFile, termsWording } from './auth/terms-fingerprint'
  *   - in production: NODE_ENV=production and TRUST_PROXY set;
  *   - docs/terms/index.html, with its #terms section, is there: the version everyone accepts is the fingerprint of
  *     that wording, computed from it at startup;
+ *   - on Railway, email in receipts is all set up or not at all: RESEND_RECEIVING_API_KEY, RESEND_WEBHOOK_SECRET and
+ *     RECEIPTS_DOMAIN together (the contact form's RESEND_API_KEY is a separate, sending-only key);
  *   - DEMO_AUTH no longer exists; a leftover value is refused so nobody believes it still works.
  */
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
@@ -61,6 +63,14 @@ export function configProblems(
       'R2_DOCUMENTS_BUCKET is not set: documents of a shared database never go to a local disk'
     )
   if (deployed && !env.CLERK_SECRET_KEY) problems.push('CLERK_SECRET_KEY is not set')
+  if (
+    railway &&
+    (env.RESEND_RECEIVING_API_KEY || env.RESEND_WEBHOOK_SECRET || env.RECEIPTS_DOMAIN)
+  ) {
+    for (const name of ['RESEND_RECEIVING_API_KEY', 'RESEND_WEBHOOK_SECRET', 'RECEIPTS_DOMAIN'])
+      if (!env[name]?.trim())
+        problems.push(`${name} is not set: email in receipts needs all three of its settings`)
+  }
   if (railway === 'production' && !production)
     problems.push('NODE_ENV must be "production" in the production environment')
   if (production) {

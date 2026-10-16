@@ -81,7 +81,7 @@ export function streamPart(
   content: ExportContent,
   layouts: PartLayout[],
   n: number,
-  read: (key: string) => Promise<Uint8Array>
+  read: (key: string, path: string) => Promise<Uint8Array>
 ): AsyncGenerator<Uint8Array> {
   const layout = layouts[n - 1]
   if (!layout) throw new Error(`No part ${n}`)
@@ -92,7 +92,7 @@ export function streamPart(
   for (const path of layout.paths) {
     const key = byPath.get(path)
     if (key === undefined) throw new Error(`${path} is no longer part of the export`)
-    entries.push([path, async () => new Uint8Array(await read(key))])
+    entries.push([path, async () => new Uint8Array(await read(key, path))])
   }
   return zipEntries(entries)
 }

@@ -34,7 +34,7 @@ export function Shell({ children, adminOnly }: { children: React.ReactNode; admi
                 </li>
                 <li>
                   <NavLink to="/workspaces" aria-current={inWorkspace ? 'page' : undefined}>
-                    Manage workspaces
+                    My workspaces
                   </NavLink>
                 </li>
               </ul>

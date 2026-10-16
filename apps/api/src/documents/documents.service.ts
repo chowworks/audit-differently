@@ -35,7 +35,8 @@ import {
   DOCUMENT_KIND_LABELS,
   DOCUMENT_KINDS,
   DOCUMENT_SENSITIVITY,
-  PERSONAL_DOCUMENT_ROLES,
+  MONTH_PROOF_KINDS,
+  personalRolesFor,
   WRITE_ROLES,
   type DocumentDto,
   type DocumentKind,
@@ -49,7 +50,8 @@ import { ServiceFailureLog } from '../core/service-failure-log'
 import { EngagementsService } from '../engagements/engagements.service'
 import { ParticipantsService } from '../participants/participants.service'
 import { PrismaService } from '../prisma/prisma.service'
-import { ReportsService } from '../reports/reports.service'
+import { dayWords } from '../reports/reopenings'
+import { refuseLocked, ReportsService } from '../reports/reports.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
 import { documentDto, type UploadResult } from './document.dto'
 import { describe, StagedFile } from './staged-file'
@@ -99,7 +101,7 @@ export interface ListContext {
   id?: string
 }
 
-type Uploaded = { originalname: string; mimetype: string; size: number; buffer: Buffer }
+export type Uploaded = { originalname: string; mimetype: string; size: number; buffer: Buffer }
 
 @Injectable()
 export class DocumentsService {
@@ -116,7 +118,7 @@ export class DocumentsService {
   ) {}
 
   /** Checks an upload (who, what kind, which bytes, where) and readies it; nothing is stored yet. */
-  private async stage(caller: Caller, file: Uploaded, body: UploadBody): Promise<StagedFile> {
+  async stage(caller: Caller, file: Uploaded, body: UploadBody): Promise<StagedFile> {
     if (!caller.workspaceIds.includes(body.workspaceId))
       throw new NotFoundException('No such workspace')
     allow(
@@ -204,6 +206,8 @@ export class DocumentsService {
       }
       throw new BadRequestException('attachTo must be expense, wex or participant')
     }
+    // Attaching checks the record's month itself (`ReportsService.editable`); a file filed alone under a month does here.
+    await this.refuseLockedMonth(staged.data)
     if (body.replaces) return documentDto(await this.replace(caller, staged, body.replaces))
     if (body.clearsWaiver === 'true')
       return documentDto(await this.uploadClearingWaiver(caller, staged))
@@ -232,6 +236,8 @@ export class DocumentsService {
     if (!old || old.workspaceId !== staged.data.workspaceId) throw new NotFoundException()
     // Refused before anything is stored: an attached file is detached where it is used first.
     await this.assertUnattached(this.prisma, oldId)
+    await this.refuseLockedMonth(old)
+    await this.refuseSubmittedSigned(old)
     if (!keyInWorkspace(old)) throw new NotFoundException()
     const made = await staged.commit(() =>
       this.log.change(
@@ -288,6 +294,57 @@ export class DocumentsService {
       )
     )
     return doc
+  }
+
+  /**
+   * A month's ledger proof (MONTH_PROOF_KINDS) filed under a month is added, replaced or removed only while that month
+   * is a draft. The signed report, and any file with no month or no month's report yet, are never held back.
+   */
+  private async refuseLockedMonth(doc: {
+    engagementId?: string | null
+    period?: string | null
+    kind: string
+  }): Promise<void> {
+    if (!doc.engagementId || !doc.period) return
+    if (!(MONTH_PROOF_KINDS as readonly string[]).includes(doc.kind)) return
+    const month = await this.prisma.monthlyReport.findFirst({
+      where: { engagementId: doc.engagementId, period: doc.period },
+      select: { status: true, period: true },
+    })
+    if (month) refuseLocked(month)
+  }
+
+  /**
+   * The signed copy that went to the funder is never replaced or removed: one a reopening kept (ReportReopening), or
+   * the one on file when the submitted month was submitted. The corrected copy is attached beside it.
+   */
+  private async refuseSubmittedSigned(doc: {
+    id: string
+    workspaceId: string
+    engagementId?: string | null
+    period?: string | null
+    kind: string
+    uploadedAt: Date
+  }): Promise<void> {
+    if (doc.kind !== 'signed-report' || !doc.engagementId || !doc.period) return
+    const kept = await this.prisma.reportReopening.findFirst({
+      where: { workspaceId: doc.workspaceId, signedDocumentId: doc.id },
+      orderBy: { reopenedAt: 'asc' },
+      select: { submittedAt: true },
+    })
+    let submittedAt = kept?.submittedAt
+    if (!submittedAt) {
+      const month = await this.prisma.monthlyReport.findFirst({
+        where: { engagementId: doc.engagementId, period: doc.period },
+        select: { status: true, submittedAt: true },
+      })
+      if (month?.status === 'submitted' && month.submittedAt && doc.uploadedAt <= month.submittedAt)
+        submittedAt = month.submittedAt
+    }
+    if (submittedAt)
+      throw new ConflictException(
+        `This is the signed copy that was submitted on ${dayWords(submittedAt)}; attach the corrected one alongside it`
+      )
   }
 
   private async assertUnattached(
@@ -400,6 +457,8 @@ export class DocumentsService {
       )
     // A row whose key says another workspace is tampered or broken: nothing is deleted and nothing logged.
     if (!keyInWorkspace(doc)) throw new NotFoundException()
+    await this.refuseLockedMonth(doc)
+    await this.refuseSubmittedSigned(doc)
     await this.log.change(caller, (tx) => tx.document.delete({ where: { id } }), {
       workspaceId: doc.workspaceId,
       resource: 'document',
@@ -410,29 +469,66 @@ export class DocumentsService {
     await this.dropStored(caller, doc)
   }
 
-  /** A short-lived link to the file. Personal documents: shorter, download only, fewer roles, and logged as such. */
+  /**
+   * Removes a month's payroll document even while it proves payroll items, for "Replace this month's payroll files":
+   * its links to those items go in the same transaction as the row and its access-log line, then the file. The
+   * month must be a draft (the caller checked) and the document one of the month's payroll documents.
+   */
+  async removeReplaced(caller: Caller, doc: Prisma.DocumentGetPayload<object>): Promise<void> {
+    allow(
+      workspaceRole(caller, doc.workspaceId, WRITE_ROLES),
+      'Only an owner or bookkeeper replaces payroll files'
+    )
+    if (!keyInWorkspace(doc)) throw new NotFoundException()
+    await this.refuseLockedMonth(doc)
+    await this.refuseSubmittedSigned(doc)
+    await this.log.change(
+      caller,
+      async (tx) => {
+        await tx.expenseDocument.deleteMany({ where: { documentId: doc.id } })
+        await tx.wexPaymentDocument.deleteMany({ where: { documentId: doc.id } })
+        return tx.document.delete({ where: { id: doc.id } })
+      },
+      {
+        workspaceId: doc.workspaceId,
+        resource: 'document',
+        subjectId: doc.id,
+        action: 'delete',
+        description: `Removed ${describe(doc)} when replacing the month's payroll files`,
+      }
+    )
+    await this.dropStored(caller, doc)
+  }
+
+  /**
+   * A short-lived link to the file. Personal documents: shorter, fewer roles, download only and logged as such, except
+   * a pay stub, which opens in the browser like the other payroll files (owner's decision, 2026-10-16).
+   */
   async url(caller: Caller, id: string): Promise<{ url: string; expiresInSeconds: number }> {
     const doc = await this.prisma.document.findFirst({ where: { id, ...tenantWhere(caller) } })
     if (!doc) throw new NotFoundException()
     const personal = doc.sensitivity === 'personal'
     if (personal) {
-      const roles = [...PERSONAL_DOCUMENT_ROLES] as Role[]
+      const roles = [...personalRolesFor(doc.kind)] as Role[]
       if (!workspaceRole(caller, doc.workspaceId, roles))
-        throw new ForbiddenException('Personal documents are open to owners and auditors only')
+        throw new ForbiddenException(
+          'Personal documents are open to owners and auditors only (pay stubs to bookkeepers too)'
+        )
     }
     const expiresInSeconds = personal ? 60 : 120
+    const download = personal && doc.kind !== 'paystub'
     if (!keyInWorkspace(doc)) throw new NotFoundException()
     const url = await this.storage.getSignedUrl(
       doc.storageKey,
       expiresInSeconds,
-      personal ? { downloadName: doc.fileName } : { inlineName: doc.fileName }
+      download ? { downloadName: doc.fileName } : { inlineName: doc.fileName }
     )
     await this.log.log(caller, {
       workspaceId: doc.workspaceId,
       resource: 'document',
       subjectId: doc.id,
       action: 'read',
-      description: `${personal ? 'Downloaded' : 'Opened'} ${describe(doc)}`,
+      description: `${download ? 'Downloaded' : 'Opened'} ${describe(doc)}`,
     })
     return { url, expiresInSeconds }
   }

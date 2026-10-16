@@ -1,6 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common'
-import { APP_GUARD } from '@nestjs/core'
+import { APP_FILTER, APP_GUARD } from '@nestjs/core'
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler'
+import { MonthLockedFilter } from './reports/month-locked.filter'
 import { HealthModule } from './health/health.module'
 import { PrismaModule } from './prisma/prisma.module'
 import { AuthModule } from './auth/auth.module'
@@ -16,6 +17,10 @@ import { ParticipantsModule } from './participants/participants.module'
 import { DeletionModule } from './deletion/deletion.module'
 import { ContactModule } from './contact/contact.module'
 import { AdminModule } from './admin/admin.module'
+import { ImportsModule } from './imports/imports.module'
+import { ReceiptsModule } from './receipts/receipts.module'
+import { PayrollModule } from './payroll/payroll.module'
+import { InboundModule } from './inbound/inbound.module'
 import { TenantMiddleware } from './core/tenant.middleware'
 
 @Module({
@@ -38,8 +43,16 @@ import { TenantMiddleware } from './core/tenant.middleware'
     DeletionModule,
     ContactModule,
     AdminModule,
+    ImportsModule,
+    ReceiptsModule,
+    PayrollModule,
+    InboundModule,
   ],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // The database's month lock (a closed or submitted month refuses ledger writes) answers as a 409 on every route.
+    { provide: APP_FILTER, useClass: MonthLockedFilter },
+  ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {

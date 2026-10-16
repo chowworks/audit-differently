@@ -139,7 +139,7 @@ export function DeleteModal({
       ]
     : [
         'the workspace itself, its people and their roles',
-        'its lists, such as the sources of funds',
+        'its lists, such as the tags and budget items',
         plural(summary?.documents ?? 0, 'workspace-level document'),
       ]
 

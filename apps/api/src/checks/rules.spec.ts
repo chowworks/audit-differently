@@ -99,33 +99,103 @@ describe('runRules', () => {
     expect(found).toEqual(['duplicate-item', 'duplicate-item'])
   })
 
-  it('wants the eligibility file of anyone paid this month, softer with a self-attestation', () => {
-    const paid = (items: string[]) => ({
-      id: 'p1',
-      participantId: '546001',
-      displayName: 'Sam Example',
-      eligibilityItems: items as never,
-      paidThisMonth: true,
+  describe("a participant's pay", () => {
+    // Fictional: the sample's September pay for Jordan Sample.
+    const proof = (purpose: string, kind: string, words: string[] = []) =>
+      ({ purpose, kind, words }) as never
+    const pay = (proofs: never[]) => ({
+      id: 'w1',
+      label: 'Jordan Sample, 2026-09-07 to 2026-09-20',
+      grossAmount: 280,
+      start: '2026-09-07',
+      end: '2026-09-20',
+      proofs,
     })
-    const complete = [
-      'enrollment-form',
-      'proof-of-age',
-      'right-to-work',
-      'school-status',
-      'income-eligibility',
-    ]
-    expect(codes(month({ participants: [paid(complete)] }))).toEqual([])
-    expect(codes(month({ participants: [{ ...paid([]), paidThisMonth: false }] }))).toEqual([])
-    const found = runRules(month({ participants: [paid(['enrollment-form', 'proof-of-age'])] }))
-    expect(found).toEqual([
-      expect.objectContaining({
-        code: 'participant-file-incomplete',
-        severity: 'attention',
-        participantId: 'p1',
-        message: expect.stringContaining('right-to-work, school-status, income-eligibility'),
-      }),
-    ])
-    expect(runRules(month({ participants: [paid(['self-attestation'])] }))[0].severity).toBe('info')
+    const highlights = {
+      paystub: ['name', 'payPeriod', 'amount'],
+      timesheet: ['row', 'name', 'payPeriod'],
+      'payroll-register': ['payPeriod', 'payDate', 'amount'],
+    } as never
+
+    it('needs a timesheet, a register and a pay stub, like a staff payroll line', () => {
+      const found = runRules(month({ wexPayments: [pay([])] }))
+      expect(found.map((f) => [f.code, f.severity, f.wexPaymentId])).toEqual([
+        ['missing-timesheet', 'blocker', 'w1'],
+        ['missing-register', 'blocker', 'w1'],
+        ['missing-proof-of-payment', 'blocker', 'w1'],
+      ])
+      expect(found[2]!.message).toBe(
+        'Jordan Sample, 2026-09-07 to 2026-09-20 ($280.00): no pay stub or deposit advice attached.'
+      )
+    })
+
+    it('passes proofs whose highlighted words show its pay and pay period', () => {
+      const all = [
+        proof('timesheet', 'timesheet', ['Jordan Sample | 09/07/2026 | 09/20/2026 | $280.00']),
+        proof('register', 'payroll-register', ['09/07/2026', '09/20/2026']),
+        proof('payment', 'paystub', ['Jordan', 'Sample', '09/07/2026', '09/20/2026', '$280.00']),
+      ]
+      expect(codes(month({ wexPayments: [pay(all)], highlights }))).toEqual([])
+    })
+
+    it('says when a highlighted proof does not show the pay or the pay period', () => {
+      const found = runRules(
+        month({
+          wexPayments: [
+            pay([
+              proof('timesheet', 'timesheet', ['Jordan Sample | 09/07/2026 | 09/20/2026']),
+              proof('register', 'payroll-register', ['09/21/2026']),
+              proof('payment', 'paystub', [
+                'Jordan',
+                'Sample',
+                '09/07/2026',
+                '09/20/2026',
+                '$300.00',
+              ]),
+            ]),
+          ],
+          highlights,
+        })
+      )
+      expect(found.map((f) => [f.code, f.severity])).toEqual([
+        ['proof-mismatch', 'attention'],
+        ['proof-mismatch', 'attention'],
+      ])
+      expect(found.map((f) => f.message)).toEqual([
+        "Jordan Sample, 2026-09-07 to 2026-09-20 ($280.00): the pay period was not found on its payroll register. Check the proof is this payment's.",
+        "Jordan Sample, 2026-09-07 to 2026-09-20 ($280.00): $280.00 was not found on its pay stub. Check the proof is this payment's.",
+      ])
+    })
+
+    it('reads only what the platform highlights, and nothing on a proof attached without highlights', () => {
+      const bare = [
+        proof('timesheet', 'timesheet'),
+        proof('register', 'payroll-register'),
+        proof('payment', 'paystub'),
+      ]
+      expect(codes(month({ wexPayments: [pay(bare)], highlights }))).toEqual([])
+      const stub = [
+        proof('timesheet', 'timesheet'),
+        proof('register', 'payroll-register'),
+        proof('payment', 'paystub', ['Jordan']),
+      ]
+      expect(
+        codes(month({ wexPayments: [pay(stub)], highlights: { paystub: ['name'] } as never }))
+      ).toEqual([])
+    })
+  })
+
+  it("says when a staff line's bank line does not show its amount", () => {
+    const line = expense({
+      reportLine: 'staff-salaries',
+      totalCost: 724.02,
+      allocatedAmount: 724.02,
+      documents: ['timesheet', 'register', 'payment'],
+      proofs: [{ purpose: 'payment', kind: 'bank-statement', words: ['09/22', '712.00'] }],
+    })
+    expect(
+      codes(month({ expenses: [line], highlights: { 'bank-statement': ['date', 'amount'] } }))
+    ).toContain('proof-mismatch')
   })
 
   it('computes the due date and notes a late submission', () => {

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ROLE_LABELS, type Role, type WorkspaceDto } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
-import { Empty, ErrorNote } from '@/components/ui'
+import { FullDemoChip, Empty, ErrorNote } from '@/components/ui'
 import { DeleteModal } from '@/components/DeleteModal'
 import { HandCard } from '@/components/HandCard'
 
@@ -16,7 +16,7 @@ export function WorkspacesPage() {
     <>
       <div className="ad-head">
         <div>
-          <h1 className="ad-h1">Manage workspaces</h1>
+          <h1 className="ad-h1">My workspaces</h1>
           <p className="ad-sub">
             A workspace is your team's set of grants and contracts, the people who work on them, and
             the lists they share. What one person records, the whole team sees.
@@ -39,7 +39,8 @@ export function WorkspacesPage() {
                         className="text-navy no-underline hover:underline"
                       >
                         {w.name}
-                      </Link>
+                      </Link>{' '}
+                      {w.featuredDemo && <FullDemoChip />}
                     </h2>
                     <p className="mt-1 text-sm text-soft">
                       {w.engagementCount} engagement{w.engagementCount === 1 ? '' : 's'} ·{' '}

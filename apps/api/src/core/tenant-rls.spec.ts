@@ -1,6 +1,7 @@
 import type { PGlite } from '@electric-sql/pglite'
 import { APP_ROLE_FUNCTIONS, appRoleGrantsSql } from './app-role-grants'
 import { TENANT_TABLES, touchesTenantTable } from './tenant-tables'
+import { CLAIM_SQL, EXPIRE_SQL, MAX_ATTEMPTS } from '../inbound/inbound.service'
 import { dbTestsEnabled, insert, migratedDb } from './testing/tenant-db'
 
 // Tenant isolation on real Postgres, as the restricted role with exactly its privileges: the triggers that set
@@ -84,8 +85,26 @@ suite('tenant isolation', () => {
       })
       await insert(db, 'WexPaymentDocument', { wexPaymentId: `WX-${w}`, documentId: `D-${w}` })
       await insert(db, 'Check', { id: `K-${w}`, monthlyReportId: `R-${w}` })
+      await insert(db, 'ReportReopening', {
+        id: `RO-${w}`,
+        monthlyReportId: `R-${w}`,
+        reopenedById: `owner-${w}`,
+      })
       await insert(db, 'DataAccessLog', { id: `L-${w}`, workspaceId: w, actorId: 'x' })
       await insert(db, 'Suggestion', { id: `S-${w}`, workspaceId: w, userId: 'x', text: 't' })
+      await insert(db, 'ImportMapping', {
+        id: `IM-${w}`,
+        workspaceId: w,
+        name: 'QuickBooks mapping',
+      })
+      await insert(db, 'InboundReceipt', {
+        id: `IR-${w}`,
+        emailId: `email-${w}`,
+        workspaceId: w,
+        fromAddress: `book@${w}.example.org`,
+        toAddress: `${w.toLowerCase()}@receipts.example.org`,
+        receivedAt: '2026-09-15T12:00:00Z',
+      })
       // So that "sees no row" of these means something: each workspace has a deletion record and its owner an
       // acceptance of the Terms.
       await insert(db, 'DeletionRecord', {
@@ -110,6 +129,13 @@ suite('tenant isolation', () => {
       await insert(db, 'Membership', { userId: u, workspaceId: w, role })
     }
     await insert(db, 'User', { id: 'nobody' })
+    // An emailed receipt whose address is not known yet: trusted work's alone.
+    await insert(db, 'InboundReceipt', {
+      id: 'IR-none',
+      emailId: 'email-none',
+      toAddress: 'nobody-here@receipts.example.org',
+      receivedAt: '2026-09-15T12:00:00Z',
+    })
   })
 
   describe('triggers', () => {
@@ -128,6 +154,7 @@ suite('tenant isolation', () => {
         ['WexPayment', 'WX-W1'],
         ['WexPaymentDocument', 'WX-W1'],
         ['Check', 'K-W1'],
+        ['ReportReopening', 'RO-W1'],
       ])
         expect([table, await t(table, id)]).toEqual([table, { workspaceId: 'W1' }])
       expect(await t('Expense', 'X-W2')).toEqual({ workspaceId: 'W2' })
@@ -228,8 +255,11 @@ suite('tenant isolation', () => {
         expect(await ids('Participant')).toEqual(['P-W1'])
         expect(await ids('WexPayment')).toEqual(['WX-W1'])
         expect(await ids('Check')).toEqual(['K-W1'])
+        expect(await ids('ReportReopening')).toEqual(['RO-W1'])
         expect(await ids('DataAccessLog')).toEqual(['L-W1'])
         expect(await ids('Suggestion')).toEqual(['S-W1'])
+        expect(await ids('ImportMapping')).toEqual(['IM-W1'])
+        expect(await ids('InboundReceipt')).toEqual(['IR-W1'])
         expect(await ids('User')).toEqual(['aud-W1', 'book-W1', 'owner-W1'])
         for (const t of ['ExpenseDocument', 'ParticipantDocument', 'WexPaymentDocument'])
           expect(await count(t)).toBe(1)
@@ -278,6 +308,27 @@ suite('tenant isolation', () => {
         expect((await attempt(`UPDATE "Expense" SET memo = 'x' WHERE id = 'X-W2'`)).rows).toBe(0)
         expect((await attempt(`DELETE FROM "Expense" WHERE id = 'X-W2'`)).rows).toBe(0)
         expect((await attempt(`UPDATE "Expense" SET memo = 'x' WHERE id = 'X-W1'`)).rows).toBe(1)
+        // Tags (migration 20261015000500) ride the same line: another workspace's records are not there.
+        expect(
+          (await attempt(`UPDATE "Expense" SET tags = '{site:north}' WHERE id = 'X-W2'`)).rows
+        ).toBe(0)
+        expect(
+          (await attempt(`UPDATE "Expense" SET tags = '{site:north}' WHERE id = 'X-W1'`)).rows
+        ).toBe(1)
+        expect(
+          (
+            await attempt(
+              `UPDATE "Participant" SET tags = '{age-group:under-18}' WHERE "workspaceId" = 'W2'`
+            )
+          ).rows
+        ).toBe(0)
+        expect(
+          (
+            await attempt(
+              `UPDATE "WexPayment" SET tags = '{age-group:under-18}' WHERE "workspaceId" = 'W2'`
+            )
+          ).rows
+        ).toBe(0)
         expect(
           (
             await attempt(
@@ -528,6 +579,821 @@ suite('tenant isolation', () => {
     })
   })
 
+  describe('importing transactions (migration 20261015000600)', () => {
+    it('lets a member save and change a mapping in their own workspace, and nobody remove one', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "ImportMapping" ("id","workspaceId","name","updatedAt") VALUES ('IM-new','W1','Bank download',now()) RETURNING id`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "ImportMapping" ("id","workspaceId","name","updatedAt") VALUES ('IM-bad','W2','Bank download',now())`
+            )
+          ).error
+        ).toMatch(/row-level security/)
+        expect(
+          (await attempt(`UPDATE "ImportMapping" SET "headers" = '{Date}' WHERE id = 'IM-W2'`)).rows
+        ).toBe(0)
+        expect(
+          (await attempt(`UPDATE "ImportMapping" SET "headers" = '{Date}' WHERE id = 'IM-W1'`)).rows
+        ).toBe(1)
+        expect((await attempt(`DELETE FROM "ImportMapping"`)).rows).toBe(0)
+        expect(
+          (await attempt(`UPDATE "ImportMapping" SET "columns" = '[]' WHERE id = 'IM-W1'`)).error
+        ).toMatch(/columns_check/)
+      })
+      await expect(
+        db.query(`UPDATE "ImportMapping" SET "workspaceId" = 'W2' WHERE id = 'IM-W1'`)
+      ).rejects.toThrow(/ImportMapping.workspaceId cannot be changed/)
+    })
+
+    it('makes an imported row once per engagement: the fingerprint is unique', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        const row = (id: string, item: string) =>
+          `INSERT INTO "Expense" ("id","engagementId","monthlyReportId","itemNumber","date","vendor","totalCost","allocatedAmount","reportLine","importFingerprint","updatedAt")
+           VALUES ('${id}','E-W1','R-W1','${item}','2026-07-01','v',1,1,'program-costs','fp-1',now())`
+        expect((await attempt(row('X-imp1', 'IMP-1'))).rows).toBe(1)
+        expect((await attempt(row('X-imp2', 'IMP-2'))).error).toMatch(/importFingerprint/)
+      })
+    })
+  })
+
+  describe('emailed receipts (migration 20261015001000)', () => {
+    const queued = (id: string, ws = 'NULL') =>
+      `INSERT INTO "InboundReceipt" ("id","emailId","workspaceId","toAddress","receivedAt") VALUES ('${id}','email-${id}',${ws},'${id.toLowerCase()}@receipts.example.org',now()) RETURNING id`
+
+    it('keeps a row with no workspace to trusted work: members never see, write or claim it', async () => {
+      for (const ctx of [
+        { workspaces: ['W1'], user: 'owner-W1' },
+        { workspaces: ['W1'], user: 'book-W1' },
+        { workspaces: ['W2'], user: 'owner-W2' },
+        {},
+      ]) {
+        await as(ctx, async () => {
+          expect(await ids('InboundReceipt')).not.toContain('IR-none')
+          expect((await attempt(queued('IR-m'))).error).toMatch(/row-level security/)
+          expect((await attempt(queued('IR-m2', "'W1'"))).error).toMatch(/row-level security/)
+          expect(
+            (await attempt(`UPDATE "InboundReceipt" SET status = 'failed' WHERE id = 'IR-none'`))
+              .rows
+          ).toBe(0)
+          expect((await attempt(`DELETE FROM "InboundReceipt"`)).rows).toBe(0)
+        })
+      }
+    })
+
+    it('lets trusted work queue a row, say once whose it is, and claim what is due', async () => {
+      await as({ workspaces: ['W1', 'W2'], system: true }, async () => {
+        expect((await attempt(queued('IR-sys'))).rows).toBe(1)
+        // The webhook's idempotency: one row per provider email id.
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "InboundReceipt" ("id","emailId","receivedAt") VALUES ('IR-dup','email-IR-sys',now())`
+            )
+          ).error
+        ).toMatch(/emailId/)
+        // Only a row with no workspace may be inserted, even by trusted work.
+        expect((await attempt(queued('IR-sys2', "'W1'"))).error).toMatch(/row-level security/)
+        // Whose it is: the workspace only together with its verified sender (migration 20261015001200).
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET "workspaceId" = 'W1' WHERE id = 'IR-sys'`))
+            .error
+        ).toMatch(/only with its verified sender/)
+        expect(
+          (
+            await attempt(
+              `UPDATE "InboundReceipt" SET "workspaceId" = 'W1', "senderUserId" = 'book-W1' WHERE id = 'IR-sys'`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET "workspaceId" = 'W2' WHERE id = 'IR-sys'`))
+            .error
+        ).toMatch(/workspaceId cannot be changed/)
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET "subject" = 'x' WHERE id = 'IR-sys'`)).error
+        ).toMatch(/cannot be changed/)
+        // An API set up for another receipts domain (a second laptop on the shared dev database) claims none of them.
+        expect(
+          (await db.query(CLAIM_SQL, [10, MAX_ATTEMPTS, 'other.example.org'])).rows
+        ).toHaveLength(0)
+        // The worker's claim: parameterized, SKIP LOCKED, counts the attempt and leases the row.
+        const claimed = await db.query<{ id: string; status: string; attempts: number }>(
+          CLAIM_SQL,
+          [10, MAX_ATTEMPTS, 'receipts.example.org']
+        )
+        expect(claimed.rows.map((r) => r.id).sort()).toEqual([
+          'IR-W1',
+          'IR-W2',
+          'IR-none',
+          'IR-sys',
+        ])
+        expect(claimed.rows.every((r) => r.status === 'processing' && r.attempts === 1)).toBe(true)
+        // Leased: nothing more is due.
+        expect(
+          (await db.query(CLAIM_SQL, [10, MAX_ATTEMPTS, 'receipts.example.org'])).rows
+        ).toHaveLength(0)
+        // Only a row with no workspace, or one refused or failed for good, may be removed.
+        expect((await attempt(`DELETE FROM "InboundReceipt" WHERE id = 'IR-W1'`)).rows).toBe(0)
+        expect((await attempt(`DELETE FROM "InboundReceipt" WHERE id = 'IR-none'`)).rows).toBe(1)
+        await db.query(`UPDATE "InboundReceipt" SET status = 'rejected' WHERE id = 'IR-W1'`)
+        await db.query(`UPDATE "InboundReceipt" SET status = 'failed' WHERE id = 'IR-W2'`)
+        expect((await attempt(`DELETE FROM "InboundReceipt" WHERE id = 'IR-W1'`)).rows).toBe(1)
+        expect((await attempt(`DELETE FROM "InboundReceipt" WHERE id = 'IR-W2'`)).rows).toBe(1)
+      })
+    })
+
+    it('never claims a row past its last attempt, fails one a crash left behind, and never claims a hand filing', async () => {
+      await as({ workspaces: ['W1', 'W2'], system: true }, async () => {
+        await db.query(
+          `UPDATE "InboundReceipt" SET status = 'processing', attempts = $1, "nextAttemptAt" = (now() AT TIME ZONE 'UTC') - interval '1 hour' WHERE id = 'IR-W1'`,
+          [MAX_ATTEMPTS]
+        )
+        await db.query(
+          `UPDATE "InboundReceipt" SET status = 'filing', "nextAttemptAt" = (now() AT TIME ZONE 'UTC') + interval '1 hour' WHERE id = 'IR-W2'`
+        )
+        await db.query(`UPDATE "InboundReceipt" SET status = 'filed' WHERE id = 'IR-none'`)
+        expect(
+          (await db.query(CLAIM_SQL, [10, MAX_ATTEMPTS, 'receipts.example.org'])).rows
+        ).toHaveLength(0)
+        await db.query(EXPIRE_SQL, [MAX_ATTEMPTS, 'stopped'])
+        expect(await one(`SELECT status, error FROM "InboundReceipt" WHERE id = 'IR-W1'`)).toEqual({
+          status: 'failed',
+          error: 'stopped',
+        })
+        // A hand filing is the person's until its lease runs out; then it goes back to them.
+        expect(await one(`SELECT status FROM "InboundReceipt" WHERE id = 'IR-W2'`)).toEqual({
+          status: 'filing',
+        })
+        await db.query(
+          `UPDATE "InboundReceipt" SET "nextAttemptAt" = (now() AT TIME ZONE 'UTC') - interval '1 minute' WHERE id = 'IR-W2'`
+        )
+        await db.query(EXPIRE_SQL, [MAX_ATTEMPTS, 'stopped'])
+        expect(await one(`SELECT status FROM "InboundReceipt" WHERE id = 'IR-W2'`)).toEqual({
+          status: 'unmatched',
+        })
+        expect(
+          (await db.query(CLAIM_SQL, [10, MAX_ATTEMPTS, 'receipts.example.org'])).rows
+        ).toHaveLength(0)
+      })
+    })
+
+    it('shows a workspace its own rows, and lets a member change what became of one, never whose it is', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect(await ids('InboundReceipt')).toEqual(['IR-W1'])
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET status = 'received' WHERE id = 'IR-W2'`)).rows
+        ).toBe(0)
+        expect(
+          (
+            await attempt(
+              `UPDATE "InboundReceipt" SET status = 'received', "engagementId" = 'E-W1' WHERE id = 'IR-W1'`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (
+            await attempt(
+              `UPDATE "InboundReceipt" SET "senderUserId" = 'book-W1' WHERE id = 'IR-W1'`
+            )
+          ).error
+        ).toMatch(/Only trusted work/)
+        expect(
+          (
+            await attempt(
+              `UPDATE "InboundReceipt" SET "fromAddress" = 'x@y.org' WHERE id = 'IR-W1'`
+            )
+          ).error
+        ).toMatch(/cannot be changed/)
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET status = 'lost' WHERE id = 'IR-W1'`)).error
+        ).toMatch(/status_check/)
+        expect((await attempt(`DELETE FROM "InboundReceipt" WHERE id = 'IR-W1'`)).rows).toBe(0)
+        // Nor one refused for good: removing rows is trusted work's purge.
+        await attempt(`UPDATE "InboundReceipt" SET status = 'rejected' WHERE id = 'IR-W1'`)
+        expect((await attempt(`DELETE FROM "InboundReceipt" WHERE id = 'IR-W1'`)).rows).toBe(0)
+        // The engagement it names is one of its own workspace, whatever the caller may write.
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET "engagementId" = 'E-W2' WHERE id = 'IR-W1'`))
+            .error
+        ).toMatch(/engagement of its workspace/)
+        expect(
+          (
+            await attempt(
+              `UPDATE "InboundReceipt" SET "engagementId" = 'E-none' WHERE id = 'IR-W1'`
+            )
+          ).error
+        ).toMatch(/engagement of its workspace/)
+      })
+      await as({ workspaces: ['W1', 'W2'], system: true }, async () => {
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET "engagementId" = 'E-W2' WHERE id = 'IR-W1'`))
+            .error
+        ).toMatch(/engagement of its workspace/)
+        expect(
+          (
+            await attempt(
+              `UPDATE "InboundReceipt" SET "engagementId" = 'E-W1' WHERE id = 'IR-none'`
+            )
+          ).error
+        ).toMatch(/engagement of its workspace/)
+      })
+    })
+
+    it('clears the engagement and the documents of a row when its engagement is deleted', async () => {
+      await insert(db, 'Engagement', {
+        id: 'E-W1del',
+        workspaceId: 'W1',
+        name: 'del',
+        number: 'N-del',
+      })
+      await insert(db, 'InboundReceipt', {
+        id: 'IR-del',
+        emailId: 'email-del',
+        workspaceId: 'W1',
+        senderUserId: 'book-W1',
+        engagementId: 'E-W1del',
+        documentIds: '{D-gone}',
+        status: 'filed',
+        receivedAt: '2026-09-15T12:00:00Z',
+      })
+      try {
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          expect((await attempt(`DELETE FROM "Engagement" WHERE id = 'E-W1del'`)).rows).toBe(1)
+          expect(
+            await one(
+              `SELECT "engagementId", "documentIds", status FROM "InboundReceipt" WHERE id = 'IR-del'`
+            )
+          ).toEqual({ engagementId: null, documentIds: [], status: 'filed' })
+        })
+      } finally {
+        await db.query(`DELETE FROM "InboundReceipt" WHERE id = 'IR-del'`)
+        await db.query(`DELETE FROM "Engagement" WHERE id = 'E-W1del'`)
+      }
+    })
+
+    it('keeps a receipts address unique and well formed, and an engagement code unique in its workspace', async () => {
+      await db.query(`UPDATE "Workspace" SET "receiptsAddress" = 'bright-path' WHERE id = 'W1'`)
+      await db.query(`UPDATE "Engagement" SET "code" = 'CP26' WHERE id = 'E-W1'`)
+      try {
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          // Set once, then kept: never moved to another address or cleared through the API.
+          for (const to of [`'bright-path-2'`, 'NULL'])
+            expect(
+              (await attempt(`UPDATE "Workspace" SET "receiptsAddress" = ${to} WHERE id = 'W1'`))
+                .error
+            ).toMatch(/once set, is kept/)
+          expect(
+            (await attempt(`UPDATE "Engagement" SET "code" = 'cp26' WHERE id = 'E-W1'`)).error
+          ).toMatch(/code_check/)
+          expect(
+            (
+              await attempt(
+                `INSERT INTO "Engagement" ("id","workspaceId","name","code","updatedAt") VALUES ('E-W1b','W1','b','CP26',now())`
+              )
+            ).error
+          ).toMatch(/code/)
+        })
+        await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+          expect(
+            (
+              await attempt(
+                `UPDATE "Workspace" SET "receiptsAddress" = 'Bright Path' WHERE id = 'W2'`
+              )
+            ).error
+          ).toMatch(/receiptsAddress_check/)
+          expect(
+            (
+              await attempt(
+                `UPDATE "Workspace" SET "receiptsAddress" = 'bright-path' WHERE id = 'W2'`
+              )
+            ).error
+          ).toMatch(/receiptsAddress_key/)
+          expect(
+            (await attempt(`UPDATE "Engagement" SET "code" = 'CP26' WHERE id = 'E-W2'`)).rows
+          ).toBe(1)
+        })
+      } finally {
+        await db.query(`UPDATE "Workspace" SET "receiptsAddress" = NULL WHERE id = 'W1'`)
+        await db.query(`UPDATE "Engagement" SET "code" = NULL WHERE id = 'E-W1'`)
+      }
+    })
+  })
+
+  describe('payroll proof marks (migration 20261015000800)', () => {
+    it('keeps a mark only on a payroll proof link, on a payroll file, with a page and a box', async () => {
+      const was = await one<{ kind: string; sensitivity: string }>(
+        `SELECT kind, sensitivity FROM "Document" WHERE id = 'D-W1'`
+      )
+      await db.exec(
+        `UPDATE "Document" SET kind = 'bank-statement', sensitivity = 'financial' WHERE id = 'D-W1'`
+      )
+      await insert(db, 'Document', {
+        id: 'D-stub-W1',
+        workspaceId: 'W1',
+        kind: 'paystub',
+        sensitivity: 'personal',
+        storageKey: 'W1/workspace/stub',
+      })
+      await insert(db, 'Document', {
+        id: 'D-elig-W1',
+        workspaceId: 'W1',
+        kind: 'eligibility-record',
+        sensitivity: 'personal',
+        storageKey: 'W1/workspace/elig',
+      })
+      const mark = (m: object) => `'${JSON.stringify(m)}'::jsonb`
+      const box = { page: 2, x: 48, y: 677, width: 520, height: 14.4, text: 'PAYPEOPLE' }
+      try {
+        await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+          const set = (table: string, key: string, m: string, purpose = 'payment') =>
+            attempt(
+              `UPDATE "${table}" SET purpose = '${purpose}', mark = ${m} WHERE "${key}" LIKE '%-W1' AND "documentId" = 'D-W1'`
+            )
+          expect((await set('ExpenseDocument', 'expenseId', mark(box))).rows).toBe(1)
+          expect((await set('WexPaymentDocument', 'wexPaymentId', mark(box))).rows).toBe(1)
+          expect((await set('ExpenseDocument', 'expenseId', mark(box), 'invoice')).error).toMatch(
+            /mark_check/
+          )
+          for (const bad of [
+            { ...box, page: 0 },
+            { ...box, page: 1.5 },
+            { ...box, width: 0 },
+            { ...box, height: -1 },
+            { page: 1, x: 1 },
+            { ...box, text: 'x'.repeat(301) },
+          ])
+            expect((await set('ExpenseDocument', 'expenseId', mark(bad))).error).toMatch(
+              /mark_check|invalid input/
+            )
+          // Migrations 20261016001100 and ..1200: a timesheet or register link carries its line too, and so does a
+          // pay stub, text and all; an eligibility record is never marked.
+          expect((await set('ExpenseDocument', 'expenseId', mark(box), 'timesheet')).rows).toBe(1)
+          expect(
+            (await set('WexPaymentDocument', 'wexPaymentId', mark(box), 'register')).rows
+          ).toBe(1)
+          const markOn = (doc: string) =>
+            attempt(
+              `INSERT INTO "ExpenseDocument" ("expenseId","documentId","purpose","mark") VALUES ('X-W1','${doc}','payment',${mark(box)})`
+            )
+          expect((await markOn('D-stub-W1')).rows).toBe(1)
+          expect((await markOn('D-elig-W1')).error).toMatch(/payroll file only/)
+        })
+      } finally {
+        // The marks were written in a transaction `as` rolls back; the documents are put back as they were.
+        await db.exec(`DELETE FROM "Document" WHERE id IN ('D-stub-W1', 'D-elig-W1')`)
+        await db.query(`UPDATE "Document" SET kind = $1, sensitivity = $2 WHERE id = 'D-W1'`, [
+          was!.kind,
+          was!.sensitivity,
+        ])
+      }
+    })
+  })
+
+  describe('month lock (migration 20261015001100)', () => {
+    /** `insert`, refused or not, keeping the surrounding transaction usable. */
+    const tryInsert = async (table: string, values: Record<string, string>) => {
+      await db.exec('SAVEPOINT attempt')
+      try {
+        await insert(db, table, values)
+        await db.exec('RELEASE SAVEPOINT attempt')
+        return {}
+      } catch (e) {
+        await db.exec('ROLLBACK TO SAVEPOINT attempt')
+        return { error: String((e as Error).message) }
+      }
+    }
+
+    for (const status of ['closed', 'submitted'])
+      it(`adds and changes no line, payroll item or proof in a ${status} month, and still removes them`, async () => {
+        await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+          await db.exec(`UPDATE "MonthlyReport" SET status = '${status}' WHERE id = 'R-W1'`)
+          for (const sql of [
+            `UPDATE "Expense" SET vendor = 'v2' WHERE id = 'X-W1'`,
+            `UPDATE "ExpenseDocument" SET purpose = 'invoice' WHERE "expenseId" = 'X-W1'`,
+            `UPDATE "WexPayment" SET tags = ARRAY['t'] WHERE id = 'WX-W1'`,
+            `UPDATE "WexPaymentDocument" SET purpose = 'register' WHERE "wexPaymentId" = 'WX-W1'`,
+          ])
+            expect((await attempt(sql)).error).toMatch(/month_locked/)
+          // Removing stays allowed (deleting an engagement removes its months with everything under them).
+          expect(
+            (await attempt(`DELETE FROM "ExpenseDocument" WHERE "expenseId" = 'X-W1'`)).rows
+          ).toBe(1)
+          expect(
+            (await attempt(`DELETE FROM "WexPaymentDocument" WHERE "wexPaymentId" = 'WX-W1'`)).rows
+          ).toBe(1)
+          expect(
+            (await tryInsert('ExpenseDocument', { expenseId: 'X-W1', documentId: 'D-W1' })).error
+          ).toMatch(/month_locked/)
+          expect(
+            (await tryInsert('WexPaymentDocument', { wexPaymentId: 'WX-W1', documentId: 'D-W1' }))
+              .error
+          ).toMatch(/month_locked/)
+          expect((await attempt(`DELETE FROM "Expense" WHERE id = 'X-W1'`)).rows).toBe(1)
+          expect((await attempt(`DELETE FROM "WexPayment" WHERE id = 'WX-W1'`)).rows).toBe(1)
+          const line = {
+            engagementId: 'E-W1',
+            monthlyReportId: 'R-W1',
+            itemNumber: '2',
+            reportLine: 'program-costs',
+          }
+          expect((await tryInsert('Expense', line)).error).toMatch(/month_locked/)
+          expect(
+            (await tryInsert('WexPayment', { monthlyReportId: 'R-W1', participantId: 'P-W1' }))
+              .error
+          ).toMatch(/month_locked/)
+          // A draft again (sent back): the same lines go in.
+          await db.exec(`UPDATE "MonthlyReport" SET status = 'draft' WHERE id = 'R-W1'`)
+          expect((await tryInsert('Expense', line)).error).toBeUndefined()
+          expect(
+            (await tryInsert('WexPayment', { monthlyReportId: 'R-W1', participantId: 'P-W1' }))
+              .error
+          ).toBeUndefined()
+        })
+      })
+
+    it('changes a line in a draft month', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(`UPDATE "Expense" SET vendor = 'v2' WHERE id = 'X-W1'`)).rows).toBe(1)
+        expect(
+          (
+            await attempt(
+              `UPDATE "WexPaymentDocument" SET purpose = 'register' WHERE "wexPaymentId" = 'WX-W1'`
+            )
+          ).rows
+        ).toBe(1)
+      })
+    })
+
+    it('takes lines again in a submitted month once it is reopened (migration 20261015001400)', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        await db.exec(
+          `UPDATE "MonthlyReport" SET status = 'submitted', "submittedAt" = now() WHERE id = 'R-W1'`
+        )
+        const line = {
+          engagementId: 'E-W1',
+          monthlyReportId: 'R-W1',
+          itemNumber: '3',
+          reportLine: 'program-costs',
+        }
+        expect((await tryInsert('Expense', line)).error).toMatch(/month_locked/)
+        // The row change `ReportsService.reopen` makes, as the restricted role.
+        expect(
+          (
+            await attempt(
+              `UPDATE "MonthlyReport" SET status = 'draft', "submittedAt" = NULL, "authorizedByName" = NULL,
+                 "authorizedAt" = NULL, "closingNote" = NULL WHERE id = 'R-W1'`
+            )
+          ).rows
+        ).toBe(1)
+        expect((await tryInsert('Expense', line)).error).toBeUndefined()
+        expect((await attempt(`UPDATE "Expense" SET vendor = 'v3' WHERE id = 'X-W1'`)).rows).toBe(1)
+      })
+    })
+  })
+
+  describe('reopening history (migration 20261015001500)', () => {
+    const reopening = (id: string, month: string, by: string) =>
+      `INSERT INTO "ReportReopening" ("id","monthlyReportId","reopenedById","reopenedByEmail","reason","submittedAt")
+       VALUES ('${id}','${month}','${by}','${by}@example.org','Typo in a vendor', now())`
+
+    it('lets a member add a reopening of their own workspace, in their own name only', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(reopening('RO-new', 'R-W1', 'book-W1'))).rows).toBe(1)
+        expect(
+          await one(`SELECT "workspaceId" FROM "ReportReopening" WHERE id = 'RO-new'`)
+        ).toEqual({ workspaceId: 'W1' })
+        // In someone else's name, or on another workspace's month: refused.
+        expect((await attempt(reopening('RO-x', 'R-W1', 'owner-W1'))).error).toMatch(
+          /row-level security/
+        )
+        expect((await attempt(reopening('RO-y', 'R-W2', 'book-W1'))).error).toMatch(
+          /row-level security/
+        )
+        expect((await attempt(reopening('RO-z', 'nope', 'book-W1'))).error).toMatch(
+          /refers to no MonthlyReport/
+        )
+      })
+    })
+
+    it('shows the history to every member, auditors too, and to no other workspace', async () => {
+      await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+        expect(await ids('ReportReopening')).toEqual(['RO-W1'])
+      })
+      await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+        expect(await ids('ReportReopening')).toEqual(['RO-W2'])
+        expect((await attempt(`UPDATE "ReportReopening" SET reason = 'x'`)).rows).toBe(0)
+      })
+    })
+
+    it('lets nobody change or remove a reopening, not even an owner of its workspace', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect(
+          (await attempt(`UPDATE "ReportReopening" SET reason = 'Changed' WHERE id = 'RO-W1'`)).rows
+        ).toBe(0)
+        expect(
+          (
+            await attempt(
+              `UPDATE "ReportReopening" SET "signedDocumentId" = NULL WHERE id = 'RO-W1'`
+            )
+          ).rows
+        ).toBe(0)
+        expect((await attempt(`DELETE FROM "ReportReopening" WHERE id = 'RO-W1'`)).rows).toBe(0)
+      })
+      await as({ system: true }, async () => {
+        expect((await attempt(`DELETE FROM "ReportReopening"`)).rows).toBe(0)
+      })
+      expect(await one(`SELECT reason FROM "ReportReopening" WHERE id = 'RO-W1'`)).toEqual({
+        reason: 'x',
+      })
+      // Even the database owner cannot move one to another month.
+      await expect(
+        db.query(`UPDATE "ReportReopening" SET "monthlyReportId" = 'R-W2' WHERE id = 'RO-W1'`)
+      ).rejects.toThrow(/ReportReopening.monthlyReportId cannot be changed/)
+    })
+
+    it('keeps a reason of 1 to 500 characters', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        for (const reason of ['', 'x'.repeat(501)])
+          expect(
+            (
+              await attempt(
+                `INSERT INTO "ReportReopening" ("id","monthlyReportId","reopenedById","reopenedByEmail","reason","submittedAt")
+                 VALUES ('RO-bad','R-W1','book-W1','b@example.org','${reason}', now())`
+              )
+            ).error
+          ).toMatch(/ReportReopening_reason_check/)
+      })
+    })
+  })
+
+  describe('payroll match runs (migration 20261016001000)', () => {
+    const run = (id: string, month: string, by: string) =>
+      `INSERT INTO "PayrollMatchRun" ("id","monthlyReportId","createdById") VALUES ('${id}','${month}','${by}')`
+    const file = (id: string, runId: string, key: string) =>
+      `INSERT INTO "PayrollMatchFile" ("id","runId","kind","sensitivity","fileName","contentType","size","sha256","storageKey")
+       VALUES ('${id}','${runId}','paystub','personal','a.pdf','application/pdf',1,'h','${key}')`
+
+    it("starts a run in the caller's own name, on their own workspace's month only", async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(run('PR-1', 'R-W1', 'book-W1'))).rows).toBe(1)
+        expect(await one(`SELECT "workspaceId" FROM "PayrollMatchRun" WHERE id = 'PR-1'`)).toEqual({
+          workspaceId: 'W1',
+        })
+        expect((await attempt(run('PR-x', 'R-W1', 'owner-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(run('PR-y', 'R-W2', 'book-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(file('PF-1', 'PR-1', 'W1/E-W1/2026-07/a.pdf'))).rows).toBe(1)
+        expect(await one(`SELECT "workspaceId" FROM "PayrollMatchFile" WHERE id = 'PF-1'`)).toEqual(
+          {
+            workspaceId: 'W1',
+          }
+        )
+        // A staged object outside the workspace's own keys: refused.
+        expect((await attempt(file('PF-x', 'PR-1', 'W2/E-W2/2026-07/a.pdf'))).error).toMatch(
+          /PayrollMatchFile_key_check/
+        )
+        expect((await attempt(`UPDATE "PayrollMatchFile" SET "fileName" = 'b.pdf'`)).rows).toBe(0)
+      })
+    })
+
+    it('shows a run and its files to their workspace alone, and lets a member remove them', async () => {
+      await insert(db, 'PayrollMatchRun', {
+        id: 'PR-1',
+        monthlyReportId: 'R-W1',
+        createdById: 'book-W1',
+      })
+      await insert(db, 'PayrollMatchFile', {
+        id: 'PF-1',
+        runId: 'PR-1',
+        kind: 'paystub',
+        storageKey: 'W1/E-W1/2026-07/a.pdf',
+      })
+      await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+        expect(await ids('PayrollMatchRun')).toEqual([])
+        expect(await ids('PayrollMatchFile')).toEqual([])
+        expect((await attempt(`DELETE FROM "PayrollMatchRun"`)).rows).toBe(0)
+        // Another workspace's run is out of sight, so the file cannot hang off it.
+        expect((await attempt(file('PF-z', 'PR-1', 'W2/E-W2/2026-07/a.pdf'))).error).toMatch(
+          /row-level security|refers to no PayrollMatchRun/
+        )
+      })
+      await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+        expect(await ids('PayrollMatchFile')).toEqual(['PF-1'])
+      })
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(`DELETE FROM "PayrollMatchRun" WHERE id = 'PR-1'`)).rows).toBe(1)
+        expect(await ids('PayrollMatchFile')).toEqual([])
+      })
+      await db.exec(`DELETE FROM "PayrollMatchRun"`)
+    })
+  })
+
+  describe('payroll match job (migration 20261016001300)', () => {
+    it('lets trusted work fill in what it read, and change nothing else; members change nothing', async () => {
+      await insert(db, 'PayrollMatchRun', {
+        id: 'PR-J',
+        monthlyReportId: 'R-W1',
+        createdById: 'book-W1',
+      })
+      await insert(db, 'PayrollMatchFile', {
+        id: 'PF-J',
+        runId: 'PR-J',
+        kind: 'timesheet',
+        storageKey: 'W1/E-W1/2026-07/t.pdf',
+      })
+      try {
+        expect(await one(`SELECT status FROM "PayrollMatchFile" WHERE id = 'PF-J'`)).toEqual({
+          status: 'waiting',
+        })
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          expect((await attempt(`UPDATE "PayrollMatchFile" SET status = 'read'`)).rows).toBe(0)
+        })
+        // Trusted work sees every workspace, as runAsSystem sets it.
+        await as({ system: true, workspaces: ['W1', 'W2'] }, async () => {
+          expect(
+            (
+              await attempt(
+                `UPDATE "PayrollMatchFile" SET status = 'read', attempts = 1, pages = 2, lines = '[]' WHERE id = 'PF-J'`
+              )
+            ).rows
+          ).toBe(1)
+          expect(
+            (await attempt(`UPDATE "PayrollMatchFile" SET "fileName" = 'x.pdf' WHERE id = 'PF-J'`))
+              .error
+          ).toMatch(/changes only what was read/)
+          expect(
+            (await attempt(`UPDATE "PayrollMatchFile" SET status = 'done' WHERE id = 'PF-J'`)).error
+          ).toMatch(/status_check/)
+        })
+      } finally {
+        await db.exec(`DELETE FROM "PayrollMatchRun" WHERE id = 'PR-J'`)
+      }
+    })
+  })
+
+  describe('payroll highlights (migration 20261016001400)', () => {
+    it("keeps a proof link's highlights to up to 20 well-formed boxes, on a payroll file", async () => {
+      const was = await one<{ kind: string; sensitivity: string }>(
+        `SELECT kind, sensitivity FROM "Document" WHERE id = 'D-W1'`
+      )
+      await db.exec(
+        `UPDATE "Document" SET kind = 'timesheet', sensitivity = 'financial' WHERE id = 'D-W1'`
+      )
+      const box = { page: 1, x: 10, y: 20, width: 30, height: 12, text: 'Jordan Sample' }
+      const set = (marks: unknown, purpose = 'timesheet') =>
+        attempt(
+          `UPDATE "ExpenseDocument" SET purpose = '${purpose}', marks = '${JSON.stringify(marks)}'::jsonb WHERE "expenseId" = 'X-W1'`
+        )
+      try {
+        await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+          expect((await set([box, { ...box, x: 50 }])).rows).toBe(1)
+          expect((await set([box], 'invoice')).error).toMatch(/marks_check/)
+          for (const bad of [
+            [{ ...box, page: 0 }],
+            [{ ...box, width: 0 }],
+            [{ page: 1, x: 1 }],
+            [{ ...box, text: 'x'.repeat(301) }],
+            Array.from({ length: 21 }, () => box),
+            { not: 'an array' },
+          ])
+            expect((await set(bad)).error).toMatch(/marks_check|non-array/)
+        })
+        await db.exec(
+          `UPDATE "Document" SET kind = 'eligibility-record', sensitivity = 'personal' WHERE id = 'D-W1'`
+        )
+        await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+          expect((await set([box], 'payment')).error).toMatch(/payroll file only/)
+        })
+      } finally {
+        await db.query(`UPDATE "Document" SET kind = $1, sensitivity = $2 WHERE id = 'D-W1'`, [
+          was!.kind,
+          was!.sensitivity,
+        ])
+      }
+    })
+
+    it('lets only a platform admin add a highlight setting, in their own name, and nobody change one', async () => {
+      const add = (by: string, fields = "ARRAY['name','amount']") =>
+        attempt(
+          `INSERT INTO "HighlightSetting" ("id","kind","fields","changedById") VALUES (gen_random_uuid()::text,'paystub',${fields},'${by}')`
+        )
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await add('owner-W1')).error).toMatch(/row-level security/)
+      })
+      await as({ user: 'admin-1', admin: true }, async () => {
+        expect((await add('admin-1')).rows).toBe(1)
+        expect((await add('owner-W1')).error).toMatch(/row-level security/)
+        expect((await add('admin-1', "ARRAY['nope']")).error).toMatch(/fields_check/)
+        expect((await attempt(`UPDATE "HighlightSetting" SET fields = ARRAY['row']`)).rows).toBe(0)
+        expect((await attempt(`DELETE FROM "HighlightSetting"`)).rows).toBe(0)
+      })
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        // Rolled back with the admin's transaction: a member reads the table, empty here.
+        expect((await db.query(`SELECT count(*)::int AS n FROM "HighlightSetting"`)).rows).toEqual([
+          { n: 0 },
+        ])
+      })
+    })
+  })
+
+  describe('matching statistics (migration 20261016001500)', () => {
+    const stat = (id: string, ws: string, feature = 'payroll', outcome = 'saved') =>
+      `INSERT INTO "MatchRunStat" ("id","workspaceId","feature","startedById","startedByEmail","startedAt","outcome")
+       VALUES ('${id}','${ws}','${feature}','book-W1','book@example.org',now(),'${outcome}')`
+
+    it('lets a member write a row of their own workspace only, and read none back unless an owner', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(stat('MS-1', 'W1'))).rows).toBe(1)
+        expect((await attempt(stat('MS-x', 'W2'))).error).toMatch(/row-level security/)
+        // A bookkeeper writes it and does not read it.
+        expect(await count('MatchRunStat')).toBe(0)
+        expect((await attempt(stat('MS-2', 'W1', 'payroll', 'done'))).error).toMatch(
+          /outcome_check/
+        )
+        expect((await attempt(stat('MS-3', 'W1', 'timesheets', 'done'))).error).toMatch(
+          /feature_check/
+        )
+        expect((await attempt(stat('MS-4', 'W1', 'emailed-receipts', 'failed'))).rows).toBe(1)
+      })
+    })
+
+    it("shows a workspace's rows to its owners and to the platform admin, and lets nobody change or remove one", async () => {
+      await insert(db, 'MatchRunStat', {
+        id: 'MS-W1',
+        workspaceId: 'W1',
+        feature: 'receipts',
+        outcome: 'done',
+        startedAt: '2026-10-16T12:00:00Z',
+      })
+      await insert(db, 'MatchRunStat', {
+        id: 'MS-W2',
+        workspaceId: 'W2',
+        feature: 'payroll',
+        outcome: 'expired',
+        startedAt: '2026-10-16T12:00:00Z',
+      })
+      try {
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          expect(await ids('MatchRunStat')).toEqual(['MS-W1'])
+          expect((await attempt(`UPDATE "MatchRunStat" SET "matched" = 9`)).rows).toBe(0)
+          expect((await attempt(`DELETE FROM "MatchRunStat"`)).rows).toBe(0)
+        })
+        await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+          expect(await count('MatchRunStat')).toBe(0)
+        })
+        await as({ user: 'admin', workspaces: [], admin: true }, async () => {
+          expect(await ids('MatchRunStat')).toEqual(['MS-W1', 'MS-W2'])
+          expect((await attempt(stat('MS-adm', 'W1'))).error).toMatch(/row-level security/)
+          expect((await attempt(`UPDATE "MatchRunStat" SET "matched" = 9`)).rows).toBe(0)
+          expect((await attempt(`DELETE FROM "MatchRunStat"`)).rows).toBe(0)
+        })
+        // Trusted work is not admitted either: the row is written as the member.
+        await as({ system: true, workspaces: [] }, async () => {
+          expect(await count('MatchRunStat')).toBe(0)
+        })
+        // Even the database owner cannot move a row to another workspace.
+        await expect(
+          db.query(`UPDATE "MatchRunStat" SET "workspaceId" = 'W2' WHERE id = 'MS-W1'`)
+        ).rejects.toThrow(/cannot be changed/)
+      } finally {
+        await db.exec(`DELETE FROM "MatchRunStat"`)
+      }
+    })
+
+    it('lets the job record how long a payroll file took to read', async () => {
+      await insert(db, 'PayrollMatchRun', {
+        id: 'PR-S',
+        monthlyReportId: 'R-W1',
+        createdById: 'book-W1',
+      })
+      await insert(db, 'PayrollMatchFile', {
+        id: 'PF-S',
+        runId: 'PR-S',
+        kind: 'timesheet',
+        storageKey: 'W1/E-W1/2026-07/s.pdf',
+      })
+      try {
+        await as({ system: true, workspaces: ['W1', 'W2'] }, async () => {
+          expect(
+            (
+              await attempt(
+                `UPDATE "PayrollMatchFile" SET status = 'read', "readMs" = 850 WHERE id = 'PF-S'`
+              )
+            ).rows
+          ).toBe(1)
+        })
+      } finally {
+        await db.exec(`DELETE FROM "PayrollMatchRun" WHERE id = 'PR-S'`)
+      }
+    })
+  })
+
   describe('the platform admin (app.admin)', () => {
     /** Runs `fn` with the database owner's privileges (to set up rows), then goes back to the restricted role. */
     const asOwner = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -556,6 +1422,9 @@ suite('tenant isolation', () => {
       'DataAccessLog',
       'DeletionRecord',
       'TermsAcceptance',
+      'ImportMapping',
+      'InboundReceipt',
+      'ReportReopening',
     ]
     const line = (id: string, ws: string, actor = 'admin', returning = '') =>
       `INSERT INTO "DataAccessLog" ("id","workspaceId","actorId","actorName","resource","action","description") VALUES ('${id}','${ws}','${actor}','admin@example.org','member','create','Invited sam@example.org as bookkeeper')${returning}`
@@ -619,10 +1488,50 @@ suite('tenant isolation', () => {
         expect(
           (
             await attempt(
-              `UPDATE "Workspace" SET "fundingSources" = '{"Youth Fund"}', "updatedAt" = now() WHERE id = 'W2'`
+              `UPDATE "Workspace" SET "name" = 'Harbor Tech Partners', "updatedAt" = now() WHERE id = 'W2'`
             )
           ).rows
         ).toBe(1)
+        expect(
+          (
+            await attempt(
+              `UPDATE "Workspace" SET "budgetItems" = '[{"key":"travel","label":"Travel","reportLine":"program-costs"}]' WHERE id = 'W2' RETURNING id`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (
+            await attempt(
+              `UPDATE "Workspace" SET "tagTypes" = '[{"key":"age-group","label":"Age group","appliesTo":["participant"],"values":[{"key":"under-18","label":"Under 18"}]}]' WHERE id = 'W2' RETURNING id`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "tagTypes" = '{}' WHERE id = 'W2'`)).error
+        ).toMatch(/tagTypes_check/)
+        // The receipts address is the owners' alone (migration 20261015001200).
+        expect(
+          (
+            await attempt(
+              `UPDATE "Workspace" SET "receiptsAddress" = 'harbor-tech' WHERE id = 'W2' RETURNING id`
+            )
+          ).error
+        ).toMatch(/Only the owners of a workspace set its receipts address/)
+        // So is reading emailed receipts with AI, and a workspace the admin makes starts with it off (20261016000400).
+        expect(
+          (
+            await attempt(
+              `UPDATE "Workspace" SET "readEmailedReceiptsWithAi" = true WHERE id = 'W2'`
+            )
+          ).error
+        ).toMatch(/changes only the name and lists/)
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "Workspace" ("id","name","updatedAt","readEmailedReceiptsWithAi") VALUES ('W-ai','new',now(),true)`
+            )
+          ).error
+        ).toMatch(/Only the owners of a workspace turn on reading emailed receipts with AI/)
         expect(
           (
             await attempt(
@@ -650,7 +1559,10 @@ suite('tenant isolation', () => {
 
     it('sees no row of any table below the workspace, and changes none', async () => {
       await as(admin, async () => {
-        for (const t of RECORD_TABLES) expect([t, await count(t)]).toEqual([t, 0])
+        // Emailed receipts: only those that went nowhere or were refused or failed (below).
+        for (const t of RECORD_TABLES.filter((x) => x !== 'InboundReceipt'))
+          expect([t, await count(t)]).toEqual([t, 0])
+        expect(await ids('InboundReceipt')).toEqual(['IR-none'])
         for (const sql of [
           `UPDATE "Engagement" SET name = 'x'`,
           `DELETE FROM "Expense"`,
@@ -660,6 +1572,127 @@ suite('tenant isolation', () => {
           `UPDATE "DataAccessLog" SET description = 'x'`,
         ])
           expect([sql, (await attempt(sql)).rows]).toEqual([sql, 0])
+      })
+    })
+
+    describe('emailed receipts (migration 20261016000100)', () => {
+      /** W1's receipt refused, W2's failed, and W1 rows waiting, needing filing and filed. */
+      const receipts = () =>
+        asOwner(async () => {
+          await db.query(`UPDATE "InboundReceipt" SET status = 'rejected' WHERE id = 'IR-W1'`)
+          await db.query(`UPDATE "InboundReceipt" SET status = 'failed' WHERE id = 'IR-W2'`)
+          for (const [id, status] of [
+            ['IR-W1-unm', 'unmatched'],
+            ['IR-W1-filed', 'filed'],
+            ['IR-W1-wait', 'received'],
+          ])
+            await insert(db, 'InboundReceipt', {
+              id,
+              emailId: `email-${id}`,
+              workspaceId: 'W1',
+              senderUserId: 'book-W1',
+              status,
+              receivedAt: '2026-09-16T12:00:00Z',
+            })
+        })
+      /** A rerun: back in the queue, attempts afresh, error and reason cleared. */
+      const rerun = (id: string) =>
+        `UPDATE "InboundReceipt" SET status = 'received', attempts = 0, "nextAttemptAt" = now(), error = NULL, "rejectReason" = NULL, "updatedAt" = now() WHERE id = '${id}'`
+      /** The admin's line for a rerun, as the API writes it (createMany: nothing read back). */
+      const logged = (line: string, id: string, ws: string) =>
+        `INSERT INTO "DataAccessLog" ("id","workspaceId","actorId","actorName","resource","subjectId","action","description") VALUES ('${line}','${ws}','admin','admin@example.org','document','${id}','update','Ran an emailed receipt again (by a platform admin)')`
+
+      it('sees those that went nowhere or were refused or failed, never one of a workspace waiting, needing filing or filed', async () => {
+        await as(admin, async () => {
+          await receipts()
+          expect(await ids('InboundReceipt')).toEqual(['IR-W1', 'IR-W2', 'IR-none'])
+        })
+      })
+
+      it('runs again one that went nowhere, changing only what a rerun changes, and adds or removes none', async () => {
+        await as(admin, async () => {
+          await receipts()
+          expect((await attempt(rerun('IR-none'))).rows).toBe(1)
+          for (const set of [
+            `subject = 'x'`,
+            `"workspaceId" = 'W1', "senderUserId" = 'book-W1'`,
+            `"senderUserId" = 'book-W1'`,
+            `"documentIds" = '{D-W1}'`,
+            `"filedAttachments" = '{a1}'`,
+            `"createdAt" = now()`,
+          ])
+            expect([
+              set,
+              (await attempt(`UPDATE "InboundReceipt" SET ${set} WHERE id = 'IR-none'`)).error,
+            ]).toEqual([set, expect.stringMatching(/cannot be changed|trusted work|only runs/)])
+          expect(
+            (
+              await attempt(
+                `UPDATE "InboundReceipt" SET "documentIds" = '{D-W1}' WHERE id = 'IR-W2'`
+              )
+            ).error
+          ).toMatch(/only runs an emailed receipt again/)
+          expect(
+            (await attempt(`UPDATE "InboundReceipt" SET status = 'filed' WHERE id = 'IR-W2'`)).error
+          ).toMatch(/row-level security/)
+          expect((await attempt(`DELETE FROM "InboundReceipt"`)).rows).toBe(0)
+          expect(
+            (
+              await attempt(
+                `INSERT INTO "InboundReceipt" ("id","emailId","receivedAt") VALUES ('IR-adm','email-IR-adm',now())`
+              )
+            ).error
+          ).toMatch(/row-level security/)
+        })
+      })
+
+      it("runs again a workspace's refused one only after writing its line in that workspace's log, in the same transaction", async () => {
+        // No line.
+        await as(admin, async () => {
+          await receipts()
+          expect((await attempt(rerun('IR-W1'))).error).toMatch(/row-level security/)
+        })
+        // A line in another workspace, or one inside a savepoint, does not count.
+        await as(admin, async () => {
+          await receipts()
+          await db.query(logged('L-w2', 'IR-W1', 'W2'))
+          expect((await attempt(rerun('IR-W1'))).error).toMatch(/row-level security/)
+        })
+        await as(admin, async () => {
+          await receipts()
+          expect((await attempt(logged('L-sp', 'IR-W1', 'W1'))).rows).toBe(1)
+          expect((await attempt(rerun('IR-W1'))).error).toMatch(/row-level security/)
+        })
+        // Its line, first: the rerun is kept. Lines open no row that is waiting, needing filing or filed.
+        await as(admin, async () => {
+          await receipts()
+          await db.query(logged('L-w1', 'IR-W1', 'W1'))
+          for (const id of ['IR-W1-unm', 'IR-W1-filed', 'IR-W1-wait'])
+            await db.query(logged(`L-${id}`, id, 'W1'))
+          expect(await attempt(rerun('IR-W1'))).toEqual({ rows: 1 })
+          for (const id of ['IR-W1-unm', 'IR-W1-filed', 'IR-W1-wait'])
+            expect([id, (await attempt(rerun(id))).rows]).toEqual([id, 0])
+        })
+      })
+
+      it("does not read a workspace's row back in the queue outside the rerun's transaction", async () => {
+        await as(admin, async () => {
+          await asOwner(async () => {
+            await db.query(
+              `UPDATE "InboundReceipt" SET status = 'received', attempts = 0 WHERE id = 'IR-W1'`
+            )
+          })
+          expect(await ids('InboundReceipt')).toEqual(['IR-none'])
+        })
+      })
+
+      it('leaves a member, without the mark, to their own workspace', async () => {
+        await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+          await receipts()
+          expect(await ids('InboundReceipt')).toEqual(['IR-W2'])
+          expect((await attempt(rerun('IR-none'))).rows).toBe(0)
+          expect((await attempt(rerun('IR-W1'))).rows).toBe(0)
+        })
       })
     })
 
@@ -686,6 +1719,9 @@ suite('tenant isolation', () => {
         DataAccessLog: { workspaceId: 'W1', actorId: 'owner-W1' },
         DeletionRecord: { workspaceId: 'W1', exportKey: 'retained/W1/adm.zip' },
         TermsAcceptance: { userId: 'owner-W1', fingerprint: 'v9' },
+        ImportMapping: { workspaceId: 'W1', name: 'adm' },
+        InboundReceipt: { workspaceId: 'W1', emailId: 'email-adm' },
+        ReportReopening: { monthlyReportId: 'R-W1', reopenedById: 'admin' },
       }
       expect(Object.keys(rows).sort()).toEqual([...RECORD_TABLES].sort())
       await as(admin, async () => {
@@ -860,7 +1896,7 @@ suite('tenant isolation', () => {
         ])
           expect((await attempt(sql)).error).toMatch(/row-level security/)
         expect(
-          (await attempt(`UPDATE "Workspace" SET "fundingSources" = '{}' WHERE id = 'W2'`)).rows
+          (await attempt(`UPDATE "Workspace" SET "tagTypes" = '[]' WHERE id = 'W2'`)).rows
         ).toBe(0)
       })
       // A flag with no person is nothing either: it never stands in for trusted work.
@@ -1041,6 +2077,12 @@ suite('tenant isolation', () => {
             participantId: 'P-del',
           })
           await insert(db, 'Check', { monthlyReportId: 'R-del', wexPaymentId: 'WX-del' })
+          // A reopening goes with its month, though nobody may delete one directly.
+          await insert(db, 'ReportReopening', {
+            id: 'RO-del',
+            monthlyReportId: 'R-del',
+            reopenedById: 'owner-W1',
+          })
           await insert(db, 'Document', {
             id: 'D-del',
             workspaceId: 'W1',
@@ -1071,6 +2113,7 @@ suite('tenant isolation', () => {
             ['Expense', ['X-W1', 'X-W2']],
             ['WexPayment', ['WX-W1', 'WX-W2']],
             ['Check', ['K-W1', 'K-W2']],
+            ['ReportReopening', ['RO-W1', 'RO-W2']],
           ] as const)
             expect([t, await ids(t)]).toEqual([t, left])
           for (const t of ['ExpenseDocument', 'ParticipantDocument', 'WexPaymentDocument'])

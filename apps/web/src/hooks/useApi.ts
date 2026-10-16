@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSession } from '@/auth/session'
-import { ApiError, apiDownload, apiFetch } from '@/services/api'
+import { ApiError, apiBytes, apiDownload, apiFetch } from '@/services/api'
 
-/** The API bound to the current session: get, post, patch, put, del and upload. */
+/** The API bound to the current session: get, post, patch, put, del, upload, bytes and download. */
 export function useApi() {
   const { getToken } = useSession()
   return useMemo(() => {
@@ -21,6 +21,7 @@ export function useApi() {
       put: <T>(path: string, body?: unknown) => call<T>('PUT', path, body),
       del: <T>(path: string, body?: unknown) => call<T>('DELETE', path, body),
       upload: <T>(path: string, form: FormData) => call<T>('POST', path, form),
+      bytes: async (path: string) => apiBytes(path, await getToken()),
       download: async <T = never>(path: string, fileName: string) =>
         apiDownload<T>(path, await getToken(), fileName),
     }

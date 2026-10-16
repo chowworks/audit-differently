@@ -1,0 +1,837 @@
+/*
+ * The month page's layout (LayoutC, the owner's design, chosen 2026-10-16).
+ */
+
+/* One green button per screen: inside a layout, every other green button the page's sections draw is navy. Modals
+   keep their own. */
+.rl .ad-btn:not(.rl-next, .ad-modal .ad-btn),
+.rl .ad-btn:not(.rl-next, .ad-modal .ad-btn):hover:not(:disabled) {
+  border-color: var(--navy);
+  background: var(--navy);
+  color: var(--on-dark);
+}
+.rl .ad-btn:not(.rl-next, .ad-modal .ad-btn):hover:not(:disabled) {
+  filter: brightness(1.35);
+}
+/* No empty-outline buttons outside a modal. */
+.rl .ad-btn-secondary:not(.ad-btn-danger, .ad-modal .ad-btn-secondary) {
+  background: var(--navy);
+  color: var(--on-dark);
+}
+.rl .ad-btn-secondary:not(.ad-btn-danger, .ad-modal .ad-btn-secondary):hover:not(:disabled) {
+  background: var(--navy);
+  color: var(--on-dark);
+  filter: brightness(1.35);
+}
+
+/* Head: the month, its engagement, its numbers small. */
+.rl-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.rl-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.rl-facts > div {
+  display: flex;
+  gap: 6px;
+}
+.rl-facts dt {
+  font-weight: 500;
+}
+.rl-facts dd {
+  margin: 0;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.rl-facts .rl-facts-warn dd {
+  color: var(--danger);
+}
+
+/* Status panel: what happened to the month, as a calm card. Blue-grey by default, green once approved or sent, red
+   only while something blocks the month. */
+.rl-status {
+  margin-bottom: 16px;
+  padding: 14px 18px;
+  border: 1px solid var(--rl-edge);
+  border-radius: var(--radius);
+  background: var(--rl-tint);
+  --rl-tint: var(--surface-alt);
+  --rl-edge: var(--line);
+}
+.rl-status-ok {
+  --rl-tint: var(--ok-tint);
+  --rl-edge: #cfe5d4;
+}
+.rl-status-danger {
+  --rl-tint: var(--danger-tint);
+  --rl-edge: #f2cccc;
+}
+.rl-status-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.rl-status-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+.rl-status-text,
+/* Who asked and when, small, above the person's own words. */
+.rl-status-meta {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.rl-status-quote {
+  margin: 8px 0 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.45;
+  box-shadow: inset 3px 0 0 var(--line);
+}
+.rl-status-next {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.rl-status-next {
+  margin-top: 6px;
+}
+
+/* The next action. */
+
+.rl .rl-next {
+  white-space: normal;
+  text-align: left;
+}
+
+/* More menu. */
+.rl-more {
+  position: relative;
+}
+.rl-more > summary {
+  list-style: none;
+}
+.rl-more > summary::-webkit-details-marker {
+  display: none;
+}
+.rl-more ul {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 240px;
+  max-width: calc(100vw - 32px);
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+}
+.rl-head .rl-more ul {
+  left: auto;
+  right: 0;
+}
+.rl-more li > a,
+.rl-more li > button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.rl-more li > a:hover,
+.rl-more li > button:hover:not(:disabled) {
+  background: var(--surface-alt);
+}
+.rl-more li > button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Steps. */
+.rl-step-mark {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+.rl-step-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.rl-step-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.rl-step-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* A: the stepper. */
+
+.rl-step {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px 8px 0;
+  border-top: 4px solid var(--line);
+}
+.rl-step-done {
+  border-top-color: var(--ok);
+}
+.rl-step-done .rl-step-mark,
+.rl-mark-done {
+  border-color: var(--ok);
+  background: var(--ok);
+  color: var(--on-dark);
+}
+.rl-step-current {
+  border-top-color: var(--primary);
+}
+.rl-step-current .rl-step-mark,
+.rl-mark-current {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.rl-step-todo .rl-step-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+@media (max-width: 560px) {
+  .rl-step {
+    justify-content: center;
+    padding: 8px 0 0;
+  }
+  .rl-step .rl-step-text {
+    display: none;
+  }
+}
+
+/* C (the owner's design): tiles, a seven-step stepper, two grids with a search and filter bar. */
+.rl-c-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 2fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.rl-c .ad-tile {
+  min-width: 0;
+  background: var(--surface);
+}
+.rl-c-tilebtn {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rl-c-tilebtn:disabled {
+  cursor: default;
+}
+.rl-c-tilebtn:hover:not(:disabled) {
+  background: var(--surface-alt);
+}
+/* C: needs attention is caution yellow; blocking stays red. The app has no dark theme yet, so only light. */
+:root {
+  --rl-caution: #f2c200;
+  /* The tile's large number: yellow family, 3.2:1 on white (large text). Small text keeps the darker ink. */
+  --rl-caution-ink: #b08a00;
+  --rl-caution-text: #7a5d00;
+  --rl-caution-on: #2b2100;
+}
+.ad-tile.rl-c-tile-attention,
+.ad-tile.rl-c-tile-late-attention {
+  border-top-color: var(--rl-caution);
+}
+.ad-chip.ad-chip-fill.rl-c-chip-caution {
+  border-color: var(--rl-caution);
+  background: var(--rl-caution);
+  color: var(--rl-caution-on);
+}
+/* The due date scales with its tile and never runs past it; it wraps only between "Sep 12," and "2026". */
+.ad-tile.rl-c-due {
+  container-type: inline-size;
+}
+.ad-tile.rl-c-due .ad-tile-value {
+  font-size: clamp(16px, 11cqi, 28px);
+  white-space: normal;
+}
+.rl-nowrap {
+  white-space: nowrap;
+}
+.ad-tile.rl-c-tile-late-blocker {
+  border-top-color: var(--danger);
+}
+.rl-c-tile-late-blocker .ad-tile-value,
+.rl-c-tile-late-blocker .rl-c-late {
+  color: var(--danger);
+}
+.rl-c-late {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--rl-caution-text);
+  overflow-wrap: anywhere;
+}
+.rl-c-lines {
+  gap: 6px;
+}
+.rl-c-lines-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--navy);
+}
+.rl-c-lines-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.rl-c-lines-table th {
+  padding: 2px 4px 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+.rl-c-lines-table th.ad-num {
+  text-align: right;
+}
+.rl-c-lines-table td {
+  padding: 3px 4px 3px 0;
+  border-top: 1px solid var(--line);
+  vertical-align: top;
+}
+.rl-c-linkbtn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rl-c-linkbtn:hover {
+  text-decoration: underline;
+}
+.rl-c-line-over td,
+.rl-c-line-over .rl-c-linkbtn {
+  color: var(--danger);
+  font-weight: 700;
+}
+.rl-c-line-over.rl-c-line-attention td,
+.rl-c-line-over.rl-c-line-attention .rl-c-linkbtn {
+  color: var(--rl-caution-on);
+}
+.rl-c-line-over {
+  background: var(--danger-tint);
+}
+.rl-c-line-over.rl-c-line-attention {
+  background: var(--rl-caution);
+}
+.rl-c-over {
+  display: block;
+  font-size: 12px;
+}
+.rl-c-neg {
+  color: var(--danger);
+  font-weight: 700;
+}
+.rl-c-lines-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: 12px;
+}
+.rl-c-lines-more {
+  font-weight: 700;
+  color: var(--navy);
+  text-decoration: underline;
+}
+
+.rl-c-stepper {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+.rl-c-step .rl-step-text {
+  gap: 4px;
+  align-items: flex-start;
+}
+.rl-step-bad {
+  border-top-color: var(--danger);
+}
+.rl-step-bad .rl-step-mark {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: var(--on-dark);
+}
+.rl-step-bad .rl-step-label {
+  color: var(--danger);
+}
+.rl-c-stepbad {
+  white-space: nowrap; /* one line, never a two-line blob in a narrow step */
+  padding: 1px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--danger);
+  color: var(--on-dark);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.rl-c-stepbad:hover {
+  filter: brightness(1.2);
+}
+/* C: the stepper follows the month. Working: four steps full size, the rest folded into one muted "Then: …".
+   Ready to close: the closing steps full size, the working steps compact. */
+.rl-c-stepper-working {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 0.8fr);
+}
+.rl-c-stepper-ready {
+  grid-template-columns: minmax(0, 0.8fr) repeat(3, minmax(0, 1fr));
+}
+.rl-c-step-later {
+  border-top-style: dashed;
+}
+/* The folded steps 5 · 6 · 7: tiny muted circles, tightly overlapped, with their names under them. */
+.rl-c-step-later {
+  flex-direction: column;
+  gap: 4px;
+}
+.rl-c-later-marks {
+  display: inline-flex;
+}
+.rl-c-later-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: -5px;
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+.rl-c-later-mark:first-child {
+  margin-left: 0;
+}
+
+/* The current step's actions, one strip under the stepper. */
+.rl-c-actionrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin: -4px 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+.rl-c-actionrow > p {
+  flex: 1 1 260px;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink);
+}
+.rl-c-actionrow-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 560px) {
+  .rl-c-actionrow-buttons,
+  .rl-c-actionrow-buttons .ad-btn {
+    width: 100%;
+  }
+}
+.rl-c-step-compact {
+  gap: 6px;
+  padding-top: 6px;
+  border-top-width: 3px;
+}
+.rl-c-step-compact .rl-step-mark {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+}
+.rl-c-step-compact .rl-step-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.rl-c-step-compact .rl-step-note {
+  font-size: 11px;
+}
+
+.rl-c-section {
+  margin-bottom: 20px;
+}
+.rl-c-sectionnote {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.rl-c-alerts {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+.rl-c-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 6px;
+  padding: 8px 12px;
+  border-left: 5px solid var(--navy);
+  border-radius: 8px;
+  background: var(--surface-alt);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.rl-c-alert-blocker {
+  border-left-color: var(--danger);
+  background: var(--danger-tint);
+}
+.rl-c-alert-attention {
+  border-left-color: var(--rl-caution);
+  background: var(--warn-tint);
+}
+
+.rl-c-filter {
+  position: relative;
+  margin-bottom: 10px;
+}
+.rl-c-filter-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.rl-c-filter-box:focus-within {
+  outline: 2px solid var(--navy);
+  outline-offset: 1px;
+}
+.rl-c-filter-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+.rl-c-filter-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+.rl-c-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 4px 2px 10px;
+  border-radius: 999px;
+  background: var(--navy);
+  color: var(--on-dark);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.rl-c-token-field {
+  opacity: 0.75;
+  text-transform: capitalize;
+}
+.rl-c-token button {
+  padding: 0 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.rl-c-token button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.rl-c-suggest {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  width: min(420px, 100%);
+  max-height: 280px;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+.rl-c-suggest li {
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.rl-c-suggest li span {
+  color: var(--muted);
+}
+.rl-c-suggest-on,
+.rl-c-suggest li:hover {
+  background: var(--surface-alt);
+}
+.rl-c-filternote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--navy);
+  border-radius: 8px;
+  background: var(--surface-alt);
+  color: var(--navy);
+  font-size: 16px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.rl-c-filternote strong {
+  font-size: 20px;
+  font-weight: 800;
+}
+.rl-c-seechecks {
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rl-c-seechecks:hover {
+  text-decoration: underline;
+}
+.rl-c-seechecks-blocker {
+  color: var(--danger);
+}
+.rl-c-seechecks-attention {
+  color: var(--rl-caution-text);
+}
+.rl-c-rowchecks {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.rl-c-rowchecks li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 3px 0;
+}
+.rl-c-rowchecks .ad-chip {
+  flex: none;
+}
+.rl-c-dialog > .ad-card {
+  margin-top: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+@media (max-width: 900px) {
+  .rl-c-tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .rl-c-lines {
+    grid-column: 1 / -1;
+  }
+  .rl-c-stepper {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .rl-c-stepper-working .rl-c-step-later {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 560px) {
+  .rl-c-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .rl-c-stepper,
+  .rl-c-stepper-working,
+  .rl-c-stepper-ready {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .rl-c-stepper .rl-step.rl-c-step-compact {
+    padding: 3px 0 3px 10px;
+  }
+  .rl-c-stepper .rl-step {
+    justify-content: flex-start;
+    padding: 6px 0 6px 10px;
+    border-top: 0;
+    border-left: 4px solid var(--line);
+  }
+  .rl-c-stepper .rl-step .rl-step-text {
+    display: flex;
+  }
+  .rl-c-stepper .rl-step-done {
+    border-left-color: var(--ok);
+  }
+  .rl-c-stepper .rl-step-current {
+    border-left-color: var(--primary);
+  }
+  .rl-c-stepper .rl-step-bad {
+    border-left-color: var(--danger);
+  }
+}
+
+/* Steps 1-4 folded in the approve / sign / send phase: ticked, green. */
+.rl-c-earlier-mark {
+  border-color: var(--ok);
+  background: var(--ok);
+  color: var(--on-dark);
+}
+
+/* Monthly budget status: taller than the other tiles, down beside the stepper, with room for six lines; more open
+   in a dialog. The stepper sits under the three small tiles. */
+.rl-c-tiles > .ad-tile.rl-c-lines {
+  grid-column: 4;
+  grid-row: 1 / span 2;
+  overflow: hidden;
+}
+.rl-c-tiles:has(> .rl-c-stepper) {
+  grid-template-rows: auto 1fr; /* the small tiles keep their height; the stepper row takes the rest */
+}
+.rl-c-tiles > .rl-c-stepper {
+  grid-column: 1 / 4;
+  grid-row: 2;
+  align-self: start;
+  margin: 0;
+}
+@media (max-width: 900px) {
+  .rl-c-tiles > .ad-tile.rl-c-lines,
+  .rl-c-tiles > .rl-c-stepper {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+}
+.rl-c-lines .rl-c-lines-foot {
+  margin-top: auto;
+}
+.rl-c-lines-table-all {
+  width: 100%;
+}
+/* Steps 1-4 folded once done: their label bold, like a step title ("Approve the closing"). */
+.rl-c-step-earlier .rl-step-note {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* A done step, everywhere in C (full size or folded): green circle with its number, and a check before its name. */
+/* A step with problems, the same way: red circle with its number, and a "!" before its name. */
+.rl-c-badsign {
+  color: var(--danger);
+  font-weight: 900;
+}
+.rl-c-donecheck {
+  color: var(--ok);
+  font-weight: 900;
+}
+/* Folded done marks sit side by side, not overlapped, so each number shows. */
+.rl-c-earlier-mark {
+  width: 24px;
+  height: 24px;
+  margin-left: 3px;
+  font-size: 12px;
+}
+.rl-c-earlier-mark:first-child {
+  margin-left: 0;
+}
+
+/* A count on a button, as a phone shows it on an app icon: a red circle on the top right corner. */
+.rl-c-badged {
+  position: relative;
+  overflow: visible;
+}
+.rl-c-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  background: var(--danger);
+  color: var(--on-dark);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}

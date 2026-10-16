@@ -11,6 +11,7 @@ export type IconName =
   | 'building'
   | 'file'
   | 'check'
+  | 'chart'
 
 const PATHS: Record<IconName, React.ReactNode> = {
   briefcase: (
@@ -75,6 +76,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   check: <path d="M5 12l4 4 10-10" />,
+  chart: (
+    <>
+      <path d="M4 4v16h16" />
+      <path d="M7 15l4-5 3 3 5-6" />
+    </>
+  ),
 }
 
 export function Icon({

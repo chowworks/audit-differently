@@ -59,6 +59,39 @@ describe('startup checks', () => {
     ])
   })
 
+  it('refuses email in receipts half set up on Railway, and leaves the contact form key alone', () => {
+    const dev = { ...remote, RAILWAY_ENVIRONMENT_NAME: 'dev' }
+    // The contact form's sending-only key turns nothing on.
+    expect(configProblems({ ...dev, RESEND_API_KEY: 're_x' })).toEqual([])
+    expect(configProblems({ ...dev, RECEIPTS_DOMAIN: 'receipts.example.org' })).toEqual([
+      'RESEND_RECEIVING_API_KEY is not set: email in receipts needs all three of its settings',
+      'RESEND_WEBHOOK_SECRET is not set: email in receipts needs all three of its settings',
+    ])
+    // The contact form's key never stands in for the receiving one.
+    expect(
+      configProblems({
+        ...dev,
+        RESEND_API_KEY: 're_x',
+        RESEND_WEBHOOK_SECRET: 'whsec_eA==',
+        RECEIPTS_DOMAIN: 'receipts.example.org',
+      })
+    ).toEqual([
+      'RESEND_RECEIVING_API_KEY is not set: email in receipts needs all three of its settings',
+    ])
+    expect(configProblems({ ...dev, RESEND_RECEIVING_API_KEY: 're_y' })).toEqual([
+      'RESEND_WEBHOOK_SECRET is not set: email in receipts needs all three of its settings',
+      'RECEIPTS_DOMAIN is not set: email in receipts needs all three of its settings',
+    ])
+    expect(
+      configProblems({
+        ...dev,
+        RESEND_RECEIVING_API_KEY: 're_y',
+        RESEND_WEBHOOK_SECRET: 'whsec_eA==',
+        RECEIPTS_DOMAIN: 'receipts.example.org',
+      })
+    ).toEqual([])
+  })
+
   it('holds production to everything', () => {
     expect(
       configProblems({ ...remote, RAILWAY_ENVIRONMENT_NAME: 'production', NODE_ENV: 'development' })

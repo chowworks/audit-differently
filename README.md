@@ -37,7 +37,7 @@ on and what the next thing to do is.
 | 4   | **Contract and approved budget** | The signed agreement, its dates and the budget lines every month uses |
 | 5   | **Participants and eligibility** | Each person served, with the eligibility records the audit requires   |
 | 6   | **Monthly ledger and proof**     | Each month's spending, with the proof attached as you go              |
-| 7   | **Signed report, on time**       | The funder's form, signed, submitted, and the funder's decision       |
+| 7   | **Signed report, on time**       | Month-end closing approved, the funder's form signed and submitted    |
 | 8   | **Final audit package**          | Everything above, laid out for the auditor, in one download           |
 
 Start wherever you are today. A proposal you have not been awarded yet? Begin at step 1. A signed contract and
@@ -82,7 +82,7 @@ When the auditor asks for the year, you download it.
 | Role           | Does                                                                     |
 | -------------- | ------------------------------------------------------------------------ |
 | **Owner**      | Runs the workspace: who is in it, the lists it uses, signs the report    |
-| **Bookkeeper** | Records spending, attaches proof, submits, records the funder's decision |
+| **Bookkeeper** | Records spending, attaches proof, records the month-end closing, submits |
 | **Auditor**    | Reads everything, personal records included, changes nothing             |
 
 The funder is a name on the engagement, not another login to manage. You record their decision from the email

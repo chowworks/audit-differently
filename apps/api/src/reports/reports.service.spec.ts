@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client'
 import {
   BadRequestException,
   ConflictException,
@@ -23,9 +24,13 @@ const report = (status = 'draft') => ({
   authorizedByName: null,
   authorizedAt: null,
   comments: null,
-  review: null,
-  reviewedAt: null,
-  deniedReason: null,
+  closingNote: null,
+  sentBackReason: null,
+  sentBackAt: null,
+  sentBackByEmail: null,
+  editsRequestedAt: null,
+  editsRequestedByEmail: null,
+  editsRequestComment: null,
   isFinal: false,
   engagement: {
     id: 'e-1',
@@ -36,10 +41,30 @@ const report = (status = 'draft') => ({
     funder: 'Demo Workforce Board',
     periodStart: new Date('2026-07-01T00:00:00Z'),
     periodEnd: new Date('2027-06-30T00:00:00Z'),
-    fundingSources: [],
+    tags: [],
     reportDueDay: 12,
     awardAmount: 125000,
-    workspace: { id: W, name: 'Riverbend Youth Services', fundingSources: [] },
+    workspace: {
+      id: W,
+      name: 'Riverbend Youth Services',
+      tagTypes: [
+        {
+          key: 'funding-source',
+          label: 'Funding source',
+          appliesTo: ['engagement', 'expense', 'payroll', 'participant'],
+          values: [
+            { key: 'youth-workforce-fund', label: 'Youth Workforce Fund' },
+            { key: 'adult-training-fund', label: 'Adult Training Fund' },
+          ],
+        },
+        {
+          key: 'age-group',
+          label: 'Age group',
+          appliesTo: ['payroll', 'participant'],
+          values: [{ key: 'under-18', label: 'Under 18' }],
+        },
+      ],
+    },
     eligibilityItems: [],
     reportTo: null,
     preparerName: null,
@@ -61,7 +86,23 @@ const report = (status = 'draft') => ({
   expenses: [],
   wexPayments: [],
   checks: [],
+  reopenings: [] as Record<string, unknown>[],
 })
+
+/** A signed copy of the September report, uploaded at `at`. */
+const signedCopy = (id: string, at: string) => ({
+  ...document(id, W, 'signed-report'),
+  engagementId: 'e-1',
+  period: '2026-09',
+  uploadedAt: new Date(at),
+})
+
+/** The month's signed copies on file, as the month's page and a reopening read them. */
+function signedOnFile(prisma: { document: { findMany: jest.Mock } }, docs: object[]) {
+  prisma.document.findMany.mockImplementation(async (args?: { where?: { kind?: string } }) =>
+    args?.where?.kind === 'signed-report' ? docs : [document('d-1', W)]
+  )
+}
 
 const document = (id: string, workspaceId: string, kind = 'invoice') => ({
   id,
@@ -92,9 +133,13 @@ const stored = {
   reportLine: 'program-costs',
 }
 
-function service(status = 'draft') {
+function service(status = 'draft', over: Record<string, unknown> = {}) {
   const prisma = {
-    monthlyReport: { ...scoped(report(status)), update: jest.fn() },
+    monthlyReport: {
+      ...scoped({ ...report(status), ...over }),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
     expense: {
       ...scoped(stored),
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'x-2', ...data })),
@@ -110,6 +155,8 @@ function service(status = 'draft') {
     wexPayment: {
       ...scoped({ id: 'wx-1', workspaceId: W, monthlyReportId: 'r-1' }),
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'wx-2', ...data })),
+      update: jest.fn(),
+      delete: jest.fn(),
     },
     wexPaymentDocument: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -117,12 +164,19 @@ function service(status = 'draft') {
       update: jest.fn(),
     },
     document: {
+      // Files filed under the month: one, unless a test says the month is empty.
+      count: jest.fn().mockResolvedValue(1),
       findMany: jest.fn().mockResolvedValue([document('d-1', W)]),
-      findFirst: scoped(
-        document('d-1', W),
-        document('d-bank', W, 'bank-statement'),
-        document('d-other', OTHER)
-      ).findFirst,
+      // No signed copy on file for the month unless a test says so.
+      findFirst: jest.fn(async (args?: { where?: { kind?: string } }) =>
+        args?.where?.kind === 'signed-report'
+          ? null
+          : scoped(
+              document('d-1', W),
+              document('d-bank', W, 'bank-statement'),
+              document('d-other', OTHER)
+            ).findFirst(args as never)
+      ),
       create: jest.fn(async ({ data }: { data: object }) => ({
         id: 'd-new',
         uploadedAt: new Date('2026-10-02T00:00:00Z'),
@@ -130,6 +184,14 @@ function service(status = 'draft') {
       })),
     },
     check: { findMany: jest.fn().mockResolvedValue([]) },
+    reportReopening: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn(async ({ data }: { data: object }) => ({
+        id: 'ro-new',
+        workspaceId: W,
+        ...data,
+      })),
+    },
   }
   // Only the month's own earlier expenses are read; the fake expense rows are for the id lookups.
   prisma.expense.findMany.mockResolvedValue([])
@@ -144,9 +206,11 @@ function service(status = 'draft') {
     prisma.expenseDocument.update,
     prisma.expenseDocument.deleteMany,
     prisma.wexPayment.create,
+    prisma.wexPayment.update,
     prisma.wexPaymentDocument.create,
     prisma.wexPaymentDocument.update,
     prisma.document.create,
+    prisma.reportReopening.create,
   ]
   return {
     service: new ReportsService(prisma as never, checks as never, log as never),
@@ -202,7 +266,11 @@ const wex: WexPaymentInput = {
   payPeriodEnd: '2026-09-20',
   grossAmount: 280,
 }
-const decision = { decision: 'approve' as const }
+const closing = {
+  approvedBy: 'Sam Whitfield',
+  approvedOn: '2026-10-05',
+  note: 'Signed off by phone',
+}
 
 describe('ReportsService', () => {
   it('answers a member of another workspace with 404 from every route and writes nothing', async () => {
@@ -215,10 +283,13 @@ describe('ReportsService', () => {
     await expect(s.attachToExpense(who, 'x-1', 'invoice', 'd-1')).rejects.toThrow(NotFoundException)
     await expect(s.detachFromExpense(who, 'x-1', 'd-1')).rejects.toThrow(NotFoundException)
     await expect(s.addWexPayment(who, 'r-1', wex)).rejects.toThrow(NotFoundException)
+    await expect(s.updateWexPayment(who, 'wx-1', wex)).rejects.toThrow(NotFoundException)
+    await expect(s.deleteWexPayment(who, 'wx-1')).rejects.toThrow(NotFoundException)
     await expect(s.attachToWex(who, 'wx-1', 'payment', 'd-1')).rejects.toThrow(NotFoundException)
     await expect(s.submit(who, 'r-1')).rejects.toThrow(NotFoundException)
-    await expect(s.review(who, 'r-1', decision)).rejects.toThrow(NotFoundException)
-    await expect(s.reopen(who, 'r-1')).rejects.toThrow(NotFoundException)
+    await expect(s.approveClosing(who, 'r-1', closing)).rejects.toThrow(NotFoundException)
+    await expect(s.sendBack(who, 'r-1', 'Wrong rent')).rejects.toThrow(NotFoundException)
+    await expect(s.reopen(who, 'r-1', 'Typo')).rejects.toThrow(NotFoundException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
   })
@@ -246,9 +317,14 @@ describe('ReportsService', () => {
     const who = member('auditor')
     expect((await s.get(who, 'r-1')).can).toEqual({
       edit: false,
+      close: false,
+      sendBack: false,
+      requestEdits: false,
       submit: false,
-      review: false,
       reopen: false,
+      attachSigned: false,
+      readPersonal: true,
+      deleteMonth: false,
     })
     log.entries.length = 0
     await expect(s.addExpense(who, 'r-1', expense)).rejects.toThrow(ForbiddenException)
@@ -259,36 +335,462 @@ describe('ReportsService', () => {
     )
     await expect(s.detachFromExpense(who, 'x-1', 'd-1')).rejects.toThrow(ForbiddenException)
     await expect(s.addWexPayment(who, 'r-1', wex)).rejects.toThrow(ForbiddenException)
+    await expect(s.updateWexPayment(who, 'wx-1', wex)).rejects.toThrow(ForbiddenException)
+    await expect(s.deleteWexPayment(who, 'wx-1')).rejects.toThrow(ForbiddenException)
     await expect(s.attachToWex(who, 'wx-1', 'payment', 'd-1')).rejects.toThrow(ForbiddenException)
     await expect(s.submit(who, 'r-1')).rejects.toThrow(ForbiddenException)
-    await expect(s.reopen(who, 'r-1')).rejects.toThrow(ForbiddenException)
+    await expect(s.approveClosing(who, 'r-1', closing)).rejects.toThrow(ForbiddenException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
   })
 
-  it("lets an auditor neither record the funder's decision nor reopen a denied month", async () => {
-    const submitted = service('submitted')
-    await expect(submitted.service.review(member('auditor'), 'r-1', decision)).rejects.toThrow(
+  it('lets an auditor neither approve a month-end closing nor send one back', async () => {
+    const draft = service()
+    await expect(draft.service.approveClosing(member('auditor'), 'r-1', closing)).rejects.toThrow(
       ForbiddenException
     )
-    const denied = service('denied')
-    await expect(denied.service.reopen(member('auditor'), 'r-1')).rejects.toThrow(
+    const closed = service('closed')
+    expect((await closed.service.get(member('auditor'), 'r-1')).can).toEqual({
+      edit: false,
+      close: false,
+      sendBack: false,
+      requestEdits: false,
+      submit: false,
+      reopen: false,
+      attachSigned: false,
+      readPersonal: true,
+      deleteMonth: false,
+    })
+    closed.log.entries.length = 0
+    await expect(closed.service.sendBack(member('auditor'), 'r-1', 'Wrong rent')).rejects.toThrow(
       ForbiddenException
     )
-    expect(submitted.prisma.monthlyReport.update).not.toHaveBeenCalled()
-    expect(denied.prisma.monthlyReport.update).not.toHaveBeenCalled()
-    expect([...submitted.log.entries, ...denied.log.entries]).toEqual([])
+    await expect(closed.service.submit(member('auditor'), 'r-1')).rejects.toThrow(
+      ForbiddenException
+    )
+    expect(draft.prisma.monthlyReport.update).not.toHaveBeenCalled()
+    expect(closed.prisma.monthlyReport.update).not.toHaveBeenCalled()
+    expect([...draft.log.entries, ...closed.log.entries]).toEqual([])
   })
 
-  it('logs nothing for a refused change: a month no longer a draft, a blocked submit, bad values', async () => {
-    const who = member('bookkeeper')
+  it('offers the signed copy in any status until one is on file, and personal records to owners', async () => {
     const submitted = service('submitted')
-    await expect(submitted.service.addExpense(who, 'r-1', expense)).rejects.toThrow(
+    const owner = member('owner')
+    expect((await submitted.service.get(owner, 'r-1')).can).toMatchObject({
+      edit: false,
+      attachSigned: true,
+      readPersonal: true,
+      deleteMonth: false,
+    })
+    signedOnFile(submitted.prisma, [signedCopy('d-signed', '2026-10-07T00:00:00Z')])
+    const detail = await submitted.service.get(owner, 'r-1')
+    expect(detail.can.attachSigned).toBe(false)
+    expect(detail.signedCopy?.id).toBe('d-signed')
+    expect(submitted.prisma.document.findMany).toHaveBeenCalledWith({
+      where: { engagementId: 'e-1', period: '2026-09', kind: 'signed-report' },
+    })
+  })
+
+  it('refuses to submit a month before its month-end closing is approved', async () => {
+    const who = member('bookkeeper')
+    const draft = service()
+    expect((await draft.service.get(who, 'r-1')).can).toEqual({
+      edit: true,
+      close: true,
+      sendBack: false,
+      requestEdits: true,
+      submit: false,
+      reopen: false,
+      attachSigned: true,
+      readPersonal: false,
+      deleteMonth: false,
+    })
+    draft.log.entries.length = 0
+    await expect(draft.service.submit(who, 'r-1')).rejects.toThrow(
+      'Approve the month-end closing of September 2026 before submitting it'
+    )
+    await expect(draft.service.sendBack(who, 'r-1', 'Wrong rent')).rejects.toThrow(
       ConflictException
     )
-    await expect(submitted.service.deleteExpense(who, 'x-1')).rejects.toThrow(ConflictException)
-    await expect(submitted.service.submit(who, 'r-1')).rejects.toThrow(ConflictException)
+    for (const w of draft.writes) expect(w).not.toHaveBeenCalled()
+    expect(draft.log.entries).toEqual([])
+  })
+
+  it('locks the ledger of a month whose closing is approved until it is sent back', async () => {
+    const who = member('bookkeeper')
+    const closed = service('closed')
+    expect((await closed.service.get(who, 'r-1')).can).toEqual({
+      edit: false,
+      close: false,
+      sendBack: true,
+      requestEdits: true,
+      submit: true,
+      reopen: false,
+      attachSigned: true,
+      readPersonal: false,
+      deleteMonth: false,
+    })
+    closed.log.entries.length = 0
+    await expect(closed.service.addExpense(who, 'r-1', expense)).rejects.toThrow(
+      'The month-end closing of September 2026 is approved; send it back to change the month'
+    )
+    await expect(closed.service.approveClosing(who, 'r-1', closing)).rejects.toThrow(
+      ConflictException
+    )
+    await expect(closed.service.sendBack(who, 'r-1', '  ')).rejects.toThrow(BadRequestException)
+    for (const w of closed.writes) expect(w).not.toHaveBeenCalled()
+    expect(closed.log.entries).toEqual([])
+    await closed.service.sendBack(who, 'r-1', 'Rent for September is the wrong amount')
+    expect(closed.prisma.monthlyReport.update).toHaveBeenCalledWith({
+      where: { id: 'r-1' },
+      data: {
+        status: 'draft',
+        authorizedByName: null,
+        authorizedAt: null,
+        closingNote: null,
+        sentBackReason: 'Rent for September is the wrong amount',
+        sentBackAt: expect.any(Date),
+        sentBackByEmail: who.email,
+      },
+    })
+  })
+
+  describe('asking for edits', () => {
+    it('lets an owner or bookkeeper ask on a draft or a closed month, never an auditor or another workspace', async () => {
+      for (const status of ['draft', 'closed']) {
+        const s = service(status)
+        expect((await s.service.get(member('bookkeeper'), 'r-1')).can.requestEdits).toBe(true)
+        expect((await s.service.get(member('auditor'), 'r-1')).can.requestEdits).toBe(false)
+        s.log.entries.length = 0
+        await expect(
+          s.service.requestEdits(member('auditor'), 'r-1', 'Fix the rent')
+        ).rejects.toThrow(ForbiddenException)
+        await expect(s.service.requestEdits(stranger(), 'r-1', 'Fix the rent')).rejects.toThrow(
+          NotFoundException
+        )
+        for (const w of s.writes) expect(w).not.toHaveBeenCalled()
+        expect(s.log.entries).toEqual([])
+      }
+    })
+
+    it('needs a comment of at most 500 characters, and refuses a submitted month', async () => {
+      const who = member('owner')
+      const s = service()
+      for (const bad of ['', '   ', undefined, 42, 'x'.repeat(501)])
+        await expect(s.service.requestEdits(who, 'r-1', bad)).rejects.toThrow(BadRequestException)
+      const sent = service('submitted')
+      expect((await sent.service.get(who, 'r-1')).can.requestEdits).toBe(false)
+      sent.log.entries.length = 0
+      await expect(sent.service.requestEdits(who, 'r-1', 'Fix the rent')).rejects.toThrow(
+        ConflictException
+      )
+      for (const x of [s, sent]) {
+        for (const w of x.writes) expect(w).not.toHaveBeenCalled()
+        expect(x.log.entries).toEqual([])
+      }
+    })
+
+    it.each(['owner', 'bookkeeper'] as const)(
+      "records the %s's request on a draft without changing its status, logged once with the comment by name",
+      async (role) => {
+        const who = member(role)
+        const s = service()
+        const answer = await s.service.requestEdits(who, 'r-1', '  Rent for September is wrong  ')
+        expect(answer.id).toBe('r-1')
+        expect(s.prisma.monthlyReport.update).toHaveBeenCalledWith({
+          where: { id: 'r-1' },
+          data: {
+            editsRequestedAt: expect.any(Date),
+            editsRequestedByEmail: who.email,
+            editsRequestComment: 'Rent for September is wrong',
+          },
+        })
+        expect(s.log.entries).toEqual([
+          {
+            workspaceId: W,
+            resource: 'report',
+            subjectId: 'r-1',
+            action: 'review',
+            description: 'Asked for edits on September 2026 of Coding Pathway',
+            changes: [
+              { field: 'Edits asked for on', before: null, after: expect.any(String) },
+              { field: 'Edits asked for by', before: null, after: who.email },
+              { field: 'What needs editing' },
+            ],
+          },
+        ])
+        expectNoneOf(s.log.entries, ['Rent for September'])
+      }
+    )
+
+    it('sends a closed month back to a draft with the comment as the reason', async () => {
+      const who = member('bookkeeper')
+      const s = service('closed', { authorizedByName: 'Sam Whitfield' })
+      await s.service.requestEdits(who, 'r-1', 'Rent for September is wrong')
+      expect(s.prisma.monthlyReport.update).toHaveBeenCalledWith({
+        where: { id: 'r-1' },
+        data: {
+          status: 'draft',
+          authorizedByName: null,
+          authorizedAt: null,
+          closingNote: null,
+          sentBackReason: 'Rent for September is wrong',
+          sentBackAt: expect.any(Date),
+          sentBackByEmail: who.email,
+        },
+      })
+      expect(s.log.entries).toHaveLength(1)
+      expect(s.log.entries[0]).toMatchObject({
+        description: 'Sent back the month-end closing of September 2026 for Coding Pathway',
+      })
+      expectNoneOf(s.log.entries, ['Rent for September', 'Sam Whitfield'])
+    })
+
+    it('clears the request when the closing is approved', async () => {
+      const s = service('draft', {
+        editsRequestedAt: new Date('2026-10-10T00:00:00Z'),
+        editsRequestedByEmail: 'owner@example.test',
+        editsRequestComment: 'Fix the rent',
+      })
+      await s.service.approveClosing(member('owner'), 'r-1', closing)
+      expect(s.prisma.monthlyReport.update).toHaveBeenCalledWith({
+        where: { id: 'r-1' },
+        data: expect.objectContaining({
+          status: 'closed',
+          editsRequestedAt: null,
+          editsRequestedByEmail: null,
+          editsRequestComment: null,
+        }),
+      })
+    })
+  })
+
+  describe('reopening a submitted month to correct it', () => {
+    const submitted = () =>
+      service('submitted', {
+        submittedAt: new Date('2026-10-08T00:00:00Z'),
+        preparedByName: 'Pat Preparer',
+        authorizedByName: 'Sam Whitfield',
+        authorizedAt: new Date('2026-10-05T00:00:00Z'),
+        closingNote: 'Signed off by phone',
+      })
+
+    it('lets an owner or bookkeeper reopen it, never an auditor', async () => {
+      const auditor = submitted()
+      expect((await auditor.service.get(member('auditor'), 'r-1')).can.reopen).toBe(false)
+      expect((await auditor.service.get(member('bookkeeper'), 'r-1')).can.reopen).toBe(true)
+      auditor.log.entries.length = 0
+      await expect(auditor.service.reopen(member('auditor'), 'r-1', 'Typo')).rejects.toThrow(
+        ForbiddenException
+      )
+      for (const w of auditor.writes) expect(w).not.toHaveBeenCalled()
+      expect(auditor.log.entries).toEqual([])
+    })
+
+    it('reopens only a submitted month, and only with a reason of at most 500 characters', async () => {
+      const who = member('owner')
+      for (const status of ['draft', 'closed']) {
+        const other = service(status)
+        await expect(other.service.reopen(who, 'r-1', 'Typo')).rejects.toThrow(
+          `Only a submitted month can be reopened; September 2026 is ${status}`
+        )
+        for (const w of other.writes) expect(w).not.toHaveBeenCalled()
+        expect(other.log.entries).toEqual([])
+      }
+      const s = submitted()
+      for (const bad of ['', '   ', undefined, 'x'.repeat(501)])
+        await expect(s.service.reopen(who, 'r-1', bad as never)).rejects.toThrow(
+          BadRequestException
+        )
+      for (const w of s.writes) expect(w).not.toHaveBeenCalled()
+      expect(s.log.entries).toEqual([])
+    })
+
+    it.each(['owner', 'bookkeeper'] as const)(
+      'lets the %s reopen it as a draft, without its submission or closing, logged once with the reason by name',
+      async (role) => {
+        const s = submitted()
+        const answer = await s.service.reopen(member(role), 'r-1', '  The rent line has a typo  ')
+        expect(answer.id).toBe('r-1')
+        expect(s.prisma.monthlyReport.update).toHaveBeenCalledWith({
+          where: { id: 'r-1' },
+          data: {
+            status: 'draft',
+            submittedAt: null,
+            authorizedByName: null,
+            authorizedAt: null,
+            closingNote: null,
+            sentBackReason: null,
+            sentBackAt: null,
+            sentBackByEmail: null,
+          },
+        })
+        // Every document stays: nothing is detached or removed.
+        expect(s.prisma.expenseDocument.deleteMany).not.toHaveBeenCalled()
+        expect(s.log.entries).toEqual([
+          {
+            workspaceId: W,
+            resource: 'report',
+            subjectId: 'r-1',
+            action: 'review',
+            description: 'Reopened September 2026 of Coding Pathway to correct it',
+            changes: [
+              { field: 'Status', before: 'submitted', after: 'draft' },
+              { field: 'Submitted on', before: '2026-10-08', after: null },
+              { field: 'Approved by' },
+              { field: 'Approved on', before: '2026-10-05', after: null },
+              { field: 'Note' },
+              { field: 'Why it was reopened' },
+            ],
+          },
+        ])
+        expectNoneOf(s.log.entries, ['typo', 'Sam Whitfield', 'Signed off'])
+      }
+    )
+
+    it('keeps what the reopening undid in the same transaction: the submission, the approval and the signed copy', async () => {
+      const s = submitted()
+      signedOnFile(s.prisma, [signedCopy('d-signed', '2026-10-07T00:00:00Z')])
+      const who = member('bookkeeper')
+      await s.service.reopen(who, 'r-1', '  The rent line has a typo  ')
+      expect(s.prisma.reportReopening.create).toHaveBeenCalledWith({
+        data: {
+          monthlyReportId: 'r-1',
+          reopenedById: who.userId,
+          reopenedByEmail: 'bookkeeper@ws-1.example.org',
+          reason: 'The rent line has a typo',
+          submittedAt: new Date('2026-10-08T00:00:00Z'),
+          approvedByName: 'Sam Whitfield',
+          approvedAt: new Date('2026-10-05T00:00:00Z'),
+          signedDocumentId: 'd-signed',
+        },
+      })
+      // One transaction: the history row, then the month's own change, then its one line.
+      expect(s.log.change).toHaveBeenCalledTimes(1)
+      expect(s.prisma.reportReopening.create.mock.invocationCallOrder[0]).toBeLessThan(
+        s.prisma.monthlyReport.update.mock.invocationCallOrder[0]!
+      )
+    })
+
+    it('adds a second row on a second reopening, naming only the signed copy submitted since the first', async () => {
+      const first = {
+        id: 'ro-1',
+        workspaceId: W,
+        monthlyReportId: 'r-1',
+        reopenedAt: new Date('2026-10-09T00:00:00Z'),
+        reopenedByEmail: 'owner@ws-1.example.org',
+        reason: 'Rent typo',
+        submittedAt: new Date('2026-10-08T00:00:00Z'),
+        approvedByName: 'Sam Whitfield',
+        approvedAt: new Date('2026-10-05T00:00:00Z'),
+        signedDocumentId: 'd-signed',
+      }
+      const s = service('submitted', {
+        submittedAt: new Date('2026-10-12T00:00:00Z'),
+        authorizedByName: 'Sam Whitfield',
+        authorizedAt: new Date('2026-10-11T00:00:00Z'),
+        reopenings: [first],
+      })
+      s.prisma.reportReopening.findFirst.mockResolvedValue(first)
+      signedOnFile(s.prisma, [
+        signedCopy('d-signed', '2026-10-07T00:00:00Z'),
+        signedCopy('d-signed-2', '2026-10-11T00:00:00Z'),
+      ])
+      await s.service.reopen(member('owner'), 'r-1', 'Vendor name misspelled')
+      expect(s.prisma.reportReopening.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          reason: 'Vendor name misspelled',
+          submittedAt: new Date('2026-10-12T00:00:00Z'),
+          approvedAt: new Date('2026-10-11T00:00:00Z'),
+          signedDocumentId: 'd-signed-2',
+        }),
+      })
+    })
+
+    it('shows every reopening on the month, with its reason, after the month is closed and submitted again', async () => {
+      const kept = {
+        id: 'ro-1',
+        workspaceId: W,
+        monthlyReportId: 'r-1',
+        reopenedAt: new Date('2026-10-09T00:00:00Z'),
+        reopenedByEmail: 'owner@ws-1.example.org',
+        reason: 'Rent typo',
+        submittedAt: new Date('2026-10-08T00:00:00Z'),
+        approvedByName: 'Sam Whitfield',
+        approvedAt: new Date('2026-10-05T00:00:00Z'),
+        signedDocumentId: 'd-signed',
+      }
+      for (const status of ['draft', 'closed', 'submitted']) {
+        const s = service(status, { reopenings: [kept] })
+        signedOnFile(s.prisma, [
+          signedCopy('d-signed', '2026-10-07T00:00:00Z'),
+          signedCopy('d-signed-2', '2026-10-11T00:00:00Z'),
+        ])
+        const detail = await s.service.get(member('auditor'), 'r-1')
+        expect(detail.reopenings).toEqual([
+          {
+            id: 'ro-1',
+            reopenedAt: '2026-10-09T00:00:00.000Z',
+            reopenedBy: 'owner@ws-1.example.org',
+            reason: 'Rent typo',
+            submittedAt: '2026-10-08T00:00:00.000Z',
+            approvedByName: 'Sam Whitfield',
+            approvedAt: '2026-10-05T00:00:00.000Z',
+            signedDocument: expect.objectContaining({ id: 'd-signed' }),
+          },
+        ])
+        // The copy that counts is the one attached after the reopening.
+        expect(detail.signedCopy?.id).toBe('d-signed-2')
+        // The page's read line names no reason and no approver.
+        expectNoneOf(s.log.entries, ['Rent typo', 'Sam Whitfield'])
+      }
+      // Approving the closing again changes the month's own row only: the history stays.
+      const draft = service('draft', { reopenings: [kept] })
+      await draft.service.approveClosing(member('owner'), 'r-1', closing)
+      expect(draft.prisma.reportReopening.create).not.toHaveBeenCalled()
+      expect(draft.prisma.monthlyReport.update.mock.calls[0]![0].data).not.toHaveProperty(
+        'reopenReason'
+      )
+    })
+
+    it('asks for a new signed copy after a reopening, until one newer than the reopening is on file', async () => {
+      const kept = {
+        id: 'ro-1',
+        reopenedAt: new Date('2026-10-09T00:00:00Z'),
+        reopenedByEmail: 'owner@ws-1.example.org',
+        reason: 'Rent typo',
+        submittedAt: new Date('2026-10-08T00:00:00Z'),
+        approvedByName: null,
+        approvedAt: null,
+        signedDocumentId: 'd-signed',
+      }
+      const s = service('draft', { reopenings: [kept] })
+      signedOnFile(s.prisma, [signedCopy('d-signed', '2026-10-07T00:00:00Z')])
+      const before = await s.service.get(member('bookkeeper'), 'r-1')
+      expect(before.can.attachSigned).toBe(true)
+      expect(before.signedCopy).toBeNull()
+      signedOnFile(s.prisma, [
+        signedCopy('d-signed', '2026-10-07T00:00:00Z'),
+        signedCopy('d-signed-2', '2026-10-10T00:00:00Z'),
+      ])
+      const after = await s.service.get(member('bookkeeper'), 'r-1')
+      expect(after.can.attachSigned).toBe(false)
+      expect(after.signedCopy?.id).toBe('d-signed-2')
+    })
+  })
+
+  it('refuses a month-end closing without an approver, with a bad date, or while a check blocks it', async () => {
+    const who = member('owner')
     const draft = service()
+    await expect(
+      draft.service.approveClosing(who, 'r-1', { ...closing, approvedBy: ' ' })
+    ).rejects.toThrow(BadRequestException)
+    await expect(
+      draft.service.approveClosing(who, 'r-1', { ...closing, approvedOn: '2026-02-30' })
+    ).rejects.toThrow(BadRequestException)
+    await expect(
+      draft.service.approveClosing(who, 'r-1', { ...closing, approvedOn: '2999-01-01' })
+    ).rejects.toThrow(BadRequestException)
     draft.prisma.check.findMany.mockResolvedValue([
       {
         id: 'k-1',
@@ -302,7 +804,39 @@ describe('ReportsService', () => {
         wexPaymentId: null,
       },
     ])
-    await expect(draft.service.submit(who, 'r-1')).rejects.toThrow(ConflictException)
+    await expect(draft.service.approveClosing(who, 'r-1', closing)).rejects.toThrow(
+      '1 blocking check(s) must be resolved before approving the month-end closing'
+    )
+    for (const w of draft.writes) expect(w).not.toHaveBeenCalled()
+    expect(draft.log.entries).toEqual([])
+  })
+
+  it('logs nothing for a refused change: a month no longer a draft, a blocked submit, bad values', async () => {
+    const who = member('bookkeeper')
+    const submitted = service('submitted')
+    await expect(submitted.service.addExpense(who, 'r-1', expense)).rejects.toThrow(
+      ConflictException
+    )
+    await expect(submitted.service.deleteExpense(who, 'x-1')).rejects.toThrow(ConflictException)
+    await expect(submitted.service.submit(who, 'r-1')).rejects.toThrow(ConflictException)
+    const closed = service('closed')
+    closed.prisma.check.findMany.mockResolvedValue([
+      {
+        id: 'k-1',
+        code: 'missing-proof',
+        severity: 'blocker',
+        source: 'rule',
+        message: 'Proof missing',
+        status: 'open',
+        expenseId: 'x-1',
+        participantId: null,
+        wexPaymentId: null,
+      },
+    ])
+    await expect(closed.service.submit(who, 'r-1')).rejects.toThrow(
+      '1 blocking check(s) must be resolved before submitting'
+    )
+    const draft = service()
     await expect(
       draft.service.addExpense(who, 'r-1', { ...expense, itemNumber: '<b>1001</b>' })
     ).rejects.toThrow(BadRequestException)
@@ -312,11 +846,12 @@ describe('ReportsService', () => {
     await expect(draft.service.attachToWex(who, 'wx-1', 'payment', 'd-other')).rejects.toThrow(
       NotFoundException
     )
-    for (const w of [...submitted.writes, ...draft.writes]) expect(w).not.toHaveBeenCalled()
-    expect([...submitted.log.entries, ...draft.log.entries]).toEqual([])
+    for (const w of [...submitted.writes, ...closed.writes, ...draft.writes])
+      expect(w).not.toHaveBeenCalled()
+    expect([...submitted.log.entries, ...closed.log.entries, ...draft.log.entries]).toEqual([])
   })
 
-  it('takes item numbers, accounts and IV numbers as ID-like text only, and explains the rule', async () => {
+  it('takes item numbers and accounts as ID-like text only, and explains the rule', async () => {
     const who = member('bookkeeper')
     const { service: s, log } = service()
     const rule = 'may use letters, digits, #, &, ., /, - and spaces, from 1 to 40 characters'
@@ -333,23 +868,12 @@ describe('ReportsService', () => {
     await expect(
       s.addExpense(who, 'r-1', { ...expense, itemNumber: '1'.repeat(41) })
     ).rejects.toThrow(BadRequestException)
-    const submitted = service('submitted')
-    await expect(
-      submitted.service.review(who, 'r-1', {
-        decision: 'approve',
-        review: { invoiceNumber: 'INV\n42' },
-      })
-    ).rejects.toThrow(`IV# for payment ${rule}`)
-    expect([...log.entries, ...submitted.log.entries]).toEqual([])
+    expect(log.entries).toEqual([])
     // The values the demo seed and the other specs use pass.
     for (const itemNumber of ['RYS-14', 'HTC-2', 'T-1', '1001', 'No. 4/2026 #7'])
       await s.addExpense(who, 'r-1', { ...expense, itemNumber })
     for (const account of ['60701 Accounting Fees', '63103 Salaries - WEX', '62100 Travel'])
       await s.addExpense(who, 'r-1', { ...expense, account })
-    await submitted.service.review(who, 'r-1', {
-      decision: 'approve',
-      review: { invoiceNumber: 'IV-26-0412' },
-    })
   })
 
   it("logs every change once, in the screen's words, with amounts and dates but no participant or vendor names", async () => {
@@ -372,21 +896,15 @@ describe('ReportsService', () => {
       await draft.service.deleteExpense(who, 'x-1'),
       await draft.service.addWexPayment(who, 'r-1', wex),
       await draft.service.attachToWex(who, 'wx-1', 'timesheet', 'd-1'),
-      await draft.service.submit(who, 'r-1'),
+      await draft.service.approveClosing(who, 'r-1', closing),
     ]
-    const submitted = service('submitted')
-    answers.push(
-      await submitted.service.review(who, 'r-1', {
-        decision: 'deny',
-        reason: 'Jordan Sample is missing a timesheet',
-        review: { invoiceNumber: 'INV-0042' },
-      })
-    )
-    const denied = service('denied')
-    answers.push(await denied.service.reopen(who, 'r-1'))
+    const closed = service('closed')
+    answers.push(await closed.service.sendBack(who, 'r-1', 'Jordan Sample is missing a timesheet'))
+    const ready = service('closed')
+    answers.push(await ready.service.submit(who, 'r-1'))
     // Each change answers with the month's page, and that answer is not another read.
     for (const a of answers) expect(a.id).toBe('r-1')
-    const entries = [...draft.log.entries, ...submitted.log.entries, ...denied.log.entries]
+    const entries = [...draft.log.entries, ...closed.log.entries, ...ready.log.entries]
     expect(entries.map((e) => [e.resource, e.action, e.description])).toEqual([
       ['expense', 'create', 'Added expense 1001 to September 2026'],
       ['expense', 'update', 'Changed expense 1001 in September 2026'],
@@ -395,9 +913,9 @@ describe('ReportsService', () => {
       ['expense', 'delete', 'Removed expense 1001 from September 2026'],
       ['report', 'create', 'Added a work-experience payment to September 2026'],
       ['report', 'update', 'Attached timesheet to a work-experience payment in September 2026'],
+      ['report', 'review', 'Approved the month-end closing of September 2026 for Coding Pathway'],
+      ['report', 'review', 'Sent back the month-end closing of September 2026 for Coding Pathway'],
       ['report', 'submit', 'Submitted September 2026 of Coding Pathway to Demo Workforce Board'],
-      ['report', 'review', "Recorded the funder's denial of September 2026 of Coding Pathway"],
-      ['report', 'update', 'Reopened September 2026 of Coding Pathway to correct it'],
     ])
     expect(entries.every((e) => e.workspaceId === W)).toBe(true)
     // Amounts, dates and statuses by value, under the form's labels; the vendor, the memo and anything about a
@@ -424,17 +942,23 @@ describe('ReportsService', () => {
       { field: 'Pay period end' },
       { field: 'Gross pay' },
     ])
-    expect(entries[7]!.changes).toEqual(
+    // The approver is a person and the note and reason are free text: by name alone; the date by value.
+    expect(entries[7]!.changes).toEqual([
+      { field: 'Status', before: 'draft', after: 'closed' },
+      { field: 'Approved by' },
+      { field: 'Approved on', before: null, after: '2026-10-05' },
+      { field: 'Note' },
+    ])
+    expect(entries[8]!.changes).toEqual([
+      { field: 'Status', before: 'closed', after: 'draft' },
+      { field: 'Why it was sent back' },
+      { field: 'Sent back on', before: null, after: expect.any(String) },
+      { field: 'Sent back by', before: null, after: 'bookkeeper@ws-1.example.org' },
+    ])
+    expect(entries[9]!.changes).toEqual(
       expect.arrayContaining([
-        { field: 'Status', before: 'draft', after: 'submitted' },
+        { field: 'Status', before: 'closed', after: 'submitted' },
         { field: 'Prepared by' },
-      ])
-    )
-    expect(entries[8]!.changes).toEqual(
-      expect.arrayContaining([
-        { field: 'Status', before: 'submitted', after: 'denied' },
-        { field: 'IV# for payment', before: null, after: 'INV-0042' },
-        { field: 'If denied, why' },
       ])
     )
     expectNoneOf(entries, [
@@ -445,23 +969,163 @@ describe('ReportsService', () => {
       'Classroom rent',
       '280',
       'The bookkeeper',
+      'Sam Whitfield',
+      'Signed off by phone',
+      'missing a timesheet',
     ])
   })
 
-  it('names who authorized a month an owner submits by field alone', async () => {
-    const draft = service()
-    await draft.service.submit(member('owner'), 'r-1')
-    expect(draft.log.entries[0]!.changes).toEqual(
-      expect.arrayContaining([
-        { field: 'Authorized by' },
-        {
-          field: 'Authorized on',
-          before: null,
-          after: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-        },
+  describe('tags', () => {
+    const youth = 'funding-source:youth-workforce-fund'
+
+    it("tags an expense from the workspace's list, logged in the list's words", async () => {
+      const { service: s, prisma, log } = service()
+      const detail = await s.addExpense(member('bookkeeper'), 'r-1', { ...expense, tags: [youth] })
+      expect((prisma.expense.create.mock.calls[0]![0].data as { tags: string[] }).tags).toEqual([
+        youth,
       ])
-    )
-    expectNoneOf(draft.log.entries, ['The owner'])
+      expect(detail.tagTypes.map((t) => t.label)).toEqual(['Funding source', 'Age group'])
+      expect(log.entries[0]!.changes).toEqual(
+        expect.arrayContaining([{ field: 'Tags', after: 'Funding source: Youth Workforce Fund' }])
+      )
+    })
+
+    it('refuses free text, a value of a type that is not for expenses, and a non-list', async () => {
+      const { service: s, writes, log } = service()
+      const who = member('bookkeeper')
+      for (const tags of [
+        ['north campus'],
+        ['age-group:under-18'],
+        ['funding-source:not-a-fund'],
+        'x',
+      ])
+        await expect(
+          s.addExpense(who, 'r-1', { ...expense, tags: tags as string[] })
+        ).rejects.toThrow(BadRequestException)
+      for (const w of writes) expect(w).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+
+    it('keeps a tag whose value left the list on the record that has it, and leaves tags alone when not sent', async () => {
+      const { service: s, prisma } = service()
+      const old = { ...stored, tags: ['funding-source:Retired Fund'] }
+      prisma.expense.findFirst.mockResolvedValue(old)
+      const who = member('bookkeeper')
+      await s.updateExpense(who, 'x-1', { ...expense, memo: 'Rent', tags: [...old.tags, youth] })
+      expect(prisma.expense.update.mock.calls[0][0].data.tags).toEqual([youth, ...old.tags])
+      await s.updateExpense(who, 'x-1', { ...expense, memo: 'Rent again' })
+      expect(prisma.expense.update.mock.calls[1][0].data).not.toHaveProperty('tags')
+      await expect(
+        s.addExpense(who, 'r-1', { ...expense, tags: ['funding-source:Retired Fund'] })
+      ).rejects.toThrow(BadRequestException)
+    })
+
+    it('refuses a work-experience payment with impossible hours, pay or dates (400), and stores nothing', async () => {
+      const { service: s, prisma, log } = service()
+      const who = member('bookkeeper')
+      for (const bad of [
+        { hours: -1 },
+        { hours: Number.NaN },
+        { hours: 'lots' as unknown as number },
+        { grossAmount: 0 },
+        { grossAmount: -5 },
+        { payPeriodStart: '2026-09-21' },
+        { payPeriodEnd: '2026-02-31' },
+      ])
+        await expect(s.addWexPayment(who, 'r-1', { ...wex, ...bad })).rejects.toThrow(
+          BadRequestException
+        )
+      expect(prisma.wexPayment.create).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+      await s.addWexPayment(who, 'r-1', { ...wex, hours: 0, payPeriodEnd: wex.payPeriodStart })
+      expect(prisma.wexPayment.create).toHaveBeenCalledTimes(1)
+    })
+
+    it('changes and removes a work-experience payment, each with its line, and logs pay by field', async () => {
+      const { service: s, prisma, log } = service()
+      const who = member('bookkeeper')
+      await s.updateWexPayment(who, 'wx-1', { ...wex, grossAmount: 300 })
+      expect(prisma.wexPayment.update.mock.calls[0][0]).toMatchObject({
+        where: { id: 'wx-1' },
+        data: { grossAmount: '300.00' },
+      })
+      await s.deleteWexPayment(who, 'wx-1')
+      expect(prisma.wexPayment.delete).toHaveBeenCalledWith({ where: { id: 'wx-1' } })
+      expect(log.entries.map((e) => [e.action, e.description])).toEqual([
+        ['update', 'Changed a work-experience payment in September 2026'],
+        ['delete', 'Removed a work-experience payment from September 2026'],
+      ])
+      await expect(s.updateWexPayment(who, 'wx-1', { ...wex, grossAmount: 0 })).rejects.toThrow(
+        BadRequestException
+      )
+    })
+
+    it("tags a payroll item in its edit and logs the field by name alone: a participant's pay", async () => {
+      const { service: s, prisma, log } = service()
+      await s.updateWexPayment(member('bookkeeper'), 'wx-1', {
+        ...wex,
+        tags: ['age-group:under-18'],
+      })
+      expect(prisma.wexPayment.update.mock.calls[0][0].data.tags).toEqual(['age-group:under-18'])
+      expect(log.entries[0]!.changes).toContainEqual({ field: 'Tags' })
+      expectNoneOf(log.entries, ['Under 18', 'under-18', 'age-group'])
+      await expect(
+        s.updateWexPayment(member('bookkeeper'), 'wx-1', { ...wex, tags: ['site:north'] })
+      ).rejects.toThrow(BadRequestException)
+      expect(prisma.wexPayment.update).toHaveBeenCalledTimes(1)
+    })
+
+    it('changes no payroll item in a month whose closing is approved', async () => {
+      const { service: s, prisma } = service('closed')
+      await expect(
+        s.updateWexPayment(member('owner'), 'wx-1', { ...wex, tags: [youth] })
+      ).rejects.toThrow(ConflictException)
+      await expect(s.deleteWexPayment(member('owner'), 'wx-1')).rejects.toThrow(ConflictException)
+      expect(prisma.wexPayment.update).not.toHaveBeenCalled()
+      expect(prisma.wexPayment.delete).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('deleting an empty month', () => {
+    const empty = { expenses: [], wexPayments: [], reopenings: [] }
+
+    it('lets an owner delete a draft with nothing in it, and logs it', async () => {
+      const { service: s, prisma, log } = service('draft', empty)
+      prisma.document.count.mockResolvedValue(0)
+      expect((await s.get(member('owner'), 'r-1')).can.deleteMonth).toBe(true)
+      expect(await s.deleteEmptyMonth(member('owner'), 'r-1')).toEqual({ engagementId: 'e-1' })
+      expect(prisma.monthlyReport.delete).toHaveBeenCalledWith({ where: { id: 'r-1' } })
+      expect(log.entries.map((e) => e.description)).toContain(
+        'Deleted September 2026, a month with nothing to submit'
+      )
+    })
+
+    it('refuses a bookkeeper, and a month with a file, a line or a submission behind it', async () => {
+      const bookkeeper = service('draft', empty)
+      bookkeeper.prisma.document.count.mockResolvedValue(0)
+      expect((await bookkeeper.service.get(member('bookkeeper'), 'r-1')).can.deleteMonth).toBe(
+        false
+      )
+      await expect(
+        bookkeeper.service.deleteEmptyMonth(member('bookkeeper'), 'r-1')
+      ).rejects.toThrow(ForbiddenException)
+      const withFile = service('draft', empty)
+      await expect(withFile.service.deleteEmptyMonth(member('owner'), 'r-1')).rejects.toThrow(
+        /not empty/
+      )
+      const submitted = service('submitted', empty)
+      submitted.prisma.document.count.mockResolvedValue(0)
+      await expect(submitted.service.deleteEmptyMonth(member('owner'), 'r-1')).rejects.toThrow(
+        ConflictException
+      )
+      const withLine = service('draft', { ...empty, expenses: [{ id: 'x-1' }] })
+      withLine.prisma.document.count.mockResolvedValue(0)
+      await expect(withLine.service.deleteEmptyMonth(member('owner'), 'r-1')).rejects.toThrow(
+        /not empty/
+      )
+      for (const x of [bookkeeper, withFile, submitted, withLine])
+        expect(x.prisma.monthlyReport.delete).not.toHaveBeenCalled()
+    })
   })
 
   it('writes nothing and logs nothing for a save with nothing edited', async () => {
@@ -482,7 +1146,8 @@ describe('ReportsService', () => {
     await s.attachToExpense(who, 'x-1', 'payment', 'd-bank')
     expect(prisma.expenseDocument.update).toHaveBeenCalledWith({
       where: { expenseId_documentId: { expenseId: 'x-1', documentId: 'd-bank' } },
-      data: { purpose: 'payment' },
+      // A move clears any marked line and highlights: they belong to the proof it was.
+      data: { purpose: 'payment', mark: Prisma.DbNull, marks: [] },
     })
     expect(prisma.expenseDocument.create).not.toHaveBeenCalled()
     prisma.wexPaymentDocument.findFirst.mockResolvedValue({ purpose: 'timesheet' })

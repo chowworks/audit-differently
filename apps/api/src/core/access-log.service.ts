@@ -42,24 +42,43 @@ export class AccessLogService {
   }
 
   /**
+   * One more line inside a `change`, on the `tx` its `write` was given: for a change that also changes other rows,
+   * each with a line of its own (a budget change sends back the closed months). Kept with the change, or neither.
+   */
+  async also(tx: Prisma.TransactionClient, caller: Actor, entry: LogEntry): Promise<void> {
+    await writeLine(tx, caller, entry)
+  }
+
+  /**
    * Makes a change and logs it in one transaction, under the caller's own row-level security: a change that fails
    * leaves no line, and a line that cannot be written undoes the change. `write` must use the `tx` it is given for
    * every write. `entry` may be worked out from what `write` returned (a new row's id, its workspaceId). When the
    * result is a row with a `workspaceId` that is not the entry's, nothing is kept: the line would be filed in the
-   * wrong workspace.
+   * wrong workspace. `timeout` lets a long change (a payroll match saving many files) run past Prisma's 5 seconds.
+   * `lineFirst` writes the line before the change, for a change the database admits only once its
+   * line is there (the admin's rerun of an emailed receipt, migration 20261016000100); `entry` is then fixed.
    */
   async change<T>(
     caller: Actor,
     write: (tx: Prisma.TransactionClient) => Promise<T>,
-    entry: LogEntry | ((result: T) => LogEntry)
+    entry: LogEntry | ((result: T) => LogEntry),
+    options: { lineFirst?: boolean; timeout?: number } = {}
   ): Promise<T> {
-    return this.prisma.$transaction(async (tx) => {
-      const result = await write(tx)
-      const e = typeof entry === 'function' ? entry(result) : entry
-      sameWorkspace(result, e)
-      await writeLine(tx, caller, e)
-      return result
-    })
+    return this.prisma.$transaction(
+      async (tx) => {
+        if (options.lineFirst) {
+          if (typeof entry === 'function') throw new Error('lineFirst needs a fixed entry')
+          await writeLine(tx, caller, entry)
+          return write(tx)
+        }
+        const result = await write(tx)
+        const e = typeof entry === 'function' ? entry(result) : entry
+        sameWorkspace(result, e)
+        await writeLine(tx, caller, e)
+        return result
+      },
+      options.timeout ? { timeout: options.timeout } : undefined
+    )
   }
 
   /**

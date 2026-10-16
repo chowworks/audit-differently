@@ -2,11 +2,20 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ENGAGEMENT_KIND_LABELS,
+  REPORT_LINES,
+  REPORT_LINE_LABELS,
   ROLES,
   ROLE_HELP,
   ROLE_LABELS,
+  TAG_TARGETS,
+  TAG_TARGET_LABELS,
+  type BudgetItem,
   type EngagementSummary,
+  type ReportLine,
   type Role,
+  type TagTarget,
+  type TagType,
+  type TagUses,
   type WorkspaceDetail,
   type WorkspaceMemberDto,
 } from '@ad/types'
@@ -14,6 +23,7 @@ import { useApi, useLoad } from '@/hooks/useApi'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { nextDue, workflow } from '@/lib/workflow'
 import {
+  FullDemoChip,
   Button,
   Card,
   Chip,
@@ -27,6 +37,7 @@ import {
 } from '@/components/ui'
 import { ActivityModal } from '@/components/ActivityModal'
 import { HandCard } from '@/components/HandCard'
+import { ReceiptsAddress, ReceiptsInbox } from '@/components/ReceiptsInbox'
 import { Icon, type IconName } from '@/components/icons'
 
 const ROLE_ICON: Record<Role, IconName> = { owner: 'key', bookkeeper: 'pencil', auditor: 'shield' }
@@ -93,8 +104,8 @@ export function WorkspacePage() {
     { icon: 'shield', value: `${readiness}%`, label: 'audit ready across engagements' },
     {
       icon: 'sliders',
-      value: String(w.fundingSources.length),
-      label: 'sources of funds in the list',
+      value: String(w.tagTypes.length),
+      label: `tag type${w.tagTypes.length === 1 ? '' : 's'} in the list`,
     },
   ]
   const hand = (
@@ -106,7 +117,7 @@ export function WorkspacePage() {
   return (
     <>
       <nav className="ad-crumbs" aria-label="Breadcrumb">
-        <Link to="/workspaces">Manage workspaces</Link> / {w.name}
+        <Link to="/workspaces">My workspaces</Link> / {w.name}
       </nav>
       <div className="ad-head">
         <div className="flex items-start gap-4">
@@ -115,7 +126,9 @@ export function WorkspacePage() {
           </span>
           <div>
             <p className="ad-eyebrow">Workspace</p>
-            <h1 className="ad-h1">{w.name}</h1>
+            <h1 className="ad-h1 flex flex-wrap items-center gap-3">
+              {w.name} {w.featuredDemo && <FullDemoChip />}
+            </h1>
             <p className="ad-sub">
               {plural(engagements.length, 'engagement')} ·{' '}
               {plural(w.memberCount, 'person').replace('persons', 'people')}
@@ -214,7 +227,7 @@ export function WorkspacePage() {
                           </td>
                           <td className="min-w-[150px]">
                             <div className="ad-progress ad-progress-sm">
-                              <i style={{ width: `${(f.doneCount / f.steps.length) * 100}%` }} />
+                              <i style={{ width: `${(f.doneCount / f.total) * 100}%` }} />
                             </div>
                             <span className="ad-table-sub">
                               step {f.current.n} of {f.steps.length} · {f.readiness.pct}% audit
@@ -290,13 +303,23 @@ export function WorkspacePage() {
         </div>
       </div>
 
-      {/* Row 3: settings */}
+      {/* Row 3: emailed receipts */}
+      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+        <section className="ad-section lg:col-span-2">
+          <SectionHead icon="mail" title="Emailed receipts" />
+          <ReceiptsInbox workspaceId={w.id} engagements={engagements} />
+        </section>
+      </div>
+
+      {/* Row 4: settings */}
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
         <section className="ad-section lg:col-span-2">
           <SectionHead icon="sliders" title="Settings" />
           <div className="grid gap-4">
             {w.canManage && <Rename w={w} onChange={reload} />}
-            <Lists w={w} onChange={reload} />
+            <ReceiptsAddress w={w} onChange={reload} />
+            <BudgetItems w={w} onChange={reload} />
+            <Tags w={w} onChange={reload} />
             <MoreLists w={w} onChange={reload} />
           </div>
         </section>
@@ -311,7 +334,10 @@ type Managed = {
   name: string
   canManage: boolean
   members: WorkspaceMemberDto[]
-  fundingSources: string[]
+  budgetItems: BudgetItem[]
+  tagTypes: TagType[]
+  /** How many records hold each tag, for the warning before a removal; the admin view has none. */
+  tagUses?: TagUses
 }
 
 /** The people of a workspace; `base` is where their routes are (`/admin/workspaces` for the platform admin). */
@@ -568,7 +594,11 @@ export function Rename({
   )
 }
 
-export function Lists({
+/** An item being edited: one without a key is new, and the API gives it one when the list is saved. */
+type DraftItem = { key?: string; label: string; reportLine: ReportLine }
+
+/** The budget items an engagement may use, each with the monthly-report line it rolls into. */
+export function BudgetItems({
   w,
   onChange,
   base = '/workspaces',
@@ -578,24 +608,28 @@ export function Lists({
   base?: string
 }) {
   const api = useApi()
-  const [sources, setSources] = useState<string[]>(w.fundingSources)
-  const [draft, setDraft] = useState('')
+  const [items, setItems] = useState<DraftItem[]>(w.budgetItems)
+  const [label, setLabel] = useState('')
+  const [line, setLine] = useState<ReportLine>('program-costs')
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
-  useEffect(() => setSources(w.fundingSources), [w.fundingSources])
-  const dirty = sources.join('\n') !== w.fundingSources.join('\n')
+  useEffect(() => setItems(w.budgetItems), [w.budgetItems])
+  const dirty = JSON.stringify(items) !== JSON.stringify(w.budgetItems)
   const add = () => {
-    const v = draft.trim()
-    if (v && !sources.includes(v)) setSources([...sources, v])
-    setDraft('')
+    const v = label.trim()
+    if (v && !items.some((i) => i.label.toLowerCase() === v.toLowerCase()))
+      setItems([...items, { label: v, reportLine: line }])
+    setLabel('')
   }
+  const rename = (at: number, v: string) =>
+    setItems(items.map((i, n) => (n === at ? { ...i, label: v } : i)))
   const save = async () => {
     setBusy(true)
     setError(null)
     setSaved(null)
     try {
-      await api.patch(`${base}/${w.id}/lists`, { fundingSources: sources })
+      await api.patch(`${base}/${w.id}/lists`, { budgetItems: items })
       await onChange()
       setSaved(Date.now())
     } catch (e) {
@@ -605,38 +639,56 @@ export function Lists({
     }
   }
   return (
-    <Card title="Sources of funds">
+    <Card title="Budget items">
       <p className="mb-3 text-sm text-soft">
-        The funding programs you propose to, the boxes an engagement ticks, and the boxes printed on
-        the monthly report form. Owners keep this list for the whole workspace.
+        What an approved budget is made of, and the line of the monthly report each one rolls into.
+        A new engagement uses the items it ticks. Renaming an item renames it on every engagement;
+        to move an item to another report line, remove it and add a new one.
       </p>
       <ErrorNote message={error} />
-      <ul className="ad-taglist">
-        {sources.map((s) => (
-          <li key={s}>
-            <span>{s}</span>
-            {w.canManage && (
-              <button
-                type="button"
-                aria-label={`Remove ${s}`}
-                onClick={() => setSources(sources.filter((x) => x !== s))}
-              >
-                ✕
-              </button>
-            )}
-          </li>
-        ))}
-        {sources.length === 0 && <li className="text-soft">No sources yet.</li>}
-      </ul>
+      <table className="ad-table">
+        <tbody>
+          {items.map((i, n) => (
+            <tr key={i.key ?? `new-${n}`}>
+              <td>
+                {w.canManage ? (
+                  <input
+                    className={inputClass}
+                    aria-label={`Name of ${i.label || 'item'}`}
+                    value={i.label}
+                    onChange={(e) => rename(n, e.target.value)}
+                  />
+                ) : (
+                  <span className="font-semibold">{i.label}</span>
+                )}
+              </td>
+              <td className="text-sm text-soft">reports as {REPORT_LINE_LABELS[i.reportLine]}</td>
+              {w.canManage && (
+                <td className="ad-num">
+                  <Button
+                    size="sm"
+                    kind="ghost"
+                    aria-label={`Remove ${i.label}`}
+                    onClick={() => setItems(items.filter((_, x) => x !== n))}
+                  >
+                    ✕
+                  </Button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {items.length === 0 && <p className="text-sm text-soft">No budget items yet.</p>}
       {w.canManage && (
         <>
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             <input
-              className={inputClass}
-              placeholder="Add a source"
-              aria-label="Add a source"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              className={`${inputClass} flex-1`}
+              placeholder="Add an item, e.g. Rent"
+              aria-label="Add a budget item"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
@@ -644,7 +696,19 @@ export function Lists({
                 }
               }}
             />
-            <Button onClick={add} disabled={!draft.trim()}>
+            <select
+              className={`${inputClass} w-auto`}
+              aria-label="Report line it rolls into"
+              value={line}
+              onChange={(e) => setLine(e.target.value as ReportLine)}
+            >
+              {REPORT_LINES.map((l) => (
+                <option key={l} value={l}>
+                  {REPORT_LINE_LABELS[l]}
+                </option>
+              ))}
+            </select>
+            <Button onClick={add} disabled={!label.trim()}>
               Add
             </Button>
           </div>
@@ -655,6 +719,299 @@ export function Lists({
             </Button>
           </div>
         </>
+      )}
+    </Card>
+  )
+}
+
+/** A tag type being edited: one without a key (or a value without one) is new; the API keys it on save. */
+type DraftType = {
+  key?: string
+  label: string
+  appliesTo: TagTarget[]
+  values: { key?: string; label: string }[]
+}
+
+const appliesWords = (a: TagTarget[]) => a.map((t) => TAG_TARGET_LABELS[t]).join(', ')
+
+const USE_WORDS: Record<TagTarget, [string, string]> = {
+  expense: ['expense', 'expenses'],
+  payroll: ['payroll item', 'payroll items'],
+  participant: ['participant', 'participants'],
+  engagement: ['engagement', 'engagements'],
+}
+
+/** "3 expenses, 1 participant and 2 engagements", or "no record". */
+export function usesWords(uses: Partial<Record<TagTarget, number>> = {}): string {
+  const parts = (Object.keys(USE_WORDS) as TagTarget[])
+    .filter((k) => (uses[k] ?? 0) > 0)
+    .map((k) => `${uses[k]} ${USE_WORDS[k][uses[k] === 1 ? 0 : 1]}`)
+  if (!parts.length) return 'no record'
+  return parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`
+}
+
+/**
+ * What saving `after` over `before` removes, one line per value: "Old Fund (Funding source) comes off 3 expenses and
+ * 1 participant". Without counts (the admin view), it says every record that has it.
+ */
+export function tagRemovals(before: TagType[], after: DraftType[], uses?: TagUses): string[] {
+  const kept = new Set(
+    after.flatMap((t) =>
+      t.key ? t.values.filter((v) => v.key).map((v) => `${t.key}:${v.key}`) : []
+    )
+  )
+  return before.flatMap((t) =>
+    t.values
+      .filter((v) => !kept.has(`${t.key}:${v.key}`))
+      .map(
+        (v) =>
+          `${v.label} (${t.label}) comes off ${uses ? usesWords(uses[`${t.key}:${v.key}`]) : 'every record that has it'}`
+      )
+  )
+}
+
+/**
+ * The workspace's tags: each type ("Funding source" is one like any other) with the records it applies to and its
+ * values. Owners add, rename and remove values and types; a removed one comes off every record that has it, after a
+ * warning that says how many. On an admin tool it takes the tools' solid look, and removes nothing saved (the tagged
+ * records are the owners').
+ */
+export function Tags({
+  w,
+  onChange,
+  base = '/workspaces',
+}: {
+  w: Managed
+  onChange: () => Promise<void>
+  base?: string
+}) {
+  const api = useApi()
+  const [types, setTypes] = useState<DraftType[]>(w.tagTypes)
+  const [label, setLabel] = useState('')
+  const [drafts, setDrafts] = useState<Record<number, string>>({})
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [confirming, setConfirming] = useState<string[] | null>(null)
+  useEffect(() => setTypes(w.tagTypes), [w.tagTypes])
+  const dirty = JSON.stringify(types) !== JSON.stringify(w.tagTypes)
+  const admin = base.startsWith('/admin')
+  const solid = admin ? 'navy' : 'primary'
+  const change = (at: number, next: Partial<DraftType>) =>
+    setTypes(types.map((t, n) => (n === at ? { ...t, ...next } : t)))
+  const addType = () => {
+    const v = label.trim()
+    if (v && !types.some((t) => t.label.toLowerCase() === v.toLowerCase()))
+      setTypes([...types, { label: v, appliesTo: [...TAG_TARGETS], values: [] }])
+    setLabel('')
+  }
+  const addValue = (at: number) => {
+    const v = (drafts[at] ?? '').trim()
+    const t = types[at]!
+    if (v && !t.values.some((x) => x.label.toLowerCase() === v.toLowerCase()))
+      change(at, { values: [...t.values, { label: v }] })
+    setDrafts({ ...drafts, [at]: '' })
+  }
+  const save = async (confirmed = false) => {
+    const removals = tagRemovals(w.tagTypes, types, w.tagUses)
+    if (removals.length && !confirmed) {
+      setConfirming(removals)
+      return
+    }
+    setConfirming(null)
+    setBusy(true)
+    setError(null)
+    setSaved(null)
+    try {
+      await api.patch(`${base}/${w.id}/lists`, { tagTypes: types })
+      await onChange()
+      setSaved(Date.now())
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Card title="Tags">
+      <p className="mb-3 text-sm text-soft">
+        Labels you put on engagements, expenses, payroll items and participants, such as a source of
+        funds or an age group. A new engagement picks its sources of funds from this list, and the
+        monthly report form prints them. The month's ledger and the participants list can be
+        filtered by a tag. Owners keep the list; a participant's tags are personal, and the access
+        log names the field, never the tag.
+      </p>
+      <ErrorNote message={error} />
+      <div className="grid gap-3">
+        {types.map((t, at) => (
+          <div key={t.key ?? `new-${at}`} className="ad-tagtype">
+            {w.canManage ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  className={`${inputClass} flex-1`}
+                  aria-label={`Name of ${t.label || 'tag type'}`}
+                  value={t.label}
+                  onChange={(e) => change(at, { label: e.target.value })}
+                />
+                {!(admin && t.key) && (
+                  <Button
+                    size="sm"
+                    kind="ghost"
+                    aria-label={`Remove ${t.label}`}
+                    onClick={() => setTypes(types.filter((_, n) => n !== at))}
+                  >
+                    ✕
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-baseline gap-2">
+                <b>{t.label}</b>
+                <span className="text-xs text-soft">{appliesWords(t.appliesTo)}</span>
+              </div>
+            )}
+            {w.canManage && (
+              <div className="mt-2 flex flex-wrap gap-3 text-sm">
+                <span className="text-soft">Applies to</span>
+                {TAG_TARGETS.map((x) => (
+                  <label key={x} className="inline-flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={t.appliesTo.includes(x)}
+                      onChange={(e) =>
+                        change(at, {
+                          appliesTo: TAG_TARGETS.filter((y) =>
+                            y === x ? e.target.checked : t.appliesTo.includes(y)
+                          ),
+                        })
+                      }
+                    />
+                    {TAG_TARGET_LABELS[x]}
+                  </label>
+                ))}
+              </div>
+            )}
+            <ul className={`ad-taglist mt-2 ${admin ? 'ad-taglist-solid' : ''}`}>
+              {t.values.map((v, n) => (
+                <li
+                  key={v.key ?? `new-${n}`}
+                  className={w.canManage && !(admin && v.key) ? undefined : 'pr-3'}
+                >
+                  {w.canManage ? (
+                    // Renaming keeps the value's key, so every record that has it shows the new name.
+                    <input
+                      aria-label={`Name of ${v.label || 'this value'} in ${t.label}`}
+                      value={v.label}
+                      size={Math.max(4, v.label.length)}
+                      onChange={(e) =>
+                        change(at, {
+                          values: t.values.map((x, i) =>
+                            i === n ? { ...x, label: e.target.value } : x
+                          ),
+                        })
+                      }
+                    />
+                  ) : (
+                    <span>{v.label}</span>
+                  )}
+                  {w.canManage && !(admin && v.key) && (
+                    <button
+                      type="button"
+                      aria-label={`Remove ${v.label}`}
+                      onClick={() => change(at, { values: t.values.filter((_, x) => x !== n) })}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </li>
+              ))}
+              {t.values.length === 0 && <li className="text-soft">No values yet.</li>}
+            </ul>
+            {w.canManage && (
+              <div className="mt-2 flex gap-2">
+                <input
+                  className={`${inputClass} ad-input-sm`}
+                  placeholder="Add a value, e.g. Under 18"
+                  aria-label={`Add a value to ${t.label || 'this tag type'}`}
+                  value={drafts[at] ?? ''}
+                  onChange={(e) => setDrafts({ ...drafts, [at]: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      addValue(at)
+                    }
+                  }}
+                />
+                <Button
+                  size="sm"
+                  kind={admin ? 'navy' : undefined}
+                  onClick={() => addValue(at)}
+                  disabled={!drafts[at]?.trim()}
+                >
+                  Add
+                </Button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {!w.canManage && (
+        <p className="mt-3 text-xs text-soft">Need another tag? Suggest it under More lists.</p>
+      )}
+      {w.canManage && (
+        <>
+          <div className="mt-3 flex gap-2">
+            <input
+              className={inputClass}
+              placeholder="Add a tag type, e.g. Age group"
+              aria-label="Add a tag type"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  addType()
+                }
+              }}
+            />
+            <Button kind={admin ? 'navy' : undefined} onClick={addType} disabled={!label.trim()}>
+              Add
+            </Button>
+          </div>
+          {admin && (
+            <p className="mt-2 text-xs text-soft">
+              Only the workspace's owners remove a saved tag: it comes off their records.
+            </p>
+          )}
+          <div className="mt-3 flex items-center justify-end gap-3">
+            <SavedMark at={saved}>Tags saved</SavedMark>
+            <Button kind={solid} size="sm" onClick={() => void save()} disabled={busy || !dirty}>
+              Save tags
+            </Button>
+          </div>
+        </>
+      )}
+      {confirming && (
+        <Modal title="Remove these tags?" onClose={() => setConfirming(null)}>
+          <div className="grid gap-3 text-sm">
+            <p>
+              Each comes off every record that has it, and stays off. The access log keeps a line.
+            </p>
+            <ul className="list-disc pl-5">
+              {confirming.map((c) => (
+                <li key={c}>{c}</li>
+              ))}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <Button kind="ghost" onClick={() => setConfirming(null)}>
+                Cancel
+              </Button>
+              <Button kind="danger" onClick={() => void save(true)} disabled={busy}>
+                Remove and save
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </Card>
   )
@@ -684,9 +1041,8 @@ function MoreLists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promis
   return (
     <Card eyebrow="Coming soon" title="More lists">
       <p className="text-sm text-soft">
-        Budget categories, the report lines and the funder's review checklist will be lists here
-        too, so a funder's own forms can be matched without changing the product. Missing something
-        today? Say so.
+        The report lines will be a list here too, so a funder's own forms can be matched without
+        changing the product. Missing something today? Say so.
       </p>
       <ErrorNote message={error} />
       {thanks && <Notice tone="ok">Noted. We keep these and will follow up.</Notice>}
@@ -694,7 +1050,7 @@ function MoreLists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promis
         <form onSubmit={suggest} className="mt-3 flex gap-2">
           <input
             className={inputClass}
-            placeholder="Suggest an addition, e.g. a fund or a form your funder uses"
+            placeholder="Suggest an addition, e.g. a fund, a tag or a form your funder uses"
             value={text}
             onChange={(e) => setText(e.target.value)}
           />

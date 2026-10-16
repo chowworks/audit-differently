@@ -48,8 +48,15 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
 - **Workspace** = a `Workspace` row. The team's container and **the unit row-level security isolates**
   (`docs/tenant-isolation.md`). Its people are `Membership` rows with one role each (`ROLES` in
   `packages/types`): `owner` (runs the workspace, signs the report), `bookkeeper` (records, attaches,
-  submits, records the funder's decision), `auditor` (reads everything, personal records included, changes
-  nothing). Owners keep the workspace's lists (`Workspace.fundingSources` today) on the Manage workspaces page.
+  records the month-end closing, submits), `auditor` (reads everything, personal records included, changes
+  nothing). Owners keep the workspace's lists (`Workspace.fundingSources`, `budgetItems`, `tagTypes`) on the workspace's
+  settings page, and set its receipts address once (`receiptsAddress`; it never changes, and admins don't set it).
+- **Tags** = `Workspace.tagTypes` (owner-kept types and values, stable keys; the built-in "Funding source" type's
+  values are `fundingSources`), applied as `tags` (`<type>:<value>`) on `Expense`, `WexPayment` and `Participant`,
+  from the list only, never free text. A source in use can't be removed or renamed. Participant and payroll tags
+  are personal data: logged by field name ("Tags"), never values.
+- **Engagement tracks** = `Engagement.tracks`: which of proposal, award letter and signed contract the team keeps
+  here; the financials are always kept. A step not kept shows greyed out as "not used" and counts nowhere.
 - **Engagement** = an `Engagement` row, with `kind` (`ENGAGEMENT_KINDS`: grant, contract, cooperative
   agreement, other) and `status` (proposed, awarded, active, closed). It may start at the proposal, so the
   award and contract facts are optional columns. Each walks the same eight steps
@@ -63,7 +70,11 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   with its first owner named by email (`POST /workspaces`, the only way a workspace is made), renames any
   workspace and manages its people and lists, reads its suggestions (`/admin/workspaces/...`), and makes or unmakes
   other admins (`/admin/users`, `/admin/admins`; never their own role; at most 20, `MAX_PLATFORM_ADMINS`; every
-  attempt that reaches Clerk is an append-only `PlatformRoleChange` row, shown as "Admin changes"). Workspace level
+  attempt that reaches Clerk is an append-only `PlatformRoleChange` row, shown as "Admin changes"). Platform admins also see and rerun the emailed receipts that went nowhere or were refused or failed, metadata
+  only, never attachments (owner's decision, 2026-10-16; Admin tools → Email administration). A rerun of a workspace's
+  row writes its access-log line in the same transaction, and the database refuses it without one (`app_admin_reran`,
+  migration `20261016000100`). The signed-in person's own list is "My workspaces"; Admin tools has tiles (Manage admins,
+  Manage workspaces, Email administration). Workspace level
   only: an admin reads no engagement, record, access log or deletion summary and deletes no workspace, and where they
   are also a member they have exactly that membership's rights. An admin **may seat themself** in any workspace, in
   any role (owner's decision, 2026-10-14), and then reads its records as that member; the log line says so ("…
@@ -71,11 +82,22 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   seats the admin's account, never a placeholder, and every other admin line ends "(by a platform admin)". An owner
   renames their own workspace on its page.
 - **Funder** = text on the engagement (`funder`, `funderContact`). There is no funder table and no funder
-  user: the bookkeeper records the funder's decision on a month (approved, denied, invoice number) from the
-  email or the returned form. If a funder portal is ever wanted, it is a new line, not a revival of the old
+  user, and the app does not record the funder's answer (owner's decision, 2026-10-15). Before a month is
+  submitted, the bookkeeper records its **month-end closing**: the company's own approval (usually the CEO's,
+  often given offline; `authorizedByName`, `authorizedAt`), or that it was sent back with a reason, which reopens
+  the month. A month is `draft`, `closed` or `submitted`; a database trigger refuses ledger writes to a month
+  that is not a draft. A submitted month can be reopened to correct it
+  (`POST /reports/:id/reopen`, owners and bookkeepers, with a reason): it goes back to a draft without its
+  submission or closing approval, its documents stay, and it is closed and submitted again. What a reopening undid is kept in
+  `ReportReopening` (append-only; it goes only with its month): submitted on, the closing approval, who reopened
+  it, why, and the signed copy as submitted. That signed copy is never replaced or removed; the corrected copy is
+  attached beside it, and only a copy uploaded after the latest reopening counts. A budget or
+  participant-file change re-checks every month, closed and submitted ones included, and the screen warns first. If a funder portal is ever wanted, it is a new line, not a revival of the old
   agency one.
-- Lists that come from a real funder's forms (sources of funds, review checklists) are never copied
-  verbatim: defaults are fictional (`DEFAULT_FUNDING_SOURCES`) and workspace owners edit them. Owners and bookkeepers ask for additions through `Suggestion` rows, kept for now and sent on
+- The default lists a workspace starts with are fictional (`DEFAULT_FUNDING_SOURCES`), and workspace owners
+  edit them. The funder's form page (`ReportFormPage.tsx`) reproduces the government form the team sends, in the
+  form's own wording (Section VI's review checklist, the line numbers and headings; owner's decision, 2026-10-16);
+  its filled-in values (names, amounts, contract numbers, signatures) never go into the repository. Owners and bookkeepers ask for additions through `Suggestion` rows, kept for now and sent on
   later; an auditor changes nothing, suggestions included.
 - A record a funder never issued is a `waiver` on the engagement (`Engagement.waivers`, keyed by document
   kind, with the reason). The workflow counts a documented absence as a record on file.
@@ -92,18 +114,39 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   Until then, demo with the fictional seed only.
 - **Two sensitivity tiers** on `Document` (`DOCUMENT_SENSITIVITY` in `packages/types`): `financial` (invoices,
   statements, registers, allocation sheets) and `personal` (eligibility records, enrollment forms, pay stubs).
-  Personal documents: signed URLs that expire in 60 seconds and always force a download, never an inline
-  preview or thumbnail, visible to owners and auditors only (`PERSONAL_DOCUMENT_ROLES`; a bookkeeper
-  attaches them and does not read them back), every read logged, and never part of an export the funder did
-  not ask for by name. Stored as uploaded: no OCR and no AI reading of a personal document without
-  the workspace owner's written decision.
+  Personal documents: signed URLs that expire in 60 seconds, every read logged, and never part of an export the funder
+  did not ask for by name. **Pay stubs are payroll files** (owner's decision, 2026-10-16): owners, bookkeepers and
+  auditors open them (`personalRolesFor`), they show on the page with their matched line highlighted like a timesheet
+  or a bank statement, and their mark keeps the line's text. **Eligibility records and enrollment forms** stay
+  strict: owners and auditors only (`PERSONAL_DOCUMENT_ROLES`; a bookkeeper attaches them and does not read them
+  back), always a forced download, never an inline preview or thumbnail, never marked.
+  Documents may be read to match them: a receipt's amount, date and vendor, a line on a
+  bank statement, a pay stub's pay period and pay (owner's decisions, 2026-10-15 and 2026-10-16). A bank's downloaded PDF has a text layer; a scanned one does not, and the screen says so
+  rather than running OCR. Financial receipts and invoices are read for amount, date and vendor (PDF text
+  first; Claude only when `ANTHROPIC_API_KEY` is set, `apps/api/src/receipts/read-receipt.ts`); a database check
+  keeps those columns empty on a personal document. A payroll item's link to its proof (timesheet, register, pay
+  stub or bank statement) carries its highlights: `marks`, boxes around the exact words a platform admin chose for
+  that proof type (Admin tools → Highlights, `HighlightSetting`, append-only; defaults `DEFAULT_HIGHLIGHTS`), and
+  `mark`, the line found (migrations `20261016001100` to `..1400`). **Every payroll proof stands on its own per
+  item** (owner's decision, 2026-10-16): the viewer, the month bundle and the audit package show each item its own
+  copy (`itemCopy` in `mark-pdf.ts`), drawn on the fly from the untouched original with the file's own highlight
+  notes removed and only that item's highlights; the package also files each shared original once, as stored.
+  Copies never claim a highlight they could not draw, and the viewer gets the bytes through the
+  API (`GET /payroll/statements/:documentId/file`, `GET /payroll-match/:runId/files/:fileId`; members only, every
+  open logged), never from storage directly.
+  "Match payroll & timecards" stages the zip on the server (`PayrollMatchRun`, `PayrollMatchFile`,
+  `apps/api/src/payroll/payroll-match.service.ts`): the browser sends the files, a background job reads each PDF's
+  text lines (`payroll-match.worker.ts`; closing the wizard stops nothing, and reopening picks the run up), the lines
+  are kept on the run only, matches are worked out from them on request, nothing is a `Document` until Save, and
+  Discard or 24 hours removes the run and its staged objects.
 - **Deleting is permanent and owner-only** (`apps/api/src/deletion/`; a bookkeeper or auditor gets 403, another
-  workspace's row 404). An owner deletes an engagement, and the workspace once no engagement remains. The order is
+  workspace's row 404). An owner deletes an engagement, and the workspace once no engagement remains. A month with
+  nothing to submit (a draft with no expense, payroll, file or reopening) is the one smaller delete: an owner removes
+  it from the month's More menu (`DELETE /reports/:id`), logged. The order is
   fixed: `POST .../deletion` plans a full export, split into zips of about 1.5 GB of files each, and `GET .../deletion/:deletionId/parts/:n` sends each part (the audit package plus everything the owner may see: unfiled
   records, budget, months, checks; `AuditPackageService.plan` with `complete`) and writes a `DeletionRecord`; the
   record becomes `downloaded` only when every part's response has finished, and `DELETE` needs that record (this engagement,
-  under 60 minutes old), the exact name and `DELETE_PHRASE`. The access log line is written first, the stored files
-  go by prefix (`deleteByPrefix`) before the rows, and the rows go in one transaction (documents, then months, then
+  under 60 minutes old), the exact name and `DELETE_PHRASE`. The access log line is written first, the stored files go by prefix (`deleteByPrefix`) before the rows, and the rows go in one transaction (documents, then months, then
   the engagement; a document's storage-key trigger and `WexPayment -> Participant` Restrict make that order
   required). A workspace delete is the one other `runAsSystem` write, after the owner check. `DataAccessLog` and
   `DeletionRecord` rows stay (no foreign keys).
@@ -134,11 +177,31 @@ general>/<uuid>.<ext>` (a database trigger refuses any other key, migrations `20
 - No document ever leaves the system by email. Notifications carry links.
 - Allowed uploads: pdf, png, jpg/jpeg, xlsx, docx, and the bytes must begin the way that type does
   (`looksLike` in `documents.service.ts`); the browser's claimed type alone is never trusted. Record the sha256
-  and size of every upload.
+  and size of every upload. An exported transactions file (csv or xlsx, `apps/api/src/imports/`) is the one
+  exception: read in memory to make expense lines, never stored as a Document; an xlsx must begin like a zip, a
+  csv must be UTF-8 with no NUL byte; no row of it goes to AI (an AI guess sees real column names alone).
 - The API sets security headers on every response (helmet in `main.ts`: no-script CSP, HSTS, nosniff, no
   framing), rate-limits every client (`ThrottlerModule`, tighter on uploads, signed links and `/me`), and
   accepts a Clerk session only when its token names one of `FRONTEND_URL`'s origins (`authorizedParties`).
   The web app's own headers are in `apps/web/vercel.json`. The access log is read by owners and auditors.
+
+## AI in the app
+
+Every AI feature is opt-in (owner's decision, 2026-10-16). The app works fully without one, and nothing is sent to
+an AI model unless a person said yes.
+
+- **Asked each time, never remembered:** a person ticks a box or presses a button for this one action (read these
+  receipts, suggest this mapping). The box starts unticked every time the screen opens; no default, no "always".
+- **One exception, an owner setting:** work with no person present (an emailed receipt) uses a workspace setting an
+  owner turns on, off by default (`readEmailedReceiptsWithAi`), shown with who changed it in the access log.
+- **Marked the same way everywhere:** the control sits in an `ad-ai-optin` box with the purple
+  `<span className="ad-ai-tag">✨ Optional AI Automation</span>` chip, and one line under it saying exactly what is
+  sent (which files, or column names only) and what is never sent. A new AI feature copies that markup.
+- **Shown only when it can run:** hidden when the server has no key (`aiAvailable`), never shown disabled.
+- **Checked by a person:** a person checks every result before it counts, and the screen says when AI made a
+  suggestion.
+- **Logged:** each use writes its access-log line in the words of the screen. The Privacy page describes AI and our
+  services without naming vendors.
 
 ## Tenant isolation
 
@@ -157,7 +220,10 @@ of two.
 - Code that runs without a signed-in caller (jobs, webhooks, startup) must say what it acts as:
   `runAsSystem` from `apps/api/src/core/tenant-context.ts`, kept to short, reviewed paths (today: the
   placeholder User row of an owner's invitation, and handing that placeholder's memberships to the real account
-  on first sign-in, `GET /me`). It sees every workspace and marks the connection `app.system = on`; only the
+  on first sign-in, `GET /me`; and the emailed-receipts queue before a sender is known,
+  `apps/api/src/inbound/inbound.service.ts`, whose filing then runs as the sending member; and the job that reads a
+  payroll match's files, `apps/api/src/payroll/payroll-match.worker.ts`, which the database lets change only what
+  reading fills, migration `20261016001300`). It sees every workspace and marks the connection `app.system = on`; only the
   `User` and `Membership` write policies and the `User` and `Workspace` read policies admit that mark (no longer
   the `Workspace` insert policy, migration `20261013000200`), and trusted work deletes `pending-` users only
   (migrations `20261011000400` to `..0600`). The invitation claim matches a verified Clerk email only. The
@@ -166,7 +232,8 @@ of two.
   so the Terms gate holds) asks Clerk's backend for the role on every admin request, never the browser, then
   `identifyAdmin`; `PrismaService` sets `app.admin = on` beside the admin's own `app.user_id` and memberships.
   Migration `20261013000200` admits it to read every `Workspace`, `Membership`, `User` and `Suggestion`, insert
-  a `Workspace`, change its lists only (trigger `Workspace_4_admin_lists`), give, change and remove memberships,
+  a `Workspace`, change its lists only (`fundingSources`, `budgetItems`, `tagTypes`; trigger
+  `Workspace_4_admin_lists`; never `receiptsAddress`), give, change and remove memberships,
   insert `pending-` users, and insert `DataAccessLog` lines in its own name in any workspace (no read: the API
   writes them with `createMany`, which reads nothing back). No policy below the workspace admits it. Two triggers
   keep it visible: a line written under the mark names the admin by their `User.email` (`DataAccessLog_1_admin_name`),
@@ -189,10 +256,15 @@ of two.
   `GET /api/documents/local/:token`
   (the file behind a signed, expiring token that the gated `/documents/:id/url` issued; local disk only, which
   a deployed API refuses) and `POST /api/contact` (the public contact form: validated, throttled, honeypot,
-  sent through Resend, nothing stored or logged); `apps/api/src/auth/route-gates.spec.ts` lists every
+  sent through Resend, nothing stored or logged) and `POST /api/inbound/resend` (the email provider's webhook
+  for emailed receipts: its credential is Resend's Svix signature over the raw body, checked in constant time
+  within five minutes; it only queues `email.received` once per provider id; 404 until `RESEND_RECEIVING_API_KEY`
+  (its own Full access key; the contact form keeps its sending-only `RESEND_API_KEY`), `RESEND_WEBHOOK_SECRET` and
+  `RECEIPTS_DOMAIN` are all set; filed only from a member's verified address with
+  DMARC passing); `apps/api/src/auth/route-gates.spec.ts` lists every
   route and fails on a new one without the guard. Inside the line, a row of another workspace is a 404 from
   the tenant-scoped query (`tenantWhere`), never the row and never a different error; a change needs
-  `WRITE_ROLES` (lists and members: `owner`), opening a personal document `PERSONAL_DOCUMENT_ROLES`, and a
+  `WRITE_ROLES` (lists and members: `owner`), opening a personal document `personalRolesFor` (pay stubs: every member; the rest `PERSONAL_DOCUMENT_ROLES`), and a
   read that returns document or participant rows (an engagement, a month, a document list) writes
   `DataAccessLog`.
 - The database specs run the real migrations on PGlite as the restricted role with exactly its privileges;
@@ -235,6 +307,51 @@ entry before it is committed, or a stated reason it does not** (internal refacto
 reviewer can see). Mark the entry `review` and flip it to `shipped` once it is live. Add the entry at the top:
 copy an `<article class="entry">` block, keeping its `data-short` and `data-summary`; the how-to is in the
 comment at the top of the file. Screenshots go in `docs/screenshots/<feature>/`. Fictional data only.
+
+## Admin tools
+
+Every platform-admin tool looks the same (owner's decision, 2026-10-16). A tool is one entry in `TOOLS` in
+`apps/web/src/pages/AdminPage.tsx` (its tile on `/admin`: icon, title, tile text) plus its page under `/admin/...`,
+and the page:
+
+- opens with `<AdminToolHead to="/admin/..." />`: the breadcrumb "Admin tools / <tool>", then the tile's icon, the
+  title and **one line** (`sub`) saying what to do here. No eyebrow and no paragraph of directions above the work.
+- puts the longer explanation (`how`) behind `<AdminHow to="/admin/..." />` ("How this works", closed until asked
+  for) at the end of its main card.
+- uses solid controls: buttons are `kind="navy"` (the header's colour; a green `primary` only for the one creating
+  action, Cancel `ghost`, never an empty outline), and status chips are solid (`<Chip … fill>`: each with a sign:
+  🔄 waiting grey, ⚠️ failed amber, ⛔ refused red). The owners' own screens a tool reuses (a workspace's people and lists) keep their style.
+- keeps tables and actions as the other tools do; a new tool adds its entry, its route next to `/admin` in `App.tsx`
+  (an admin with no workspace reaches it too) and its admin routes in `route-gates.spec.ts`.
+
+## Messages, tips and notes on screen
+
+Never write a new kind of box. Every message the app shows is one of these, already designed (owner's
+instruction, 2026-10-16, after several plain boxes that looked bad):
+
+- **How to do something, a tip, a reminder** ("Email receipts in", "Need a hand?"): `HandCard`
+  (`components/HandCard.tsx`): navy, the yellow circle with a sign (`icon`), a title, one bold line (`lead`), then at
+  most a short paragraph or a numbered list of steps. An address or code to use goes in its pill with a Copy button
+  (`ad-hand-address`).
+- **Where a record stands** (edits requested, sent back, approved, submitted): the month page's `StatusPanel`
+  (`report-layouts/shared.tsx`): sign, heading, who and when, their own words quoted, then "What to do next".
+- **A word of encouragement beside the tiles:** `CheerCard`.
+- **AI:** the `ad-ai-optin` box with its chip ("AI in the app").
+- **The end of a flow** (an import done, a batch uploaded): Import transactions' step 5: a green check with what
+  happened as a centred heading (`ad-done`), the numbers as the month page's tiles (`ad-done-tiles`), then a
+  `HandCard` "What to do next". Never a `Notice`.
+- **What just happened** after a small action on a page ("Matched to expense 2105."): `Notice`, one line, and errors
+  `ErrorNote`. A `Notice` is never used for guidance, a tip, a reminder, the end of a flow, or inside a dialog's steps
+  (there, the problem goes beside its field, or as the red line at the top).
+
+- **Something wrong in a form:** say it beside the field, in red under it (`Field`'s `error`), and every problem at
+  once, before the person presses Next, with one line at the top of the form naming the fields still to fix. Never an
+  error box at the top, and never one problem per try. The server checks everything too and answers with every
+  problem in one message; that box is only for what the screen could not know. A choice the screen knows cannot work
+  here (a saved mapping made for other columns) is not offered.
+
+Keep the words short: one bold line that says the point, then steps as a list, never a paragraph that wraps three
+times. Look at it in the browser at the width it will be used before showing it to the owner.
 
 ## Design experiments
 
@@ -297,7 +414,7 @@ read-only subagents, one per area of the diff, before merging:
 
 Only when the user asks for screenshots on an issue or PR:
 
-1. Start dev servers via the Preview MCP using `.claude/launch.json` (`web` on 5173, `api` on 3000).
+1. Start dev servers via the Preview MCP using `.claude/launch.json` (`web` on 5273, `api` on 3100, so they run beside the other Differently products).
 2. For auth-gated pages do NOT try to bypass auth. Ask the user to sign in via the Preview MCP browser.
 3. Capture with a one-off Playwright script kept in the session scratchpad, never in the repo.
 4. Save PNGs to `docs/screenshots/<feature>/`, named after the feature, never a phase. Seed data only.

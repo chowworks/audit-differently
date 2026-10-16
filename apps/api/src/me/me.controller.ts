@@ -132,6 +132,7 @@ export class MeController {
         workspaceId: m.workspaceId,
         workspaceName: m.workspace.name,
         role: m.role as Role,
+        featuredDemo: m.workspace.featuredDemo,
       })),
     }
   }

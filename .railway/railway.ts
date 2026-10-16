@@ -55,6 +55,13 @@ export default defineRailway((ctx) => {
     RESEND_API_KEY: preserve(),
     CONTACT_FROM_EMAIL: preserve(),
     CONTACT_TO_EMAIL: preserve(),
+    // Optional Claude reads (import column guess, receipt amounts; src/imports, src/receipts); unset, the plain rules run.
+    ANTHROPIC_API_KEY: preserve(),
+    // Emailed receipts (src/inbound): all three or none; the API refuses to start with only some. The receiving key is
+    // its own Full access key, so the contact form keeps its sending-only RESEND_API_KEY.
+    RESEND_RECEIVING_API_KEY: preserve(),
+    RESEND_WEBHOOK_SECRET: preserve(),
+    RECEIPTS_DOMAIN: preserve(),
   }
 
   // `dev`: the shared development environment. Laptops point apps/api/.env at its database through the TCP proxy

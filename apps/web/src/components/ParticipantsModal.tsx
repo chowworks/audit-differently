@@ -5,6 +5,7 @@ import { shortDate } from '@/lib/format'
 import { missingItems } from '@/lib/workflow'
 import { Button, Chip, Empty, ErrorNote, Modal, inputClass } from '@/components/ui'
 import { DocumentLink } from '@/components/DocumentLink'
+import { TagChips, TagFilter, TagsModal } from '@/components/Tags'
 
 const ENROLLMENT: Record<string, string> = { new: 'new this year', carryover: 'carried over' }
 
@@ -33,6 +34,9 @@ export function ParticipantsModal({
   const [fileFor, setFileFor] = useState<string | null>(initialFileFor ?? null)
   const [q, setQ] = useState('')
   const [onlyMissing, setOnlyMissing] = useState(false)
+  const [tag, setTag] = useState('')
+  const [tagging, setTagging] = useState<ParticipantDto | null>(null)
+  const api = useApi()
   const files = c.participants.map((p) => {
     const have = new Set(p.documents.map((d) => d.purpose))
     return {
@@ -47,6 +51,7 @@ export function ParticipantsModal({
   const shown = files.filter(
     (f) =>
       (!onlyMissing || f.missing.length > 0) &&
+      (!tag || f.p.tags.includes(tag)) &&
       (!needle || `${f.p.displayName} ${f.p.participantId}`.toLowerCase().includes(needle))
   )
   const current = fileFor ? c.participants.find((x) => x.id === fileFor) : undefined
@@ -56,109 +61,132 @@ export function ParticipantsModal({
     : c.participants.map((p) => p.id)
 
   return (
-    <Modal
-      title={current ? `${current.displayName}'s eligibility file` : 'Participants'}
-      onClose={onClose}
-      wide
-    >
-      {current ? (
-        <ParticipantFile
-          c={c}
-          items={items}
-          p={current}
-          order={order}
-          onBack={() => setFileFor(null)}
-          onSwitch={setFileFor}
-          onChanged={onChanged}
-        />
-      ) : (
-        <>
-          <div className="mb-3 flex flex-wrap items-center gap-3">
-            <Chip tone={files.length > 0 && complete === files.length ? 'ok' : 'warn'}>
-              {complete} of {files.length} complete
-            </Chip>
-            <input
-              className={`${inputClass} max-w-xs`}
-              placeholder="Search by name or id"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-            <label className="inline-flex items-center gap-2 text-sm">
+    <>
+      <Modal
+        title={current ? `${current.displayName}'s eligibility file` : 'Participants'}
+        onClose={onClose}
+        wide
+      >
+        {current ? (
+          <ParticipantFile
+            c={c}
+            items={items}
+            p={current}
+            order={order}
+            onBack={() => setFileFor(null)}
+            onSwitch={setFileFor}
+            onChanged={onChanged}
+          />
+        ) : (
+          <>
+            <div className="mb-3 flex flex-wrap items-center gap-3">
+              <Chip tone={files.length > 0 && complete === files.length ? 'ok' : 'warn'}>
+                {complete} of {files.length} complete
+              </Chip>
               <input
-                type="checkbox"
-                checked={onlyMissing}
-                onChange={(e) => setOnlyMissing(e.target.checked)}
+                className={`${inputClass} max-w-xs`}
+                placeholder="Search by name or id"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
               />
-              only files with something missing
-            </label>
-            <span className="flex-1" />
-            {c.canManage && (
-              <Button size="sm" onClick={onAdd}>
-                + Add participant
-              </Button>
-            )}
-          </div>
-          <p className="mb-3 text-xs text-soft">
-            Open a file to see each item and upload what is missing. Personal records: download
-            only, every read logged.
-          </p>
-          {files.length === 0 && (
-            <Empty>
-              No participants yet. Add each person the program serves the day they enroll.
-            </Empty>
-          )}
-          {files.length > 0 && shown.length === 0 && <Empty>Nothing matches.</Empty>}
-          {shown.length > 0 && (
-            <div className="max-h-[60vh] overflow-auto">
-              <table className="ad-table">
-                <tbody>
-                  {shown.map((f) => (
-                    <tr key={f.p.id}>
-                      <td className="whitespace-nowrap">
-                        <span className="font-semibold">{f.p.displayName}</span>
-                        <span className="ad-table-sub">
-                          <span className="ad-mono">{f.p.participantId}</span> ·{' '}
-                          {ENROLLMENT[f.p.enrollmentStatus] ?? f.p.enrollmentStatus}
-                        </span>
-                      </td>
-                      <td className="w-[32%]">
-                        <div className="mb-1 text-xs text-soft">
-                          {f.onFile} of {items.length} items on file
-                        </div>
-                        <div className="ad-progress ad-progress-sm">
-                          <i
-                            style={{ width: `${(f.onFile / Math.max(1, items.length)) * 100}%` }}
-                          />
-                        </div>
-                        {f.missing.length > 0 && (
-                          <p className="mt-1 text-xs font-semibold text-danger">
-                            Missing: {f.missing.map((i) => i.label.toLowerCase()).join(', ')}
-                          </p>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap">
-                        {f.missing.length === 0 ? (
-                          <Chip tone="ok">complete</Chip>
-                        ) : (
-                          <Chip tone={f.attested ? 'info' : 'danger'} fill={!f.attested}>
-                            {f.missing.length} missing
-                          </Chip>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap text-right">
-                        <Button size="sm" onClick={() => setFileFor(f.p.id)}>
-                          {c.canManage && f.missing.length > 0 ? 'Complete file' : 'Open file'}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={onlyMissing}
+                  onChange={(e) => setOnlyMissing(e.target.checked)}
+                />
+                only files with something missing
+              </label>
+              <TagFilter types={c.tagTypes} target="participant" value={tag} onChange={setTag} />
+              <span className="flex-1" />
+              {c.canManage && (
+                <Button size="sm" onClick={onAdd}>
+                  + Add participant
+                </Button>
+              )}
             </div>
-          )}
-        </>
+            <p className="mb-3 text-xs text-soft">
+              Open a file to see each item and upload what is missing. Personal records: download
+              only, every read logged.
+            </p>
+            {files.length === 0 && (
+              <Empty>
+                No participants yet. Add each person the program serves the day they enroll.
+              </Empty>
+            )}
+            {files.length > 0 && shown.length === 0 && <Empty>Nothing matches.</Empty>}
+            {shown.length > 0 && (
+              <div className="max-h-[60vh] overflow-auto">
+                <table className="ad-table">
+                  <tbody>
+                    {shown.map((f) => (
+                      <tr key={f.p.id}>
+                        <td className="whitespace-nowrap">
+                          <span className="font-semibold">{f.p.displayName}</span>
+                          <span className="ad-table-sub">
+                            <span className="ad-mono">{f.p.participantId}</span> ·{' '}
+                            {ENROLLMENT[f.p.enrollmentStatus] ?? f.p.enrollmentStatus}
+                          </span>
+                          <TagChips types={c.tagTypes} tags={f.p.tags} />
+                        </td>
+                        <td className="w-[32%]">
+                          <div className="mb-1 text-xs text-soft">
+                            {f.onFile} of {items.length} items on file
+                          </div>
+                          <div className="ad-progress ad-progress-sm">
+                            <i
+                              style={{ width: `${(f.onFile / Math.max(1, items.length)) * 100}%` }}
+                            />
+                          </div>
+                          {f.missing.length > 0 && (
+                            <p className="mt-1 text-xs font-semibold text-danger">
+                              Missing: {f.missing.map((i) => i.label.toLowerCase()).join(', ')}
+                            </p>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap">
+                          {f.missing.length === 0 ? (
+                            <Chip tone="ok">complete</Chip>
+                          ) : (
+                            <Chip tone={f.attested ? 'info' : 'danger'} fill={!f.attested}>
+                              {f.missing.length} missing
+                            </Chip>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap text-right">
+                          {c.canManage && (
+                            <Button size="sm" kind="ghost" onClick={() => setTagging(f.p)}>
+                              tags
+                            </Button>
+                          )}
+                          <Button size="sm" onClick={() => setFileFor(f.p.id)}>
+                            {c.canManage && f.missing.length > 0 ? 'Complete file' : 'Open file'}
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </Modal>
+      {tagging && (
+        <TagsModal
+          title={`Tags for ${tagging.displayName}`}
+          types={c.tagTypes}
+          target="participant"
+          tags={tagging.tags}
+          onClose={() => setTagging(null)}
+          onSave={async (tags) => {
+            const p = await api.patch<ParticipantDto>(`/participants/${tagging.id}/tags`, { tags })
+            onChanged({ ...c, participants: c.participants.map((x) => (x.id === p.id ? p : x)) })
+            setTagging(null)
+          }}
+        />
       )}
-    </Modal>
+    </>
   )
 }
 

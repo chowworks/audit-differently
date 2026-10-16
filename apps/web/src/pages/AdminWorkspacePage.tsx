@@ -1,9 +1,11 @@
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import type { AdminWorkspaceDetail } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
 import { shortDate } from '@/lib/format'
 import { Card, Empty, ErrorNote } from '@/components/ui'
-import { Lists, People, Rename } from '@/pages/WorkspacePage'
+import { BudgetItems, People, Rename, Tags } from '@/pages/WorkspacePage'
+import { ReceiptsAddress } from '@/components/ReceiptsInbox'
+import { AdminCrumbs } from '@/pages/AdminPage'
 
 const BASE = '/admin/workspaces'
 
@@ -14,12 +16,7 @@ const BASE = '/admin/workspaces'
 export function AdminWorkspacePage() {
   const { id } = useParams()
   const { data, error, status, reload } = useLoad<AdminWorkspaceDetail>(id ? `${BASE}/${id}` : null)
-  const crumbs = (here?: string) => (
-    <nav className="ad-crumbs" aria-label="Breadcrumb">
-      <Link to="/admin">Admin tools</Link>
-      {here && ` / ${here}`}
-    </nav>
-  )
+  const crumbs = (here?: string) => <AdminCrumbs tool="Manage workspaces" to={BASE} here={here} />
   if (error)
     return (
       <>
@@ -59,7 +56,9 @@ export function AdminWorkspacePage() {
         <div className="grid content-start gap-4 lg:col-span-3">
           <People w={w} onChange={reload} base={BASE} />
           <Rename w={w} onChange={reload} base={BASE} />
-          <Lists w={w} onChange={reload} base={BASE} />
+          <ReceiptsAddress w={{ ...w, canManage: false }} onChange={reload} />
+          <BudgetItems w={w} onChange={reload} base={BASE} />
+          <Tags w={w} onChange={reload} base={BASE} />
           <Card title="Suggestions">
             {w.suggestions.length === 0 && <Empty>No suggestions yet.</Empty>}
             {w.suggestions.length > 0 && (

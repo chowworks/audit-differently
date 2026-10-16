@@ -59,6 +59,10 @@ export function fakeLog(db: unknown) {
       entries.push(entry)
       actors.push(caller)
     }),
+    also: jest.fn(async (_tx: unknown, caller: unknown, entry: LogEntry) => {
+      entries.push(entry)
+      actors.push(caller)
+    }),
     change: jest.fn(
       async (
         caller: unknown,

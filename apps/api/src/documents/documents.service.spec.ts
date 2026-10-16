@@ -21,7 +21,7 @@ const row = (
   id: string,
   kind: string,
   sensitivity: string,
-  extra: { engagementId?: string; uses?: number; storageKey?: string } = {}
+  extra: { engagementId?: string; uses?: number; storageKey?: string; period?: string } = {}
 ) => ({
   id,
   workspaceId: W,
@@ -31,15 +31,38 @@ const row = (
   fileName: `${id}.pdf`,
   contentType: 'application/pdf',
   size: 1,
-  period: null,
+  period: extra.period ?? null,
   uploadedAt: new Date('2026-10-01T00:00:00Z'),
-  storageKey: extra.storageKey ?? `${W}/${extra.engagementId ?? 'workspace'}/general/${id}.pdf`,
+  storageKey:
+    extra.storageKey ??
+    `${W}/${extra.engagementId ?? 'workspace'}/${extra.period ?? 'general'}/${id}.pdf`,
   _count: { expenses: extra.uses ?? 0, participants: 0, wexPayments: 0 },
 })
 const invoice = row('d-inv', 'invoice', 'financial')
 const birthCertificate = row('d-age', 'eligibility-record', 'personal')
+const payStub = row('d-stub', 'paystub', 'personal')
 const contract = row('d-contract', 'contract', 'financial', { engagementId: 'e-1' })
 const attached = row('d-attached', 'contract', 'financial', { engagementId: 'e-1', uses: 1 })
+// Filed under August, whose month-end closing is approved.
+const augustStatement = row('d-aug', 'bank-statement', 'financial', {
+  engagementId: 'e-1',
+  period: '2026-08',
+})
+// September's signed copies: the one submitted before the month was reopened (a reopening keeps it), and the
+// corrected one attached since, not submitted yet.
+const keptSigned = row('d-signed-kept', 'signed-report', 'financial', {
+  engagementId: 'e-1',
+  period: '2026-09',
+})
+const correctedSigned = row('d-signed-new', 'signed-report', 'financial', {
+  engagementId: 'e-1',
+  period: '2026-09',
+})
+// October is submitted (on November 9), with the signed copy that was on file then.
+const octoberSigned = row('d-signed-oct', 'signed-report', 'financial', {
+  engagementId: 'e-1',
+  period: '2026-10',
+})
 const tampered = row('d-bad', 'invoice', 'financial', {
   storageKey: `${OTHER}/workspace/general/d-bad.pdf`,
 })
@@ -47,7 +70,17 @@ const tampered = row('d-bad', 'invoice', 'financial', {
 function service() {
   const prisma = {
     document: {
-      ...scoped(invoice, birthCertificate, contract, attached, tampered),
+      ...scoped(
+        invoice,
+        birthCertificate,
+        contract,
+        attached,
+        tampered,
+        augustStatement,
+        keptSigned,
+        correctedSigned,
+        octoberSigned
+      ),
       create: jest.fn(async ({ data }: { data: object }) => ({
         id: 'd-new',
         uploadedAt: new Date('2026-10-02T00:00:00Z'),
@@ -64,6 +97,32 @@ function service() {
       update: jest.fn(),
     },
     expense: scoped({ id: 'x-1', workspaceId: W, itemNumber: '1001' }),
+    // August's month-end closing is approved; September is a draft (reopened); October is submitted.
+    monthlyReport: {
+      findFirst: jest.fn(async ({ where }: { where: { engagementId: string; period: string } }) =>
+        where.engagementId !== 'e-1'
+          ? null
+          : where.period === '2026-08'
+            ? { period: where.period, status: 'closed', submittedAt: null }
+            : where.period === '2026-09'
+              ? { period: where.period, status: 'draft', submittedAt: null }
+              : where.period === '2026-10'
+                ? {
+                    period: where.period,
+                    status: 'submitted',
+                    submittedAt: new Date('2026-11-09T00:00:00Z'),
+                  }
+                : null
+      ),
+    },
+    // September's reopening kept the signed copy submitted on October 8.
+    reportReopening: {
+      findFirst: jest.fn(async ({ where }: { where: { signedDocumentId: string } }) =>
+        where.signedDocumentId === 'd-signed-kept'
+          ? { submittedAt: new Date('2026-10-08T00:00:00Z') }
+          : null
+      ),
+    },
     wexPayment: scoped({ id: 'wx-1', workspaceId: W, monthlyReport: { period: '2026-09' } }),
   }
   const log = fakeLog(prisma)
@@ -168,7 +227,7 @@ describe('DocumentsService', () => {
   it('lets an auditor list and open, and neither upload nor remove', async () => {
     const { service: s, prisma, log, storage } = service()
     const who = member('auditor')
-    expect(await s.list(who, W)).toHaveLength(5)
+    expect(await s.list(who, W)).toHaveLength(9)
     expect(prisma.document.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { AND: [{ workspaceId: W }, { workspaceId: { in: [W] } }] },
@@ -185,7 +244,7 @@ describe('DocumentsService', () => {
     await expect(s.remove(who, 'd-inv')).rejects.toThrow(ForbiddenException)
     expect(storage.upload).not.toHaveBeenCalled()
     expect(prisma.document.delete).not.toHaveBeenCalled()
-    expect(log.entries.map((e) => e.description)).toEqual(['Listed 5 documents of the workspace'])
+    expect(log.entries.map((e) => e.description)).toEqual(['Listed 9 documents of the workspace'])
   })
 
   it('words the attach list for the record it is for, and logs it whatever the context says', async () => {
@@ -200,17 +259,17 @@ describe('DocumentsService', () => {
     await s.list(who, W, { for: 'expense', id: { off: true } as never })
     await s.list(who, W, { for: 'silent' } as never)
     expect(log.entries.map((e) => [e.resource, e.action, e.description])).toEqual([
-      ['document', 'list', 'Listed 5 documents to choose proof for expense 1001'],
+      ['document', 'list', 'Listed 9 documents to choose proof for expense 1001'],
       [
         'document',
         'list',
-        'Listed 5 documents to choose proof for a work-experience payment in September 2026',
+        'Listed 9 documents to choose proof for a work-experience payment in September 2026',
       ],
-      ['document', 'list', 'Listed 5 documents of the workspace'],
-      ['document', 'list', 'Listed 5 documents of the workspace'],
-      ['document', 'list', 'Listed 5 documents of the workspace'],
-      ['document', 'list', 'Listed 5 documents of the workspace'],
-      ['document', 'list', 'Listed 5 documents of the workspace'],
+      ['document', 'list', 'Listed 9 documents of the workspace'],
+      ['document', 'list', 'Listed 9 documents of the workspace'],
+      ['document', 'list', 'Listed 9 documents of the workspace'],
+      ['document', 'list', 'Listed 9 documents of the workspace'],
+      ['document', 'list', 'Listed 9 documents of the workspace'],
     ])
   })
 
@@ -487,6 +546,16 @@ describe('DocumentsService', () => {
     expect(log.entries).toEqual([])
   })
 
+  it('opens a pay stub, and no other personal record, to a bookkeeper: in the browser for sixty seconds, logged', async () => {
+    const { service: s, prisma, log } = service()
+    prisma.document.findFirst.mockResolvedValueOnce(payStub)
+    expect(await s.url(member('bookkeeper'), 'd-stub')).toEqual({
+      url: `signed:${payStub.storageKey}:60:inline:d-stub.pdf`,
+      expiresInSeconds: 60,
+    })
+    expect(log.entries.map((e) => e.description)).toEqual(['Opened a pay stub (personal)'])
+  })
+
   it.each(['owner', 'auditor'] as Role[])(
     'opens a personal record to an %s as a sixty-second download, and logs it as personal',
     async (role) => {
@@ -501,6 +570,50 @@ describe('DocumentsService', () => {
       ])
     }
   )
+
+  it("holds a closed month's proof: no upload, replacement or removal; the signed report and a draft month stay open", async () => {
+    const { service: s, prisma, storage, log } = service()
+    const who = member('bookkeeper')
+    const august = { engagementId: 'e-1', period: '2026-08' }
+    await expect(s.upload(who, file, upload('invoice', august))).rejects.toThrow(
+      /month-end closing of August 2026 is approved/
+    )
+    await expect(
+      s.upload(who, file, upload('contract', { engagementId: 'e-1', replaces: 'd-aug' }))
+    ).rejects.toThrow(ConflictException)
+    await expect(s.remove(who, 'd-aug')).rejects.toThrow(ConflictException)
+    expect(storage.upload).not.toHaveBeenCalled()
+    expect(prisma.document.delete).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
+    await s.upload(who, file, upload('signed-report', august))
+    await s.upload(who, file, upload('invoice', { engagementId: 'e-1', period: '2026-09' }))
+    expect(storage.upload).toHaveBeenCalledTimes(2)
+  })
+
+  it('never replaces or removes the signed copy that was submitted; the corrected one goes beside it', async () => {
+    const { service: s, prisma, storage, log } = service()
+    const who = member('owner')
+    const september = { engagementId: 'e-1', period: '2026-09' }
+    for (const id of ['d-signed-kept', 'd-signed-oct']) {
+      await expect(s.remove(who, id)).rejects.toThrow(ConflictException)
+      await expect(
+        s.upload(who, file, upload('signed-report', { ...september, replaces: id }))
+      ).rejects.toThrow(ConflictException)
+    }
+    await expect(s.remove(who, 'd-signed-kept')).rejects.toThrow(
+      'This is the signed copy that was submitted on October 8, 2026; attach the corrected one alongside it'
+    )
+    await expect(s.remove(who, 'd-signed-oct')).rejects.toThrow(
+      'This is the signed copy that was submitted on November 9, 2026; attach the corrected one alongside it'
+    )
+    expect(storage.upload).not.toHaveBeenCalled()
+    expect(prisma.document.delete).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
+    // A corrected copy not submitted yet may still be replaced or removed; attaching one beside it is an upload.
+    await s.upload(who, file, upload('signed-report', september))
+    await s.remove(who, 'd-signed-new')
+    expect(prisma.document.delete).toHaveBeenCalledWith({ where: { id: 'd-signed-new' } })
+  })
 
   it('lets a bookkeeper remove an unattached document, and logs it', async () => {
     const { service: s, prisma, log, storage } = service()
