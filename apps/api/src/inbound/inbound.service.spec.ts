@@ -81,6 +81,25 @@ function setup() {
   const settings = { readEmailedReceiptsWithAi: false }
   const rows: Row[] = []
   const months: Month[] = []
+  let self: () => unknown = () => undefined
+  const history = [
+    {
+      id: 'ra-now',
+      address: 'bright-path',
+      workspaceId: W,
+      firstUsedAt: new Date('2026-08-01T00:00:00Z'),
+      removedAt: null as Date | null,
+      releasedAt: null as Date | null,
+    },
+    {
+      id: 'ra-old',
+      address: 'bright-old',
+      workspaceId: W,
+      firstUsedAt: new Date('2026-06-01T00:00:00Z'),
+      removedAt: new Date('2026-09-01T00:00:00Z') as Date | null,
+      releasedAt: null as Date | null,
+    },
+  ]
   const engagements = [
     {
       id: 'e-cp',
@@ -227,6 +246,29 @@ function setup() {
         return due.map((r) => ({ ...r }))
       }
     ),
+    // Every receipts address used: Bright Path's current one, and one it used before. Asked two ways: a previously
+    // used address not released, and the current row a workspace holds an address by.
+    receiptsAddress: {
+      findFirst: jest.fn(
+        async ({
+          where,
+        }: {
+          where: { address: string; workspaceId?: string; removedAt: null | { not: null } }
+        }) => {
+          seen('history')
+          const r = history.find((h) =>
+            where.removedAt === null
+              ? h.address === where.address && h.workspaceId === where.workspaceId && !h.removedAt
+              : h.address === where.address && h.removedAt && !h.releasedAt
+          )
+          return r ? { id: r.id, firstUsedAt: r.firstUsedAt } : null
+        }
+      ),
+    },
+    // An interactive transaction runs on the same fakes.
+    $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>): Promise<unknown> =>
+      fn(self())
+    ),
     workspace: {
       findFirst: jest.fn(
         async ({ where }: { where: { receiptsAddress?: string; id?: string } }) => {
@@ -277,6 +319,7 @@ function setup() {
       ),
     },
   }
+  self = () => prisma
   const log = fakeLog(prisma)
   const callers = { load: jest.fn(async (id: string) => callerOf(id)) }
   const clerk = {
@@ -387,6 +430,7 @@ function setup() {
   return {
     s,
     rows,
+    history,
     settings,
     get attachments() {
       return attachments
@@ -509,6 +553,90 @@ describe('emailed receipts', () => {
   })
 
   describe('refusals', () => {
+    it('refuses an address a workspace used before, keeps it once, and keeps no sender or subject', async () => {
+      const t = ready()
+      const event = {
+        type: 'email.received',
+        data: {
+          email_id: 'em-old',
+          from: 'Vendor <billing@vendor.example.org>',
+          to: [`bright-old@${DOMAIN}`],
+          subject: 'Invoice 1042',
+          created_at: '2026-09-20T15:00:00Z',
+        },
+      }
+      await expect(t.s.enqueue(event)).resolves.toBe(true)
+      // The provider calls again: nothing more is kept or counted.
+      await t.s.enqueue(event)
+      await t.s.runDue()
+      expect(t.rows).toHaveLength(1)
+      expect(t.rows[0]).toMatchObject({
+        status: 'rejected',
+        rejectReason: REJECT.retired,
+        workspaceId: null,
+        toAddress: `bright-old@${DOMAIN}`,
+        fromAddress: null,
+        subject: null,
+      })
+      // Counted from that row by Admin tools (never a stored count), and nothing was fetched from the provider.
+      expect(t.rows[0]!.receivedAt).toEqual(new Date('2026-09-20T15:00:00Z'))
+      expect(t.resend.email).not.toHaveBeenCalled()
+      // All of it as trusted work, before anyone is known.
+      expect(
+        t.contexts
+          .filter((c) => ['enqueue', 'history'].includes(c.what))
+          .every((c) => c.ctx?.allWorkspaces && !c.ctx.userId)
+      ).toBe(true)
+    })
+
+    it('refuses as no longer in use an email queued before its address changed, kept as it came', async () => {
+      const t = ready()
+      // Queued while bright-old was still current, then the owner changed the address.
+      const old = t.history.find((h) => h.id === 'ra-old')!
+      const removedAt = old.removedAt
+      old.removedAt = null
+      await t.s.enqueue({
+        type: 'email.received',
+        data: {
+          email_id: 'em-q',
+          from: 'bookkeeper@bright-path.example.org',
+          to: [`bright-old@${DOMAIN}`],
+        },
+      })
+      old.removedAt = removedAt
+      await t.s.runDue()
+      // Its sender stays, so it is not one of the refused emails Admin tools counts, and it goes with the clean-up.
+      expect(t.rows[0]).toMatchObject({
+        status: 'rejected',
+        rejectReason: REJECT.retired,
+        fromAddress: 'bookkeeper@bright-path.example.org',
+      })
+    })
+
+    it('never files an email into a workspace that took its address after it arrived', async () => {
+      const t = ready()
+      // Queued on 20 September while another workspace held bright-path; that address was released, and this
+      // workspace chose it on 25 September, before the worker got to the email.
+      t.history.find((h) => h.id === 'ra-now')!.firstUsedAt = new Date('2026-09-25T00:00:00Z')
+      const row = await t.receive('Receipt CP26', undefined, undefined, '2026-09-20T15:00:00Z')
+      expect(row).toMatchObject({
+        status: 'rejected',
+        rejectReason: REJECT.retired,
+        workspaceId: null,
+      })
+      expect(t.resend.email).not.toHaveBeenCalled()
+      // One that arrived after the workspace took it is its own.
+      const later = await t.receive('Receipt CP26', undefined, undefined, '2026-09-26T09:00:00Z')
+      expect(later).toMatchObject({ status: 'filed', workspaceId: W })
+    })
+
+    it('queues mail to a released address like any unknown one, never as no longer in use', async () => {
+      const t = ready()
+      t.history.find((h) => h.id === 'ra-old')!.releasedAt = new Date('2026-10-01T00:00:00Z')
+      const row = await t.receive('Receipt', undefined, `bright-old@${DOMAIN}`)
+      expect(row).toMatchObject({ status: 'rejected', rejectReason: REJECT.noAddress })
+    })
+
     it('refuses an address no workspace has, and keeps it to trusted work', async () => {
       const t = ready()
       const row = await t.receive('Receipt', undefined, `nobody-here@${DOMAIN}`)

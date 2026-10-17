@@ -11,6 +11,7 @@ import { AccessLogService } from '../core/access-log.service'
 import { staffName, type Caller } from '../core/caller'
 import { changesOf, type Fields } from '../core/changes'
 import { inboundConfig } from '../inbound/config'
+import { REJECT } from '../inbound/inbound.service'
 import { PrismaService } from '../prisma/prisma.service'
 
 /** The statuses of a workspace's emailed receipts the admin sees: refused or failed for good. */
@@ -34,6 +35,19 @@ const SELECT = {
 type Row = Prisma.InboundReceiptGetPayload<{ select: typeof SELECT }>
 
 /**
+ * Not mail refused at a previously used receipts address (no workspace, the "no longer in use" reason): it is counted
+ * on that address under Receipts addresses, never listed here. The rows stay, since the counts are worked out from
+ * them. Said as an OR so a row with no reason (null) is kept: NOT of a comparison with null would drop it.
+ */
+export const NOT_RETIRED: Prisma.InboundReceiptWhereInput = {
+  OR: [
+    { workspaceId: { not: null } },
+    { rejectReason: null },
+    { rejectReason: { not: REJECT.retired } },
+  ],
+}
+
+/**
  * Admin tools → Email administration: the emailed receipts that reached no workspace (an unknown address, a sender who
  * could not be verified, a failure before anyone knew whose it was), and a workspace's that were refused or failed
  * (owner's decision, 2026-10-16). Metadata only. Under the admin's mark (AdminGuard), never trusted work: the
@@ -48,12 +62,14 @@ export class AdminInboundService {
     private readonly log: AccessLogService
   ) {}
 
-  /** The newest 200, newest first. */
+  /** The newest 200, newest first; never mail to a previously used receipts address (NOT_RETIRED). */
   async list(caller: Caller): Promise<AdminInboundDto> {
     adminOnly(caller)
     const rows = await this.prisma.inboundReceipt.findMany({
       // Said here as well as in the policy: an admin who is also a member sees all of that workspace's rows there.
-      where: { OR: [{ workspaceId: null }, { status: { in: ADMIN_STATUSES } }] },
+      where: {
+        AND: [{ OR: [{ workspaceId: null }, { status: { in: ADMIN_STATUSES } }] }, NOT_RETIRED],
+      },
       orderBy: { receivedAt: 'desc' },
       take: 200,
       select: SELECT,

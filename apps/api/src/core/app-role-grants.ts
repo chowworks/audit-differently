@@ -16,6 +16,8 @@ export const APP_ROLE_FUNCTIONS: readonly string[] = [
   // Email administration (migration 20261016000100): which emailed receipts the admin's mark reads and reruns.
   'app_admin_sees_receipt(text,text,text)',
   'app_admin_reran(text,text)',
+  // Receipts addresses (migration 20261017000400): whether an address is in use or was used before, for the owner's form.
+  'app_receipts_address_taken(text)',
 ]
 
 /** SQL that gives `role` its table access and exactly the functions above, and nothing else. `role` is a plain identifier. */

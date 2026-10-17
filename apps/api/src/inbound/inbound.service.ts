@@ -49,6 +49,8 @@ import { SenderCheck } from './sender-check'
 /** Why an emailed receipt was refused, in the inbox's words. */
 export const REJECT = {
   noAddress: 'no such address',
+  /** An address a workspace used before (ReceiptsAddress, migration 20261017000400). */
+  retired: 'this address is no longer in use',
   unverified: 'sender could not be verified',
   notMember: 'not a member',
   noFiles: 'no PDF, PNG or JPG attached',
@@ -109,6 +111,21 @@ export const EXPIRE_SQL = `UPDATE "InboundReceipt"
      AND ("status" = 'filing' OR ("status" = 'processing' AND "attempts" >= $1)))
     OR ("status" = 'received' AND "toAddress" IS NULL
      AND "createdAt" <= (now() AT TIME ZONE 'UTC') - interval '1 day')`
+
+/**
+ * The clean-up's delete (purgeOld): rows received before $1 with no workspace, or refused, failed or dismissed for
+ * good; never an email refused at a previously used address (no workspace, no sender, reason $2) while that address
+ * is held and not released. Every term is true or false, never null, so NOT keeps every other row in the delete.
+ * Parameterized.
+ */
+export const PURGE_SQL = `DELETE FROM "InboundReceipt" r
+ WHERE r."receivedAt" < $1
+   AND (r."workspaceId" IS NULL OR r."status" IN ('rejected', 'failed', 'dismissed'))
+   AND NOT (r."workspaceId" IS NULL AND r."status" = 'rejected' AND r."fromAddress" IS NULL
+        AND COALESCE(r."rejectReason", '') = $2
+        AND EXISTS (SELECT 1 FROM "ReceiptsAddress" a
+                     WHERE a."address" = split_part(r."toAddress", '@', 1)
+                       AND a."removedAt" IS NOT NULL AND a."releasedAt" IS NULL))`
 
 /** The row's filed attachments, read and locked inside a filing transaction: a second worker waits, then sees them. */
 const LOCK_SQL = `SELECT "filedAttachments" FROM "InboundReceipt" WHERE "id" = $1 FOR UPDATE`
@@ -223,10 +240,42 @@ export class InboundService {
     // ignored, never kept, so no sender or subject of it is stored here.
     if (!row.toAddress) return false
     // Trusted work: nobody is known yet, and a row with no workspace is app.system's alone (migration 20261015001000).
-    await runAsSystem(() =>
-      this.prisma.inboundReceipt.createMany({ data: [row], skipDuplicates: true })
-    )
+    await runAsSystem(async () => {
+      const retired = await this.retiredAddress(row.toAddress, cfg.domain)
+      if (!retired) {
+        await this.prisma.inboundReceipt.createMany({ data: [row], skipDuplicates: true })
+        return
+      }
+      // Sent to an address a workspace used before: refused now. Kept with no sender and no subject (nothing of the
+      // email but its id, the address and when), once per provider id, so Admin tools → Email administration →
+      // Receipts addresses counts it (never a stored count), until the address is released (purgeOld keeps it).
+      await this.prisma.inboundReceipt.createMany({
+        data: [
+          {
+            emailId: row.emailId,
+            toAddress: row.toAddress,
+            receivedAt: row.receivedAt,
+            status: 'rejected',
+            rejectReason: REJECT.retired,
+          },
+        ],
+        skipDuplicates: true,
+      })
+    })
     return true
+  }
+
+  /**
+   * The history row of an address on our domain that a workspace used before and no longer does, not released (at
+   * most one: an address is held by one row not released); null otherwise.
+   */
+  private async retiredAddress(to: string | null, domain: string) {
+    const local = to?.endsWith(`@${domain}`) ? to.slice(0, -(domain.length + 1)) : null
+    if (!local) return null
+    return this.prisma.receiptsAddress.findFirst({
+      where: { address: local, removedAt: { not: null }, releasedAt: null },
+      select: { id: true },
+    })
   }
 
   /** Claims the rows due now and processes each; the number claimed (0: nothing was due). */
@@ -249,19 +298,14 @@ export class InboundService {
 
   /**
    * Removes, after UNKNOWN_KEPT_DAYS, the rows nobody needs: those that never named a workspace (an unknown address, a
-   * sender not verified, someone not a member) and those refused or failed for good.
+   * sender not verified, someone not a member) and those refused or failed for good. Except an email refused at a
+   * previously used address (kept by enqueue with no sender): kept while that address is held and not released, so
+   * Admin tools counts it; releasing the address removes it (trigger ReceiptsAddress_4_release).
    */
   async purgeOld(now = new Date()): Promise<void> {
     const before = new Date(now.getTime() - UNKNOWN_KEPT_DAYS * 86_400_000)
     // Trusted work: only it sees a row with no workspace, and only it removes a row (migration 20261015001200).
-    await runAsSystem(() =>
-      this.prisma.inboundReceipt.deleteMany({
-        where: {
-          receivedAt: { lt: before },
-          OR: [{ workspaceId: null }, { status: { in: ['rejected', 'failed', 'dismissed'] } }],
-        },
-      })
-    )
+    await runAsSystem(() => this.prisma.$executeRawUnsafe(PURGE_SQL, before, REJECT.retired))
   }
 
   /** One claimed row, start to end. A failure that may pass is tried again later; after five it is final. */
@@ -318,7 +362,21 @@ export class InboundService {
             })
           )
         : null
-      if (!ws) throw new Rejected(REJECT.noAddress)
+      if (!ws) {
+        // Queued while the address was still a workspace's, processed after it changed (or run again): refused as
+        // no longer in use. Counted only when it arrives (enqueue), so a retry or a rerun never counts it twice.
+        const retired = await runAsSystem(() => this.retiredAddress(row.toAddress, cfg.domain))
+        throw new Rejected(retired ? REJECT.retired : REJECT.noAddress)
+      }
+      // Arrived before this workspace took the address: it was sent to whoever held it then (released since, and
+      // chosen again by this one), never to this workspace. Refused as no longer in use.
+      const held = await runAsSystem(() =>
+        this.prisma.receiptsAddress.findFirst({
+          where: { workspaceId: ws.id, address: local!, removedAt: null },
+          select: { firstUsedAt: true },
+        })
+      )
+      if (held && held.firstUsedAt > row.receivedAt) throw new Rejected(REJECT.retired)
       workspaceId = ws.id
     }
 

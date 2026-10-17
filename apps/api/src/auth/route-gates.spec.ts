@@ -112,6 +112,10 @@ const ADMIN = [
   'PUT /api/admin/highlights/:kind',
   // Matching statistics: counts, sizes and durations of finished match runs, across workspaces.
   'GET /api/admin/match-stats',
+  // Email administration → Receipts addresses: every address used, and releasing a previously used one (never a
+  // current one).
+  'GET /api/admin/receipts-addresses',
+  'POST /api/admin/receipts-addresses/:id/release',
 ]
 
 /** Every other route. A member of another workspace gets 404 from each; the role checks are in the specs beside each service. */

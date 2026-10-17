@@ -42,6 +42,13 @@ const NAME_FIELDS: Fields = { name: { label: 'Workspace name', show: 'text' } }
 const RECEIPTS_ADDRESS_FIELDS: Fields = {
   receiptsAddress: { label: 'Receipts address', show: 'text' },
 }
+/**
+ * A receipts address in use, or used before and not released, by any workspace: one answer for both, from the check
+ * and from the database's unique index alike, so an owner never learns which, or whose.
+ */
+const ADDRESS_TAKEN = "That address isn't available; choose another"
+/** The address was already what the owner chose, by the time the change held the row: nothing to change or log. */
+class Unchanged extends Error {}
 const EMAILED_AI_FIELDS: Fields = {
   readEmailedReceiptsWithAi: {
     label: 'Read emailed receipts with AI',
@@ -327,9 +334,11 @@ export class WorkspacesService {
   }
 
   /**
-   * The workspace's receipts address (its local part; the domain is the environment's): set by its owners only. The
-   * platform admin changes a workspace's name, lists and memberships, and this is none of them: it decides where a
-   * workspace's mail lands. Empty clears it. Unique across workspaces.
+   * The workspace's receipts address (its local part; the domain is the environment's): set and changed by its owners
+   * only. The platform admin changes a workspace's name, lists and memberships, and this is none of them: it decides
+   * where a workspace's mail lands. Never cleared once set (trigger Workspace_6_receipts_address_kept). Unique across
+   * every address any workspace ever used (ReceiptsAddress, migration 20261017000400): the database keeps the old one
+   * there with when it was removed, refuses mail still sent to it, and a platform admin may release it later.
    */
   async setReceiptsAddress(caller: Caller, id: string, given: unknown): Promise<void> {
     const w = await this.load(caller, id)
@@ -345,28 +354,49 @@ export class WorkspacesService {
         'Use 3 to 40 lowercase letters, digits and hyphens, starting and ending with a letter or digit'
       )
     if (local === w.receiptsAddress) return
-    // Set once (trigger Workspace_6_receipts_address_kept): an address never moves, so mail sent to it never lands
-    // in another workspace.
-    if (w.receiptsAddress)
-      throw new ConflictException('The receipts address is set; it does not change')
+    if (!local) throw new BadRequestException('The receipts address is changed, never cleared')
+    if (await this.receiptsAddressTaken(local)) throw new ConflictException(ADDRESS_TAKEN)
     try {
       await this.log.change(
         caller,
-        (tx) => tx.workspace.update({ where: { id }, data: { receiptsAddress: local } }),
-        {
+        async (tx) => {
+          // The address it replaces, read and locked in this transaction: another owner may have changed it since
+          // the read above, and the line names what this change replaced.
+          const [locked] = await tx.$queryRaw<{ receiptsAddress: string | null }[]>(
+            Prisma.sql`SELECT "receiptsAddress" FROM "Workspace" WHERE "id" = ${id} FOR UPDATE`
+          )
+          if (!locked) throw new NotFoundException()
+          if (locked.receiptsAddress === local) throw new Unchanged()
+          await tx.workspace.update({ where: { id }, data: { receiptsAddress: local } })
+          return { receiptsAddress: locked.receiptsAddress }
+        },
+        (before) => ({
           workspaceId: id,
           resource: 'workspace',
           subjectId: id,
           action: 'update',
-          description: 'Set the receipts address',
-          changes: changesOf(w, { receiptsAddress: local }, RECEIPTS_ADDRESS_FIELDS),
-        }
+          description: before.receiptsAddress
+            ? `Changed the receipts address from ${before.receiptsAddress} to ${local}`
+            : 'Set the receipts address',
+          changes: changesOf(before, { receiptsAddress: local }, RECEIPTS_ADDRESS_FIELDS),
+        })
       )
     } catch (e) {
+      // Another owner set this very address a moment ago: nothing to change, and nothing to log.
+      if (e instanceof Unchanged) return
+      // Taken a moment ago by another workspace, or kept in the history since: the database's own check.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
-        throw new ConflictException('That address is taken; choose another')
+        throw new ConflictException(ADDRESS_TAKEN)
       throw e
     }
+  }
+
+  /** Whether any workspace uses `local` now or used it before: yes or no only, since owners never see the history. */
+  private async receiptsAddressTaken(local: string): Promise<boolean> {
+    const [row] = await this.prisma.$queryRaw<{ taken: boolean }[]>(
+      Prisma.sql`SELECT "app_receipts_address_taken"(${local}) AS taken`
+    )
+    return !!row?.taken
   }
 
   /**

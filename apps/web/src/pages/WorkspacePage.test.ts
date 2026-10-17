@@ -13,21 +13,21 @@ const funding: TagType = {
 }
 
 describe('the warning before a tag is removed', () => {
-  it('says how many records each removed value comes off', () => {
+  it('says how many records each removed value is on', () => {
     const after = [{ ...funding, values: [{ key: 'youth', label: 'Youth Futures Fund' }] }]
     const uses = { 'funding-source:old': { expense: 3, participant: 1, engagement: 2 } }
     expect(tagRemovals([funding], after, uses)).toEqual([
-      'Old Fund (Funding source) comes off 3 expenses, 1 participant and 2 engagements',
+      'Old Fund (Funding source), on 3 expenses, 1 participant and 2 engagements',
     ])
   })
 
   it('counts a renamed value as kept, and a removed type as each of its values', () => {
     expect(tagRemovals([funding], [{ ...funding, label: 'Fund' }], {})).toEqual([])
     expect(tagRemovals([funding], [], {})).toEqual([
-      'Youth Workforce Fund (Funding source) comes off no record',
-      'Old Fund (Funding source) comes off no record',
+      'Youth Workforce Fund (Funding source)',
+      'Old Fund (Funding source)',
     ])
-    expect(tagRemovals([funding], [])[0]).toMatch(/comes off every record that has it$/)
+    expect(tagRemovals([funding], [])[0]).toBe('Youth Workforce Fund (Funding source)')
   })
 
   it('words the counts', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { REPORT_STATUS_LABELS, type CheckSeverity, type ReportStatus } from '@ad/types'
 
 export type Tone = 'ok' | 'warn' | 'danger' | 'info' | 'muted' | 'accent'
@@ -305,6 +305,23 @@ export function ErrorNote({ message }: { message: string | null }) {
       <span aria-hidden="true">⚠️</span>
       <span>{message}</span>
     </p>
+  )
+}
+
+/**
+ * An email address that wraps where it reads well, before the @ and after each dot (a hyphen already allows it), so a
+ * narrow table column never breaks it mid-word or widens past its card.
+ */
+export function EmailText({ value }: { value: string }) {
+  return (
+    <>
+      {value.split(/(?=@)|(?<=\.)/).map((part, i) => (
+        <Fragment key={i}>
+          {i > 0 && <wbr />}
+          {part}
+        </Fragment>
+      ))}
+    </>
   )
 }
 

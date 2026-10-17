@@ -1,6 +1,7 @@
 import { ConflictException, ForbiddenException, Logger, NotFoundException } from '@nestjs/common'
 import type { Caller } from '../core/caller'
-import { AdminInboundService } from './admin-inbound.service'
+import { REJECT } from '../inbound/inbound.service'
+import { AdminInboundService, NOT_RETIRED } from './admin-inbound.service'
 
 const admin: Caller = {
   userId: 'user_admin',
@@ -78,7 +79,12 @@ describe('AdminInboundService', () => {
     const out = await svc.list(admin)
     expect(prisma.inboundReceipt.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { OR: [{ workspaceId: null }, { status: { in: ['rejected', 'failed'] } }] },
+        where: {
+          AND: [
+            { OR: [{ workspaceId: null }, { status: { in: ['rejected', 'failed'] } }] },
+            NOT_RETIRED,
+          ],
+        },
         orderBy: { receivedAt: 'desc' },
       })
     )
@@ -86,6 +92,23 @@ describe('AdminInboundService', () => {
     expect(select.documentIds).toBeUndefined()
     expect(select.filedAttachments).toBeUndefined()
     expect(out.items[0]).toMatchObject({ workspaceName: 'Riverbend', canRunAgain: true })
+  })
+
+  it('never lists mail refused at a previously used receipts address, and keeps a row with no reason', async () => {
+    const { svc, prisma } = setup(row())
+    await svc.list(admin)
+    const where = prisma.inboundReceipt.findMany.mock.calls[0][0].where
+    expect(where.AND).toContain(NOT_RETIRED)
+    // A row with no workspace is listed only when its reason is not "no longer in use"; a null reason is said
+    // outright, since "not equal" in SQL leaves null out.
+    expect(NOT_RETIRED).toEqual({
+      OR: [
+        { workspaceId: { not: null } },
+        { rejectReason: null },
+        { rejectReason: { not: REJECT.retired } },
+      ],
+    })
+    expect(REJECT.retired).toBe('this address is no longer in use')
   })
 
   it('finds no row a rerun may not reach: a workspace row that is not refused or failed is a 404', async () => {

@@ -438,6 +438,50 @@
     margin: 8px 0 0;
     max-width: 70em;
   }
+  .ad-toolhow ol,
+  .ad-toolhow ul {
+    margin: 6px 0 0;
+    padding-left: 20px;
+    max-width: 70em;
+    list-style: disc;
+  }
+  .ad-toolhow li + li {
+    margin-top: 2px;
+  }
+  /* Email administration: its sections, each a heading with a rule under it, spaced well apart. */
+  .ad-admin-sections {
+    display: grid;
+    gap: 36px;
+  }
+  .ad-admin-section {
+    min-width: 0;
+  }
+  .ad-admin-cards {
+    display: grid;
+    gap: 20px;
+  }
+  .ad-admin-cards > * {
+    min-width: 0; /* a card is otherwise as wide as its table, and the page scrolls sideways */
+  }
+  /* The release confirm's facts, each labelled on its own line. */
+  .ad-release-facts {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    font-size: 14px;
+  }
+  .ad-release-facts div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .ad-release-facts dt {
+    font-weight: 700;
+  }
+  .ad-release-facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
   .ad-tool-more {
     border-style: dashed;
     background: transparent;
@@ -665,6 +709,33 @@
     display: block;
     font-size: 12.5px;
     color: var(--muted);
+  }
+  /* A table that fits its card: long text wraps instead of widening it (addresses through EmailText). */
+  .ad-table-fit td {
+    overflow-wrap: break-word;
+  }
+  /* A row's buttons, stacked in a narrow last column. */
+  .ad-row-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    min-width: 92px;
+  }
+  .ad-row-actions > * {
+    justify-content: center;
+    text-align: center;
+  }
+  .ad-row-actions:empty {
+    display: none;
+  }
+  /* A workspace's heading inside a grouped table (Receipts addresses → Previously used addresses). */
+  .ad-table .ad-table-group th {
+    padding-top: 16px;
+    border-bottom: 1px solid var(--line);
+    color: var(--navy);
+    font-weight: 800;
+    white-space: normal;
   }
   .ad-row-flash {
     background: var(--warn-tint) !important;
@@ -1482,6 +1553,50 @@
     flex: 1 1 auto;
     overflow-y: auto;
     padding: 16px 20px 20px;
+  }
+  /* Change the receipts address: the point and its steps, the field, then the buttons, evenly spaced. */
+  .ad-change-address {
+    display: grid;
+    gap: 20px;
+  }
+  .ad-change-address .ad-error {
+    margin: 0;
+  }
+  .ad-change-address-lead {
+    display: grid;
+    gap: 8px;
+    font-size: 14px;
+  }
+  .ad-change-address-lead p {
+    margin: 0;
+    font-size: 15px;
+  }
+  .ad-change-address-lead .ad-mono {
+    overflow-wrap: anywhere;
+  }
+  .ad-change-address-lead ol {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding-left: 20px;
+    list-style: decimal;
+  }
+  .ad-change-address-input {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .ad-change-address-input .ad-input {
+    flex: 1 1 160px;
+    min-width: 0;
+  }
+  .ad-change-address-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
   }
 
   /* Workflow: progress, the step list, record chips, the "need a hand" card, dated rows, checklists */

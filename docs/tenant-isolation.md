@@ -72,9 +72,17 @@ personal document). Those stay in the API.
   policies apply as if they had uploaded it. It names its workspace itself (a foreign key, removed with the
   workspace; no `_1_set_tenant`). The engagement is a foreign key too (`ON DELETE SET NULL`), and
   `InboundReceipt_4_engagement` keeps it to an engagement of the row's own workspace and clears the filed document
-  ids when it is cleared. A workspace's `receiptsAddress` is set once, by an owner, and then kept
-  (`Workspace_6_receipts_address_kept`; never under `app.admin`; the table's owner may still correct it), so mail sent
-  to it never reaches another workspace.
+  ids when it is cleared. A workspace's `receiptsAddress` is set and changed by its owners, never cleared
+  (`Workspace_6_receipts_address_kept`; never under `app.admin`; the table's owner may still correct it).
+- **Every receipts address ever used is held** (`ReceiptsAddress`, migration `20261017000400`), so mail sent to an old
+  one never reaches another workspace. Not a tenant table: an address, dates and a count, no workspace data, and
+  `workspaceId` is a plain id with no foreign key, since the row must outlive a deleted workspace. The database writes
+  it (`Workspace_9_receipts_address_history`, as the function's owner) when an address is set, changed, or its
+  workspace deleted; the address is unique across the whole history. Only `app.admin` and `app.system` read it; members,
+  owners included, read nothing (they learn only whether an address is taken, `app_receipts_address_taken`). The webhook,
+  under `app.system`, refuses mail to a previously used address and counts it (`ReceiptsAddress_3_keep`: the count and
+  the last arrival only). The admin's mark removes ("releases") a previously used row, never a current one, only with
+  its access-log line in that workspace written first in the same transaction (`ReceiptsAddress_4_release`).
 
 ## How a request works
 

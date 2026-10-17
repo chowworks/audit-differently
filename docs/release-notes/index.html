@@ -583,6 +583,77 @@
 
       <article
         class="entry"
+        id="workspace-tags-dialogs"
+        data-status="shipped"
+        data-short="Tags saved from their dialogs"
+        data-summary="Tag groups are added and edited in a dialog that saves at once, and the workspace page's buttons match."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-17">Oct 17, 2026</time>
+        </div>
+        <h2>Tags saved from their dialogs</h2>
+        <p>
+          On the workspace page, + Add Tag Group sits beside the Tags heading and saves the new
+          group at once, then opens it so its values go in. Edit saves the group when you press
+          Save; there is no separate Save tags button any more.
+        </p>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>
+              Removing a value that records use still asks first, and says which records have it.
+            </li>
+            <li>
+              The page's buttons now match: actions in navy, the one creating action in green,
+              removals as red links. The access log button reads View Workspace Access Log.
+            </li>
+          </ul>
+        </div>
+      </article>
+
+      <article
+        class="entry"
+        id="receipts-address-change"
+        data-status="shipped"
+        data-short="Change the receipts address"
+        data-summary="Owners can change their workspace's receipts address; every old address is kept, refused and watched until an admin releases it."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-10-17">Oct 17, 2026</time>
+        </div>
+        <h2>Change your receipts address</h2>
+        <p>
+          An owner can now change the workspace's receipts address under Receipts address → Change
+          address. The old address stops working at once: mail still sent to it is refused, and
+          nobody can choose it again.
+        </p>
+        <p>
+          Platform admins see every address ever used under Admin tools → Email administration, with
+          how many emails arrived since each was removed and when the last one came, and can release
+          an old one once its mail has stopped.
+        </p>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>An address is changed, never cleared.</li>
+            <li>
+              An address in use or used before shows as "That address isn't available; choose
+              another".
+            </li>
+            <li>
+              A refused email keeps only the address it was sent to and when it arrived; no sender,
+              subject or attachment.
+            </li>
+            <li>
+              Each change is in the workspace's access log; a release is kept in the admin list,
+              with who and when.
+            </li>
+          </ul>
+        </div>
+      </article>
+
+      <article
+        class="entry"
         id="participant-edit-remove"
         data-status="shipped"
         data-short="Edit or remove a participant"

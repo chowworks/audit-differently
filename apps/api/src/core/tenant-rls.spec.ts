@@ -997,12 +997,10 @@ suite('tenant isolation', () => {
       await db.query(`UPDATE "Engagement" SET "code" = 'CP26' WHERE id = 'E-W1'`)
       try {
         await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
-          // Set once, then kept: never moved to another address or cleared through the API.
-          for (const to of [`'bright-path-2'`, 'NULL'])
-            expect(
-              (await attempt(`UPDATE "Workspace" SET "receiptsAddress" = ${to} WHERE id = 'W1'`))
-                .error
-            ).toMatch(/once set, is kept/)
+          // Changed by an owner, never cleared through the API (migration 20261017000400).
+          expect(
+            (await attempt(`UPDATE "Workspace" SET "receiptsAddress" = NULL WHERE id = 'W1'`)).error
+          ).toMatch(/changed, never cleared/)
           expect(
             (await attempt(`UPDATE "Engagement" SET "code" = 'cp26' WHERE id = 'E-W1'`)).error
           ).toMatch(/code_check/)
@@ -1035,6 +1033,7 @@ suite('tenant isolation', () => {
         })
       } finally {
         await db.query(`UPDATE "Workspace" SET "receiptsAddress" = NULL WHERE id = 'W1'`)
+        await db.query(`DELETE FROM "ReceiptsAddress"`)
         await db.query(`UPDATE "Engagement" SET "code" = NULL WHERE id = 'E-W1'`)
       }
     })
@@ -2505,6 +2504,217 @@ suite('tenant isolation', () => {
         expect((await attempt(`CREATE TEMP TABLE "Engagement" (id text)`)).error).toMatch(
           /permission denied/
         )
+      })
+    })
+  })
+
+  describe('receipts addresses (migration 20261017000400)', () => {
+    /** Runs `sql` as the database owner inside the current transaction, then goes back to the API's role. */
+    const asDbOwner = async <T extends object>(sql: string): Promise<T[]> => {
+      await db.exec('RESET ROLE')
+      try {
+        return (await db.query<T>(sql)).rows
+      } finally {
+        await db.exec('SET LOCAL ROLE ad_app')
+      }
+    }
+    const history = () =>
+      asDbOwner<{
+        address: string
+        workspaceId: string
+        removed: boolean
+        released: boolean
+      }>(
+        `SELECT address, "workspaceId", "removedAt" IS NOT NULL AS removed, "releasedAt" IS NOT NULL AS released
+           FROM "ReceiptsAddress" ORDER BY address, "firstUsedAt"`
+      )
+    const context = (ctx: {
+      workspaces?: string
+      user?: string
+      system?: boolean
+      admin?: boolean
+    }) =>
+      db.query(
+        `SELECT set_config('app.workspace_ids', $1, true), set_config('app.user_id', $2, true), set_config('app.system', $3, true), set_config('app.admin', $4, true)`,
+        [ctx.workspaces ?? '', ctx.user ?? '', ctx.system ? 'on' : '', ctx.admin ? 'on' : '']
+      )
+    /** W1 used riv-old, then changed to riv-now, by its owner. */
+    const changed = async () => {
+      await asDbOwner(`UPDATE "Workspace" SET "receiptsAddress" = 'riv-old' WHERE id = 'W1'`)
+      await asDbOwner(`UPDATE "Workspace" SET "receiptsAddress" = 'riv-now' WHERE id = 'W1'`)
+      return (
+        await asDbOwner<{ id: string }>(
+          `SELECT id FROM "ReceiptsAddress" WHERE address = 'riv-old'`
+        )
+      )[0]!.id
+    }
+    /** An email the webhook kept for a previously used address (no workspace, no sender), or another refused one. */
+    const refused = (id: string, to: string, from: string | null = null) =>
+      asDbOwner(
+        `INSERT INTO "InboundReceipt" ("id","emailId","toAddress","fromAddress","receivedAt","status","rejectReason")
+         VALUES ('${id}','email-${id}','${to}@receipts.example.org',${from ? `'${from}'` : 'NULL'},now(),'rejected','this address is no longer in use')`
+      )
+
+    it("keeps every address a workspace's owner set, and refuses any of them again, to any workspace", async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "receiptsAddress" = 'riv-one' WHERE id = 'W1'`))
+            .rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "receiptsAddress" = 'riv-two' WHERE id = 'W1'`))
+            .rows
+        ).toBe(1)
+        expect(await history()).toEqual([
+          { address: 'riv-one', workspaceId: 'W1', removed: true, released: false },
+          { address: 'riv-two', workspaceId: 'W1', removed: false, released: false },
+        ])
+        // Owners read nothing of it, their own workspace's included; they are told only whether one is taken.
+        expect(await count('ReceiptsAddress')).toBe(0)
+        expect(
+          (
+            await db.query<{ a: boolean; b: boolean; c: boolean }>(
+              `SELECT "app_receipts_address_taken"('riv-one') AS a, "app_receipts_address_taken"('riv-two') AS b, "app_receipts_address_taken"('riv-free') AS c`
+            )
+          ).rows
+        ).toEqual([{ a: true, b: true, c: false }])
+        // Its own previous address is refused too, and so is the same one to another workspace.
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "receiptsAddress" = 'riv-one' WHERE id = 'W1'`))
+            .error
+        ).toMatch(/ReceiptsAddress_address_held_key/)
+        await context({ workspaces: 'W2', user: 'owner-W2' })
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "receiptsAddress" = 'riv-one' WHERE id = 'W2'`))
+            .error
+        ).toMatch(/ReceiptsAddress_address_held_key/)
+        // Nobody writes the history through the API: not an owner, not a bookkeeper.
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "ReceiptsAddress" ("address","workspaceId") VALUES ('riv-mine','W2')`
+            )
+          ).error
+        ).toMatch(/row-level security/)
+        expect((await attempt(`UPDATE "ReceiptsAddress" SET "releasedAt" = now()`)).rows).toBe(0)
+        expect((await attempt(`DELETE FROM "ReceiptsAddress"`)).rows).toBe(0)
+      })
+    })
+
+    it("keeps a deleted workspace's address as previously used", async () => {
+      await as({}, async () => {
+        await asDbOwner(
+          `INSERT INTO "Workspace" ("id","name","updatedAt","receiptsAddress") VALUES ('W-gone','gone',now(),'riv-gone')`
+        )
+        await asDbOwner(`DELETE FROM "Workspace" WHERE id = 'W-gone'`)
+        expect(await history()).toEqual([
+          { address: 'riv-gone', workspaceId: 'W-gone', removed: true, released: false },
+        ])
+      })
+    })
+
+    it('lets trusted work read every address and change none', async () => {
+      await as({ system: true }, async () => {
+        const old = await changed()
+        expect(await count('ReceiptsAddress')).toBe(2)
+        expect(
+          (await attempt(`UPDATE "ReceiptsAddress" SET "releasedAt" = now() WHERE id = '${old}'`))
+            .rows
+        ).toBe(0)
+        expect((await attempt(`DELETE FROM "ReceiptsAddress"`)).rows).toBe(0)
+        expect((await history()).every((h) => !h.released)).toBe(true)
+      })
+    })
+
+    it('lets the platform admin release a previously used address, named by the database, with no line in the workspace', async () => {
+      await as({ user: 'admin-rel', admin: true }, async () => {
+        await asDbOwner(
+          `INSERT INTO "User" ("id","email","updatedAt") VALUES ('admin-rel','rel@example.org',now())`
+        )
+        const old = await changed()
+        await refused('IR-kept-1', 'riv-old')
+        await refused('IR-kept-2', 'riv-old')
+        await refused('IR-sender', 'riv-old', 'pat@example.org')
+        await refused('IR-other', 'riv-else')
+        const lines = (
+          await asDbOwner<{ n: number }>(`SELECT count(*)::int AS n FROM "DataAccessLog"`)
+        )[0]!.n
+        expect(await count('ReceiptsAddress')).toBe(2)
+        // Never the current one, and nothing but the release.
+        expect(
+          (
+            await attempt(
+              `UPDATE "ReceiptsAddress" SET "releasedAt" = now() WHERE address = 'riv-now'`
+            )
+          ).rows
+        ).toBe(0)
+        for (const set of [`address = 'riv-x'`, `"removedAt" = now()`, `"releasedById" = 'x'`])
+          expect(
+            (await attempt(`UPDATE "ReceiptsAddress" SET ${set} WHERE id = '${old}'`)).error
+          ).toMatch(/A platform admin only releases a receipts address/)
+        expect((await attempt(`DELETE FROM "ReceiptsAddress" WHERE id = '${old}'`)).rows).toBe(0)
+        // Released, with a time and a name the client cannot choose.
+        expect(
+          await attempt(
+            `UPDATE "ReceiptsAddress" SET "releasedAt" = '2000-01-01', "releasedById" = 'someone', "releasedByEmail" = 'forged@example.org' WHERE id = '${old}'`
+          )
+        ).toEqual({ rows: 1 })
+        const [rel] = await asDbOwner<{ by: string; email: string; recent: boolean }>(
+          `SELECT "releasedById" AS by, "releasedByEmail" AS email,
+                  "releasedAt" > (now() AT TIME ZONE 'UTC') - interval '1 minute' AS recent
+             FROM "ReceiptsAddress" WHERE id = '${old}'`
+        )
+        expect(rel).toEqual({ by: 'admin-rel', email: 'rel@example.org', recent: true })
+        // No line in the workspace's access log; its kept refused emails went with it, nothing else.
+        expect(
+          (await asDbOwner<{ n: number }>(`SELECT count(*)::int AS n FROM "DataAccessLog"`))[0]!.n
+        ).toBe(lines)
+        expect(
+          (
+            await asDbOwner<{ id: string }>(
+              `SELECT id FROM "InboundReceipt" WHERE id LIKE 'IR-kept%' OR id IN ('IR-sender','IR-other') ORDER BY id`
+            )
+          ).map((r) => r.id)
+        ).toEqual(['IR-other', 'IR-sender'])
+        // Released once: it never changes again, not even by the database owner.
+        expect(
+          (await attempt(`UPDATE "ReceiptsAddress" SET "releasedAt" = now() WHERE id = '${old}'`))
+            .rows
+        ).toBe(0)
+        await db.exec('RESET ROLE')
+        expect(
+          (await attempt(`UPDATE "ReceiptsAddress" SET "firstUsedAt" = now() WHERE id = '${old}'`))
+            .error
+        ).toMatch(/kept as it was released/)
+        await db.exec('SET LOCAL ROLE ad_app')
+        // Free to choose again, as a new row beside the released one.
+        expect(
+          (await db.query<{ t: boolean }>(`SELECT "app_receipts_address_taken"('riv-old') AS t`))
+            .rows
+        ).toEqual([{ t: false }])
+        await context({ workspaces: 'W2', user: 'owner-W2' })
+        expect(
+          (await attempt(`UPDATE "Workspace" SET "receiptsAddress" = 'riv-old' WHERE id = 'W2'`))
+            .rows
+        ).toBe(1)
+        expect(await history()).toEqual([
+          { address: 'riv-now', workspaceId: 'W1', removed: false, released: false },
+          { address: 'riv-old', workspaceId: 'W1', removed: true, released: true },
+          { address: 'riv-old', workspaceId: 'W2', removed: false, released: false },
+        ])
+      })
+    })
+
+    it('refuses a release outside the admin mark; the database owner may still correct a row', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        const old = await changed()
+        expect((await attempt(`UPDATE "ReceiptsAddress" SET "releasedAt" = now()`)).rows).toBe(0)
+        expect((await attempt(`DELETE FROM "ReceiptsAddress"`)).rows).toBe(0)
+        await db.exec('RESET ROLE')
+        expect(
+          (await attempt(`UPDATE "ReceiptsAddress" SET "firstUsedAt" = now() WHERE id = '${old}'`))
+            .rows
+        ).toBe(1)
       })
     })
   })

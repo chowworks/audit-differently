@@ -28,8 +28,8 @@ model Workspace {
   // The owners' tag types ({ key, label, appliesTo, values: { key, label }[] }[], TagType in packages/types), "Funding
   // source" among them (DEFAULT_TAG_TYPES for a new workspace). Keys never change, so a rename keeps every record's tags.
   tagTypes                  Json             @default("[]")
-  // The local part of the workspace's receipts address (`<receiptsAddress>@<RECEIPTS_DOMAIN>`), unique; null until set,
-  // then kept: an owner sets it once and nobody changes it through the API (migration 20261015001200).
+  // The local part of the workspace's receipts address (`<receiptsAddress>@<RECEIPTS_DOMAIN>`), unique; null until set.
+  // Its owners change it, never clear it (migration 20261017000400); every address it used is kept in ReceiptsAddress.
   receiptsAddress           String?          @unique
   // The owners' setting: an emailed receipt (no person present to say yes) is read with AI when its text does not
   // give everything. Off until an owner turns it on (migration 20261016000400); the platform admin never sets it.
@@ -652,4 +652,22 @@ model ServiceFailure {
   route String // method and route pattern, such as 'POST /api/documents'
 
   @@index([kind, at])
+}
+
+// ── Receipts addresses ──────────────────────────────────────────────────────
+// Every receipts address a workspace has used (migration 20261017000400), written by the database when a workspace's
+// address is set, changed or the workspace is deleted, never by the API. An address is held by one row not released
+// (a partial unique index, so not @unique here): a previously used address is never chosen again until a platform
+// admin releases it, and the released row then stays as it was, with who released it (set by the database). Emails
+// still sent to it are counted from InboundReceipt, never stored here. Not a tenant table: no workspace data, no
+// foreign key (it outlives its workspace), read only by the admin's mark and trusted work.
+model ReceiptsAddress {
+  id              String    @id @default(dbgenerated("gen_random_uuid()::text"))
+  address         String // the local part, as Workspace.receiptsAddress
+  workspaceId     String
+  firstUsedAt     DateTime  @default(dbgenerated("(now() AT TIME ZONE 'UTC')"))
+  removedAt       DateTime? // null while it is the workspace's current address
+  releasedAt      DateTime? // set by the database when a platform admin releases it; the row never changes after
+  releasedById    String?
+  releasedByEmail String?
 }

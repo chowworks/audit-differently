@@ -1161,12 +1161,28 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
     },
   })
 
-  // ── Emailed receipts ── Riverbend's receipts address (set once, then kept) and the engagement's subject-line code.
-  if (!riverbend.receiptsAddress || riverbend.receiptsAddress !== DEMO_RECEIPTS_ADDRESS)
+  // ── Emailed receipts ── Riverbend's receipts address and the engagement's subject-line code.
+  if (!riverbend.receiptsAddress || riverbend.receiptsAddress !== DEMO_RECEIPTS_ADDRESS) {
+    // demo:reset deleted the last demo workspace, which left its address in the history as previously used
+    // (migration 20261017000400). Released here, as the database owner, only when that was the demo's own: this
+    // workspace, or one that no longer exists. The released row stays, as every release does.
+    const kept = await prisma.receiptsAddress.findFirst({
+      where: { address: DEMO_RECEIPTS_ADDRESS, removedAt: { not: null }, releasedAt: null },
+    })
+    if (
+      kept &&
+      (kept.workspaceId === riverbend.id ||
+        !(await prisma.workspace.findFirst({ where: { id: kept.workspaceId } })))
+    )
+      await prisma.receiptsAddress.update({
+        where: { id: kept.id },
+        data: { releasedAt: new Date() },
+      })
     await prisma.workspace.update({
       where: { id: riverbend.id },
       data: { receiptsAddress: DEMO_RECEIPTS_ADDRESS },
     })
+  }
   await prisma.engagement.update({ where: { id: rys.id }, data: { code: 'RYS26' } })
 
   // Checks for the demo's months only, and a little access history (people named by email, as the API writes them).

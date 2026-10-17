@@ -41,6 +41,8 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   'PlatformRoleChange',
   // No workspace: what a platform admin set to highlight on payroll proof. Its insert policy reads app.admin and app.user_id.
   'HighlightSetting',
+  // No workspace data: every receipts address used (migration 20261017000400). Its policies read app.admin and app.system.
+  'ReceiptsAddress',
 ])
 
 type Fields = Map<string, string> // relation field name -> the model it points at

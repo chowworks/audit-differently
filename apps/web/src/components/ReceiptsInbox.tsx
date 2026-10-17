@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   DISMISS_REASONS,
   DISMISS_REASON_LABELS,
@@ -9,8 +9,10 @@ import {
   type InboundReceiptDto,
   type InboundReceiptStatus,
   type ReceiptsInboxDto,
+  type WorkspaceDetail,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
+import { ApiError } from '@/services/api'
 import { shortDate } from '@/lib/format'
 import { HandCard } from '@/components/HandCard'
 import { CopyPill } from '@/components/MatchReceipts'
@@ -18,6 +20,7 @@ import {
   Button,
   Card,
   Chip,
+  EmailText,
   Empty,
   ErrorNote,
   Field,
@@ -38,9 +41,9 @@ const TONE: Record<InboundReceiptStatus, Tone> = {
 }
 
 /**
- * The workspace's receipts address. The domain is the environment's; an owner picks the part before the @, once: it
- * never changes after that (receipts already sent there would go nowhere), so it shows read only. Platform admins see
- * it read only too.
+ * The workspace's receipts address. The domain is the environment's; an owner picks the part before the @, and may
+ * change it later (never clear it): the old one is then refused and never used again unless a platform admin releases
+ * it. Owners do not see past addresses. Platform admins see it read only.
  */
 export function ReceiptsAddress({
   w,
@@ -55,12 +58,16 @@ export function ReceiptsAddress({
     readEmailedReceiptsWithAi?: boolean
     aiAvailable?: boolean
   }
-  onChange: () => Promise<void>
+  /** Called with the workspace as the save returned it, so every place showing the address updates at once. */
+  onChange: (updated: WorkspaceDetail) => void | Promise<void>
 }) {
   const api = useApi()
   const [local, setLocal] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // "That address isn't available": said under the field, not at the top (CLAUDE.md, "Something wrong in a form").
+  const [taken, setTaken] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [changing, setChanging] = useState(false)
   const clean = local.trim().toLowerCase()
   const valid = !clean || RECEIPTS_ADDRESS_PATTERN.test(clean)
   const domain = w.receiptsEmail?.split('@')[1]
@@ -68,8 +75,11 @@ export function ReceiptsAddress({
     setBusy(true)
     setError(null)
     try {
-      await api.patch(`/workspaces/${w.id}/lists`, { readEmailedReceiptsWithAi: on })
-      await onChange()
+      await onChange(
+        await api.patch<WorkspaceDetail>(`/workspaces/${w.id}/lists`, {
+          readEmailedReceiptsWithAi: on,
+        })
+      )
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -80,11 +90,14 @@ export function ReceiptsAddress({
     ev.preventDefault()
     setBusy(true)
     setError(null)
+    setTaken(null)
     try {
-      await api.patch(`/workspaces/${w.id}/lists`, { receiptsAddress: clean })
-      await onChange()
+      await onChange(
+        await api.patch<WorkspaceDetail>(`/workspaces/${w.id}/lists`, { receiptsAddress: clean })
+      )
     } catch (e) {
-      setError((e as Error).message)
+      if (e instanceof ApiError && e.status === 409) setTaken(e.message)
+      else setError((e as Error).message)
     } finally {
       setBusy(false)
     }
@@ -97,10 +110,14 @@ export function ReceiptsAddress({
       </p>
       <ErrorNote message={error} />
       {w.receiptsAddress ? (
-        <>
+        <div className="flex flex-wrap items-center gap-3">
           <p className="ad-mono text-sm">{w.receiptsEmail ?? w.receiptsAddress}</p>
-          <small className="text-soft">Once set, the address does not change.</small>
-        </>
+          {w.canManage && (
+            <Button size="sm" kind="navy" onClick={() => setChanging(true)}>
+              Change address
+            </Button>
+          )}
+        </div>
       ) : w.canManage ? (
         <form onSubmit={save} className="flex flex-wrap items-center gap-2">
           <input
@@ -109,17 +126,25 @@ export function ReceiptsAddress({
             placeholder="your-team"
             value={local}
             maxLength={40}
-            onChange={(e) => setLocal(e.target.value)}
+            onChange={(e) => {
+              setLocal(e.target.value)
+              setTaken(null)
+            }}
           />
           <span className="ad-mono text-sm text-soft">@{domain ?? 'your receipts domain'}</span>
-          <Button type="submit" kind="primary" disabled={busy || !clean || !valid}>
+          <Button type="submit" kind="navy" disabled={busy || !clean || !valid}>
             Save address
           </Button>
-          <small className="w-full text-soft">
-            {valid
-              ? 'Choose carefully: once saved, the address does not change.'
-              : '3 to 40 lowercase letters, digits and hyphens, starting and ending with a letter or digit.'}
-          </small>
+          {!valid || taken ? (
+            <small className="ad-field-error w-full" role="alert">
+              {taken ??
+                '3 to 40 lowercase letters, digits and hyphens, starting and ending with a letter or digit.'}
+            </small>
+          ) : (
+            <small className="w-full text-soft">
+              Choose carefully: an address once used is never used again, by any workspace.
+            </small>
+          )}
         </form>
       ) : (
         <p className="text-sm">Not set yet. An owner sets it.</p>
@@ -150,7 +175,113 @@ export function ReceiptsAddress({
           </small>
         </div>
       )}
+      {changing && w.receiptsAddress && (
+        <ChangeReceiptsAddress
+          w={{ id: w.id, receiptsAddress: w.receiptsAddress, receiptsEmail: w.receiptsEmail }}
+          domain={domain}
+          onClose={() => setChanging(false)}
+          onChanged={async (updated) => {
+            setChanging(false)
+            await onChange(updated)
+          }}
+        />
+      )}
     </Card>
+  )
+}
+
+/**
+ * An owner changes the workspace's receipts address. The old one stops working at once: mail still sent to it is
+ * refused, and it is never offered to any workspace again (unless a platform admin releases it).
+ */
+function ChangeReceiptsAddress({
+  w,
+  domain,
+  onClose,
+  onChanged,
+}: {
+  w: { id: string; receiptsAddress: string; receiptsEmail: string | null }
+  domain: string | undefined
+  onClose: () => void
+  onChanged: (updated: WorkspaceDetail) => Promise<void>
+}) {
+  const api = useApi()
+  const [local, setLocal] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [taken, setTaken] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const field = useRef<HTMLInputElement>(null)
+  useEffect(() => field.current?.focus(), [])
+  const clean = local.trim().toLowerCase()
+  const fieldError = !clean
+    ? null
+    : taken
+      ? taken
+      : !RECEIPTS_ADDRESS_PATTERN.test(clean)
+        ? '3 to 40 lowercase letters, digits and hyphens, starting and ending with a letter or digit.'
+        : clean === w.receiptsAddress
+          ? 'That is the address now.'
+          : null
+  const save = async (ev: React.FormEvent) => {
+    ev.preventDefault()
+    if (!clean || fieldError) return
+    setBusy(true)
+    setError(null)
+    setTaken(null)
+    try {
+      await onChanged(
+        await api.patch<WorkspaceDetail>(`/workspaces/${w.id}/lists`, { receiptsAddress: clean })
+      )
+    } catch (e) {
+      // Taken, or kept as another's old address: said under the field. Anything else, at the top.
+      if (e instanceof ApiError && e.status === 409) setTaken(e.message)
+      else setError((e as Error).message)
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal title="Change the receipts address" onClose={onClose}>
+      <form onSubmit={save} className="ad-change-address">
+        <ErrorNote message={error} />
+        <div className="ad-change-address-lead">
+          <p>
+            <strong>
+              Mail to <span className="ad-mono">{w.receiptsEmail ?? w.receiptsAddress}</span> is
+              refused from the moment you change it.
+            </strong>
+          </p>
+          <ol>
+            <li>Tell your owners and bookkeepers the new address.</li>
+            <li>Ask vendors who send receipts there to use it too.</li>
+            <li>The old address can't be chosen again, here or by anyone else.</li>
+          </ol>
+        </div>
+        <Field label="New address, the part before the @" error={fieldError} required>
+          <div className="ad-change-address-input">
+            <input
+              ref={field}
+              className={`${inputClass} ad-mono`}
+              placeholder="your-team"
+              value={local}
+              maxLength={40}
+              onChange={(e) => {
+                setLocal(e.target.value)
+                setTaken(null)
+              }}
+            />
+            <span className="ad-mono text-sm text-soft">@{domain ?? 'your receipts domain'}</span>
+          </div>
+        </Field>
+        <div className="ad-change-address-foot">
+          <Button kind="ghost" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" kind="navy" disabled={busy || !clean || !!fieldError}>
+            Change address
+          </Button>
+        </div>
+      </form>
+    </Modal>
   )
 }
 
@@ -160,9 +291,12 @@ export function ReceiptsAddress({
  */
 export function ReceiptsInbox({
   workspaceId,
+  address,
   engagements,
 }: {
   workspaceId: string
+  /** The workspace's receipts email as the page has it, so a change shows here at once (the inbox's own is older). */
+  address: string | null
   engagements: EngagementSummary[]
 }) {
   const api = useApi()
@@ -193,14 +327,14 @@ export function ReceiptsInbox({
           Email in receipts is not set up on this server yet: it needs the email provider connected
           first. Receipts that came in elsewhere still show below.
         </Notice>
-      ) : data.address ? (
+      ) : address ? (
         <div className="mb-4">
           <HandCard
             title="Email receipts in"
             icon="📬"
             lead="Forward receipts to your workspace's email, with the engagement code in the subject."
           >
-            <CopyPill label="Email" value={data.address} />
+            <CopyPill label="Email" value={address} />
             <ol className="ad-hand-steps">
               <li>Send from the email you sign in with.</li>
               <li>Attach PDF, PNG or JPG files, up to 10 per email.</li>
@@ -220,7 +354,7 @@ export function ReceiptsInbox({
         <p className="text-sm text-soft">No emailed receipts yet.</p>
       ) : (
         <div className="ad-tablewrap">
-          <table className="ad-table">
+          <table className="ad-table ad-table-fit">
             <thead>
               <tr>
                 <th>Received</th>
@@ -234,8 +368,10 @@ export function ReceiptsInbox({
             <tbody>
               {data.items.map((r) => (
                 <tr key={r.id}>
-                  <td>{shortDate(r.receivedAt)}</td>
-                  <td className="ad-mono text-xs">{r.fromAddress ?? '—'}</td>
+                  <td className="whitespace-nowrap">{shortDate(r.receivedAt)}</td>
+                  <td className="ad-mono text-xs">
+                    {r.fromAddress ? <EmailText value={r.fromAddress} /> : '—'}
+                  </td>
                   <td>{r.subject || <span className="text-soft">(no subject)</span>}</td>
                   <td>
                     <Chip tone={TONE[r.status]}>{INBOUND_RECEIPT_STATUS_LABELS[r.status]}</Chip>
@@ -251,22 +387,30 @@ export function ReceiptsInbox({
                     {r.error && <span className="ad-table-sub">{r.error}</span>}
                   </td>
                   {data.canManage && (
-                    <td className="whitespace-nowrap text-right">
-                      {r.status === 'unmatched' && (
-                        <>
-                          <Button size="sm" kind="primary" onClick={() => setFiling(r)}>
-                            File it
-                          </Button>{' '}
-                          <Button size="sm" onClick={() => setDismissing(r)}>
-                            Dismiss
+                    <td>
+                      {/* Stacked, so the column stays narrow and the table fits its card. */}
+                      <div className="ad-row-actions">
+                        {r.status === 'unmatched' && (
+                          <>
+                            <Button size="sm" kind="navy" onClick={() => setFiling(r)}>
+                              File it
+                            </Button>
+                            <Button size="sm" kind="navy" onClick={() => setDismissing(r)}>
+                              Dismiss
+                            </Button>
+                          </>
+                        )}
+                        {(r.status === 'failed' || r.status === 'unmatched') && (
+                          <Button
+                            size="sm"
+                            kind="navy"
+                            disabled={busy === r.id}
+                            onClick={() => runAgain(r.id)}
+                          >
+                            Run again
                           </Button>
-                        </>
-                      )}{' '}
-                      {(r.status === 'failed' || r.status === 'unmatched') && (
-                        <Button size="sm" disabled={busy === r.id} onClick={() => runAgain(r.id)}>
-                          Run again
-                        </Button>
-                      )}
+                        )}
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -375,8 +519,10 @@ function FileModal({
           />
         </Field>
         <div className="flex justify-end gap-2">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" kind="primary" disabled={busy || !engagementId || !period}>
+          <Button kind="ghost" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" kind="navy" disabled={busy || !engagementId || !period}>
             File it
           </Button>
         </div>
@@ -443,7 +589,7 @@ function DismissModal({
           <Button type="button" kind="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" kind="primary" disabled={busy || !reason}>
+          <Button type="submit" kind="navy" disabled={busy || !reason}>
             Dismiss
           </Button>
         </div>

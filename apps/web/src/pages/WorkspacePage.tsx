@@ -62,7 +62,12 @@ function SectionHead({ icon, title, count }: { icon: IconName; title: string; co
 /** One workspace, on one page: its engagements, the people who support it, and its settings. */
 export function WorkspacePage() {
   const { id } = useParams()
-  const { data: w, error, reload } = useLoad<WorkspaceDetail>(id ? `/workspaces/${id}` : null)
+  const {
+    data: w,
+    error,
+    reload,
+    setData,
+  } = useLoad<WorkspaceDetail>(id ? `/workspaces/${id}` : null)
   const { data: all } = useLoad<EngagementSummary[]>('/engagements')
   const [filter, setFilter] = useState('')
   const [log, setLog] = useState(false)
@@ -267,8 +272,8 @@ export function WorkspacePage() {
           <People w={w} onChange={reload} />
           {w.myRole !== 'bookkeeper' && (
             <div className="mt-3 flex flex-wrap items-center gap-3">
-              <Button size="sm" onClick={() => setLog(true)}>
-                Access log
+              <Button size="sm" kind="navy" onClick={() => setLog(true)}>
+                View Workspace Access Log
               </Button>
               <span className="text-xs text-soft">
                 Who opened, downloaded, exported or changed what, and when. Searchable, exportable,
@@ -303,9 +308,10 @@ export function WorkspacePage() {
 
       {/* Row 3: emailed receipts */}
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
-        <section className="ad-section lg:col-span-3">
+        {/* min-w-0: a grid item is otherwise as wide as its table, and the page scrolls sideways. */}
+        <section className="ad-section min-w-0 lg:col-span-3">
           <SectionHead icon="mail" title="Reconcile emailed receipts" />
-          <ReceiptsInbox workspaceId={w.id} engagements={engagements} />
+          <ReceiptsInbox workspaceId={w.id} address={w.receiptsEmail} engagements={engagements} />
         </section>
       </div>
 
@@ -315,7 +321,7 @@ export function WorkspacePage() {
           <SectionHead icon="sliders" title="Workspace Settings" />
           <div className="grid gap-4">
             {w.canManage && <Rename w={w} onChange={reload} />}
-            <ReceiptsAddress w={w} onChange={reload} />
+            <ReceiptsAddress w={w} onChange={setData} />
           </div>
         </section>
       </div>
@@ -657,7 +663,7 @@ export function Rename({
           maxLength={120}
           onChange={(e) => setName(e.target.value)}
         />
-        <Button type="submit" kind="primary" disabled={busy || !clean || !dirty}>
+        <Button type="submit" kind="navy" disabled={busy || !clean || !dirty}>
           Rename
         </Button>
         <SavedMark at={saved}>Renamed</SavedMark>
@@ -674,8 +680,6 @@ export type DraftType = {
   appliesTo: TagTarget[]
   values: { key?: string; label: string }[]
 }
-
-const appliesWords = (a: TagTarget[]) => a.map((t) => TAG_TARGET_LABELS[t]).join(', ')
 
 const USE_WORDS: Record<TagTarget, [string, string]> = {
   expense: ['expense', 'expenses'],
@@ -694,8 +698,9 @@ export function usesWords(uses: Partial<Record<TagTarget, number>> = {}): string
 }
 
 /**
- * What saving `after` over `before` removes, one line per value: "Old Fund (Funding source) comes off 3 expenses and
- * 1 participant". Without counts (the admin view), it says every record that has it.
+ * What saving `after` over `before` removes, one line per value: "Old Fund (Funding source), on 3 expenses and
+ * 1 participant", or just "Old Fund (Funding source)" when it is on no record or the counts are unknown (the admin
+ * view).
  */
 export function tagRemovals(before: TagType[], after: DraftType[], uses?: TagUses): string[] {
   const kept = new Set(
@@ -706,10 +711,11 @@ export function tagRemovals(before: TagType[], after: DraftType[], uses?: TagUse
   return before.flatMap((t) =>
     t.values
       .filter((v) => !kept.has(`${t.key}:${v.key}`))
-      .map(
-        (v) =>
-          `${v.label} (${t.label}) comes off ${uses ? usesWords(uses[`${t.key}:${v.key}`]) : 'every record that has it'}`
-      )
+      .map((v) => {
+        const on = uses?.[`${t.key}:${v.key}`]
+        const used = on && Object.values(on).some((n) => (n ?? 0) > 0)
+        return `${v.label} (${t.label})${used ? `, on ${usesWords(on)}` : ''}`
+      })
   )
 }
 
@@ -731,23 +737,21 @@ export function Tags({
   const api = useApi()
   const [types, setTypes] = useState<DraftType[]>(w.tagTypes)
   const [label, setLabel] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<number | null>(null)
   const [drafts, setDrafts] = useState<Record<number, string>>({})
   const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
-  const [confirming, setConfirming] = useState<string[] | null>(null)
+  // What saving would take off records, and the list that would be saved, waiting for the owner's yes.
+  const [confirming, setConfirming] = useState<{ removals: string[]; next: DraftType[] } | null>(
+    null
+  )
   useEffect(() => setTypes(w.tagTypes), [w.tagTypes])
-  const dirty = JSON.stringify(types) !== JSON.stringify(w.tagTypes)
   const admin = base.startsWith('/admin')
   const solid = admin ? 'navy' : 'primary'
   const change = (at: number, next: Partial<DraftType>) =>
     setTypes(types.map((t, n) => (n === at ? { ...t, ...next } : t)))
-  const addType = () => {
-    const v = label.trim()
-    if (v && !types.some((t) => t.label.toLowerCase() === v.toLowerCase()))
-      setTypes([...types, { label: v, appliesTo: [...TAG_TARGETS], values: [] }])
-    setLabel('')
-  }
+  const taken = types.some((t) => t.label.toLowerCase() === label.trim().toLowerCase())
   const addValue = (at: number) => {
     const v = (drafts[at] ?? '').trim()
     const t = types[at]!
@@ -755,57 +759,71 @@ export function Tags({
       change(at, { values: [...t.values, { label: v }] })
     setDrafts({ ...drafts, [at]: '' })
   }
-  const save = async (confirmed = false) => {
-    const removals = tagRemovals(w.tagTypes, types, w.tagUses)
+  /**
+   * Saves `next` as the workspace's tags. A save that takes a value off records waits for the owner's yes first (the
+   * confirm dialog), then runs again with `confirmed`. True once saved.
+   */
+  const save = async (next: DraftType[], confirmed = false): Promise<boolean> => {
+    const removals = tagRemovals(w.tagTypes, next, w.tagUses)
     if (removals.length && !confirmed) {
-      setConfirming(removals)
-      return
+      setConfirming({ removals, next })
+      return false
     }
     setConfirming(null)
     setBusy(true)
     setError(null)
-    setSaved(null)
     try {
-      await api.patch(`${base}/${w.id}/lists`, { tagTypes: types })
+      await api.patch(`${base}/${w.id}/lists`, { tagTypes: next })
       await onChange()
-      setSaved(Date.now())
+      return true
     } catch (e) {
       setError((e as Error).message)
+      return false
     } finally {
       setBusy(false)
     }
   }
-  // One tag type's editor (its name, what it applies to, its values), whichever layout shows it.
+  const closeEdit = () => {
+    setTypes(w.tagTypes)
+    setDrafts({})
+    setError(null)
+    setEditing(null)
+  }
+  const closeAdd = () => {
+    setAdding(false)
+    setLabel('')
+    setError(null)
+  }
+  // A new group is saved at once, then opens in Edit so its values go in next.
+  const addType = async () => {
+    const v = label.trim()
+    if (!v || taken) return
+    const next = [...types, { label: v, appliesTo: [...TAG_TARGETS], values: [] }]
+    if (await save(next)) {
+      closeAdd()
+      setEditing(next.length - 1)
+    }
+  }
+  const saveEdit = async () => {
+    if (await save(types)) setEditing(null)
+  }
+  const removeType = async (at: number) => {
+    if (await save(types.filter((_, n) => n !== at))) setEditing(null)
+  }
+  // One tag group's editor in the Edit dialog: its name, what it applies to, its values.
   const editor = (t: DraftType, at: number) => (
     <>
-      {w.canManage ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            className={`${inputClass} flex-1`}
-            aria-label={`Name of ${t.label || 'tag type'}`}
-            value={t.label}
-            onChange={(e) => change(at, { label: e.target.value })}
-          />
-          {!(admin && t.key) && (
-            <Button
-              size="sm"
-              kind="ghost"
-              aria-label={`Remove ${t.label}`}
-              onClick={() => setTypes(types.filter((_, n) => n !== at))}
-            >
-              ✕
-            </Button>
-          )}
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-baseline gap-2">
-          <b>{t.label}</b>
-          <span className="text-xs text-soft">{appliesWords(t.appliesTo)}</span>
-        </div>
-      )}
-      {w.canManage && (
-        <div className="mt-2 flex flex-wrap gap-3 text-sm">
-          <span className="text-soft">Applies to</span>
+      <Field label="Tag Group" required>
+        <input
+          className={inputClass}
+          value={t.label}
+          onChange={(e) => change(at, { label: e.target.value })}
+        />
+      </Field>
+      {/* A group of checkboxes: the field's look without a <label> around them. */}
+      <div className="ad-field mt-2">
+        <span>Applies To</span>
+        <div className="flex flex-wrap gap-3 text-sm">
           {TAG_TARGETS.map((x) => (
             <label key={x} className="inline-flex items-center gap-1">
               <input
@@ -823,15 +841,14 @@ export function Tags({
             </label>
           ))}
         </div>
-      )}
-      <ul className={`ad-taglist mt-2 ${admin ? 'ad-taglist-solid' : ''}`}>
-        {t.values.map((v, n) => (
-          <li
-            key={v.key ?? `new-${n}`}
-            className={w.canManage && !(admin && v.key) ? undefined : 'pr-3'}
-          >
-            {w.canManage ? (
-              // Renaming keeps the value's key, so every record that has it shows the new name.
+      </div>
+      {/* A group of controls, not one: the field's look without a <label> around them. */}
+      <div className="ad-field mt-2">
+        <span>Tag Values</span>
+        <ul className={`ad-taglist ${admin ? 'ad-taglist-solid' : ''}`}>
+          {t.values.map((v, n) => (
+            <li key={v.key ?? `new-${n}`} className={!(admin && v.key) ? undefined : 'pr-3'}>
+              {/* Renaming keeps the value's key, so every record that has it shows the new name. */}
               <input
                 aria-label={`Name of ${v.label || 'this value'} in ${t.label}`}
                 value={v.label}
@@ -842,28 +859,24 @@ export function Tags({
                   })
                 }
               />
-            ) : (
-              <span>{v.label}</span>
-            )}
-            {w.canManage && !(admin && v.key) && (
-              <button
-                type="button"
-                aria-label={`Remove ${v.label}`}
-                onClick={() => change(at, { values: t.values.filter((_, x) => x !== n) })}
-              >
-                ✕
-              </button>
-            )}
-          </li>
-        ))}
-        {t.values.length === 0 && <li className="text-soft">No values yet.</li>}
-      </ul>
-      {w.canManage && (
+              {!(admin && v.key) && (
+                <button
+                  type="button"
+                  aria-label={`Remove ${v.label}`}
+                  onClick={() => change(at, { values: t.values.filter((_, x) => x !== n) })}
+                >
+                  ✕
+                </button>
+              )}
+            </li>
+          ))}
+          {t.values.length === 0 && <li className="text-soft">No values yet.</li>}
+        </ul>
         <div className="mt-2 flex gap-2">
           <input
             className={`${inputClass} ad-input-sm`}
             placeholder="Add a value, e.g. Under 18"
-            aria-label={`Add a value to ${t.label || 'this tag type'}`}
+            aria-label={`Add a value to ${t.label || 'this tag group'}`}
             value={drafts[at] ?? ''}
             onChange={(e) => setDrafts({ ...drafts, [at]: e.target.value })}
             onKeyDown={(e) => {
@@ -873,20 +886,25 @@ export function Tags({
               }
             }}
           />
-          <Button
-            size="sm"
-            kind={admin ? 'navy' : undefined}
-            onClick={() => addValue(at)}
-            disabled={!drafts[at]?.trim()}
-          >
-            Add
+          <Button size="sm" kind="navy" onClick={() => addValue(at)} disabled={!drafts[at]?.trim()}>
+            Add Value
           </Button>
         </div>
-      )}
+      </div>
     </>
   )
+  const t = editing == null ? undefined : types[editing]
   return (
-    <Card title="Tags">
+    <Card
+      title="Tags"
+      aside={
+        w.canManage && (
+          <Button kind={solid} size="sm" onClick={() => setAdding(true)}>
+            + Add Tag Group
+          </Button>
+        )
+      }
+    >
       <p className="mb-3 text-sm text-soft">
         Labels you put on engagements, expenses, payroll items and participants, such as a source of
         funds or an age group. A new engagement picks its sources of funds from this list, and the
@@ -894,54 +912,97 @@ export function Tags({
         filtered by a tag. Owners keep the list; a participant's tags are personal, and the access
         log names the field, never the tag.
       </p>
-      <ErrorNote message={error} />
-      <TagsTable types={types} canManage={w.canManage} editor={editor} />
+      {!adding && editing == null && <ErrorNote message={error} />}
+      <TagsTable types={types} canManage={w.canManage} onEdit={setEditing} />
       {!w.canManage && (
         <p className="mt-3 text-xs text-soft">
           Need another tag? Suggest it under Suggest configuration data.
         </p>
       )}
-      {w.canManage && (
-        <>
-          <div className="mt-3 flex gap-2">
-            <input
-              className={inputClass}
-              placeholder="Add a tag type, e.g. Age group"
-              aria-label="Add a tag type"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  addType()
-                }
-              }}
-            />
-            <Button kind={admin ? 'navy' : undefined} onClick={addType} disabled={!label.trim()}>
-              Add
-            </Button>
+      {w.canManage && admin && (
+        <p className="mt-2 text-xs text-soft">
+          Only the workspace's owners remove a saved tag: it comes off their records.
+        </p>
+      )}
+      {t && editing != null && (
+        <Modal title={`Edit ${t.label || 'tag group'}`} onClose={closeEdit}>
+          <div className="grid gap-3">
+            <ErrorNote message={error} />
+            {editor(t, editing)}
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                {!(admin && t.key) && (
+                  <Button
+                    kind="ghost"
+                    className="text-danger"
+                    onClick={() => void removeType(editing)}
+                    disabled={busy}
+                  >
+                    Remove tag group
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button kind="ghost" onClick={closeEdit} disabled={busy}>
+                  Cancel
+                </Button>
+                <Button
+                  kind="navy"
+                  onClick={() => void saveEdit()}
+                  disabled={busy || !t.label.trim()}
+                >
+                  Save
+                </Button>
+              </div>
+            </div>
           </div>
-          {admin && (
-            <p className="mt-2 text-xs text-soft">
-              Only the workspace's owners remove a saved tag: it comes off their records.
-            </p>
-          )}
-          <div className="mt-3 flex items-center justify-end gap-3">
-            <SavedMark at={saved}>Tags saved</SavedMark>
-            <Button kind={solid} size="sm" onClick={() => void save()} disabled={busy || !dirty}>
-              Save tags
-            </Button>
-          </div>
-        </>
+        </Modal>
+      )}
+      {adding && (
+        <Modal title="Add a tag group" onClose={closeAdd}>
+          <form
+            className="grid gap-4"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void addType()
+            }}
+          >
+            <ErrorNote message={error} />
+            <Field
+              label="Name"
+              required
+              hint="For example Age group. Its values go in next."
+              error={taken ? 'This workspace already has a tag group of that name' : null}
+            >
+              <input
+                className={inputClass}
+                value={label}
+                autoFocus
+                onChange={(e) => setLabel(e.target.value)}
+              />
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button type="button" kind="ghost" onClick={closeAdd} disabled={busy}>
+                Cancel
+              </Button>
+              <Button type="submit" kind="navy" disabled={busy || !label.trim() || taken}>
+                Add
+              </Button>
+            </div>
+          </form>
+        </Modal>
       )}
       {confirming && (
         <Modal title="Remove these tags?" onClose={() => setConfirming(null)}>
           <div className="grid gap-3 text-sm">
-            <p>
-              Each comes off every record that has it, and stays off. The access log keeps a line.
+            <p className="font-bold">
+              <span aria-hidden="true">⚠️</span> Removing a tag value removes it from every record
+              that has it today. This is a permanent action and is recorded in the workspace
+              history.
             </p>
+            <p>Removing the following tags:</p>
             <ul className="list-disc pl-5">
-              {confirming.map((c) => (
+              {confirming.removals.map((c) => (
                 <li key={c}>{c}</li>
               ))}
             </ul>
@@ -949,7 +1010,13 @@ export function Tags({
               <Button kind="ghost" onClick={() => setConfirming(null)}>
                 Cancel
               </Button>
-              <Button kind="danger" onClick={() => void save(true)} disabled={busy}>
+              <Button
+                kind="danger"
+                onClick={() =>
+                  void save(confirming.next, true).then((ok) => ok && setEditing(null))
+                }
+                disabled={busy}
+              >
                 Remove and save
               </Button>
             </div>

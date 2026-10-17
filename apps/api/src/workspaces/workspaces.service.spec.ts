@@ -660,8 +660,22 @@ describe('WorkspacesService', () => {
   })
 
   describe('the receipts address', () => {
+    /**
+     * The database's two answers: whether an address is taken (`taken`), and the workspace's address as the change
+     * reads and locks it in its transaction (`locked`), which another owner may have changed since the page loaded.
+     */
+    const answers = (
+      prisma: ReturnType<typeof service>['prisma'],
+      locked: string | null,
+      taken = false
+    ) =>
+      prisma.$queryRaw.mockImplementation(async (q: Prisma.Sql) =>
+        q.sql.includes('FOR UPDATE') ? [{ receiptsAddress: locked }] : [{ taken }]
+      )
+
     it('lets an owner set it, lowercased, and shows the full address once the domain is set', async () => {
       const { service: s, prisma, log } = service()
+      answers(prisma, null)
       await s.setReceiptsAddress(member('owner'), W, ' Riverbend-Youth ')
       expect(prisma.workspace.update).toHaveBeenCalledWith({
         where: { id: W },
@@ -691,15 +705,93 @@ describe('WorkspacesService', () => {
       }
     })
 
-    it('refuses to change an address once it is set (409) and writes nothing', async () => {
+    it('lets an owner change it, with one line naming both addresses', async () => {
       const { service: s, prisma, log } = service()
       prisma.workspace.findFirst.mockResolvedValueOnce({
         ...workspace(),
         receiptsAddress: 'riverbend-youth',
       })
-      await expect(s.setReceiptsAddress(member('owner'), W, 'riverbend-two')).rejects.toThrow(
-        ConflictException
+      answers(prisma, 'riverbend-youth')
+      await s.setReceiptsAddress(member('owner'), W, 'riverbend-two')
+      expect(prisma.workspace.update).toHaveBeenCalledWith({
+        where: { id: W },
+        data: { receiptsAddress: 'riverbend-two' },
+      })
+      expect(log.entries).toEqual([
+        expect.objectContaining({
+          description: 'Changed the receipts address from riverbend-youth to riverbend-two',
+          changes: [
+            { field: 'Receipts address', before: 'riverbend-youth', after: 'riverbend-two' },
+          ],
+        }),
+      ])
+    })
+
+    it('names the address it replaced as read inside its own transaction, when another owner changed it since', async () => {
+      const { service: s, prisma, log } = service()
+      // The page (and the first read) still say riverbend-youth; another owner changed it to riverbend-mid since.
+      prisma.workspace.findFirst.mockResolvedValueOnce({
+        ...workspace(),
+        receiptsAddress: 'riverbend-youth',
+      })
+      answers(prisma, 'riverbend-mid')
+      await s.setReceiptsAddress(member('owner'), W, 'riverbend-two')
+      const locked = prisma.$queryRaw.mock.calls.find(([q]) =>
+        (q as Prisma.Sql).sql.includes('FOR UPDATE')
+      )![0] as Prisma.Sql
+      expect(locked.values).toEqual([W])
+      // Locked before the change, in the same transaction.
+      expect(log.change.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.$queryRaw.mock.invocationCallOrder.at(-1)!
       )
+      expect(prisma.$queryRaw.mock.invocationCallOrder.at(-1)!).toBeLessThan(
+        prisma.workspace.update.mock.invocationCallOrder[0]!
+      )
+      expect(log.entries).toEqual([
+        expect.objectContaining({
+          description: 'Changed the receipts address from riverbend-mid to riverbend-two',
+          changes: [{ field: 'Receipts address', before: 'riverbend-mid', after: 'riverbend-two' }],
+        }),
+      ])
+    })
+
+    it('changes and logs nothing when another owner set the same address a moment ago', async () => {
+      const { service: s, prisma, log } = service()
+      prisma.workspace.findFirst.mockResolvedValueOnce({
+        ...workspace(),
+        receiptsAddress: 'riverbend-youth',
+      })
+      answers(prisma, 'riverbend-two')
+      await s.setReceiptsAddress(member('owner'), W, 'riverbend-two')
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+
+    it('refuses to clear an address once it is set (400) and writes nothing', async () => {
+      const { service: s, prisma, log } = service()
+      for (const empty of ['', '  ', null]) {
+        prisma.workspace.findFirst.mockResolvedValueOnce({
+          ...workspace(),
+          receiptsAddress: 'riverbend-youth',
+        })
+        await expect(s.setReceiptsAddress(member('owner'), W, empty)).rejects.toThrow(
+          'changed, never cleared'
+        )
+      }
+      expect(prisma.workspace.update).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+
+    it("refuses an address any workspace uses or used before (409), asked of the database first, in words that don't say which", async () => {
+      const { service: s, prisma, log } = service()
+      prisma.workspace.findFirst.mockResolvedValueOnce({
+        ...workspace(),
+        receiptsAddress: 'riverbend-youth',
+      })
+      answers(prisma, 'riverbend-youth', true)
+      const refused = s.setReceiptsAddress(member('owner'), W, 'riverbend-old')
+      await expect(refused).rejects.toThrow(ConflictException)
+      await expect(refused).rejects.toThrow("That address isn't available; choose another")
       expect(prisma.workspace.update).not.toHaveBeenCalled()
       expect(log.entries).toEqual([])
     })
@@ -714,11 +806,13 @@ describe('WorkspacesService', () => {
         ForbiddenException
       )
       await expect(s.setReceiptsAddress(stranger(), W, 'abc')).rejects.toThrow(NotFoundException)
+      // Taken between the check and the change (the unique index): the same words as the check's.
+      answers(prisma, null)
       prisma.workspace.update.mockRejectedValueOnce(
         new Prisma.PrismaClientKnownRequestError('taken', { code: 'P2002', clientVersion: 'x' })
       )
       await expect(s.setReceiptsAddress(member('owner'), W, 'abc')).rejects.toThrow(
-        ConflictException
+        "That address isn't available; choose another"
       )
     })
 

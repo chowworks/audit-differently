@@ -1541,3 +1541,44 @@ export interface PayrollUploadResult {
   documentIds: string[]
   report: ReportDetail
 }
+
+/**
+ * One receipts address in Admin tools → Email administration → Receipts addresses: a workspace's current address, one
+ * it used before, or one a platform admin released (GitHub issue #24). A previously used address is refused when mail
+ * arrives until an admin releases it; the counts are worked out from those refused emails, never stored.
+ */
+export interface AdminReceiptsAddressDto {
+  id: string
+  /** The local part, as the workspace set it. */
+  address: string
+  /** `<local part>@<domain>`, when this server has a receipts domain. */
+  email: string | null
+  workspaceId: string
+  /** The workspace's name today; null when the workspace was deleted. */
+  workspaceName: string | null
+  firstUsedAt: string
+  /** When it stopped being the workspace's address; null while it is current. */
+  removedAt: string | null
+  /** Emails that arrived since removal, all refused; 0 while current, and once released. */
+  receivedSinceRemoval: number
+  /** When the last of them arrived; null when none has. */
+  lastReceivedAt: string | null
+  /** When a platform admin released it, and who (their email); null until then. */
+  releasedAt: string | null
+  releasedByEmail: string | null
+  /** Only a previously used address not yet released is released, never a workspace's current one. */
+  canRelease: boolean
+}
+
+/** GET /admin/receipts-addresses. */
+export interface AdminReceiptsAddressesDto {
+  items: AdminReceiptsAddressDto[]
+}
+
+/**
+ * POST /admin/receipts-addresses/:id/release: the emails since removal the admin saw when they decided. Refused (409)
+ * when more have arrived since.
+ */
+export interface ReleaseReceiptsAddressBody {
+  receivedSinceRemoval: number
+}

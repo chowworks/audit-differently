@@ -50,7 +50,11 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   `packages/types`): `owner` (runs the workspace, signs the report), `bookkeeper` (records, attaches,
   records the month-end closing, submits), `auditor` (reads everything, personal records included, changes
   nothing). Owners keep the workspace's tags (`Workspace.tagTypes`) under Configuration Data on the
-  workspace's page, and set its receipts address once (`receiptsAddress`; it never changes, and admins don't set it).
+  workspace's page, and set its receipts address (`receiptsAddress`); an owner may change it but never clear it, and admins don't set it.
+  Every address used is kept in `ReceiptsAddress` (migration `20261017000400`); one in use or used before and not
+  released is never chosen again, and the owner is told only "That address isn't available; choose another". Mail to a
+  previously used address is refused and kept with no sender or subject, so its count is worked out, never stored.
+  Owners don't see past addresses (owner's decision, 2026-10-17).
 - **Budget lines** = `BudgetLine` rows of an engagement: its approved budget, as the contract states it (step 4, Manage
   Budget). Each has a name, the line of the funder's monthly report it is on (`reportLine`; the name defaults to it,
   since this funder budgets by report line), an approved amount and a note. **Every expense is spent against one**
@@ -80,10 +84,14 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   workspace and manages its people and lists, reads its suggestions (`/admin/workspaces/...`), and makes or unmakes
   other admins (`/admin/users`, `/admin/admins`; never their own role; at most 20, `MAX_PLATFORM_ADMINS`; every
   attempt that reaches Clerk is an append-only `PlatformRoleChange` row, shown as "Admin changes"). Platform admins also see and rerun the emailed receipts that went nowhere or were refused or failed, metadata
-  only, never attachments (owner's decision, 2026-10-16; Admin tools → Email administration). A rerun of a workspace's
+  only, never attachments (owner's decision, 2026-10-16; Admin tools → Email administration). Email administration also lists every receipts address used, with the
+  emails received since removal and when the last arrived (worked out from the refused emails), and an admin releases a
+  previously used one (never a current one; no quiet period). The row keeps who released it and when (set by the
+  database, `ReceiptsAddress_4_release`), its kept refused emails go, so its count starts again, and nothing is written
+  in the workspace's access log (owner's decisions, 2026-10-17). A rerun of a workspace's
   row writes its access-log line in the same transaction, and the database refuses it without one (`app_admin_reran`,
   migration `20261016000100`). The signed-in person's own list is "Workspace Manager"; Admin tools has tiles (Manage admins,
-  Manage workspaces, Email administration). Workspace level
+  Manage workspaces, Email administration, Payroll proof highlighting, Matching statistics). Workspace level
   only: an admin reads no engagement, record, access log or deletion summary and deletes no workspace, and where they
   are also a member they have exactly that membership's rights. An admin **may seat themself** in any workspace, in
   any role (owner's decision, 2026-10-14), and then reads its records as that member; the log line says so ("…
@@ -230,7 +238,10 @@ of two.
   `runAsSystem` from `apps/api/src/core/tenant-context.ts`, kept to short, reviewed paths (today: the
   placeholder User row of an owner's invitation, and handing that placeholder's memberships to the real account
   on first sign-in, `GET /me`; and the emailed-receipts queue before a sender is known,
-  `apps/api/src/inbound/inbound.service.ts`, whose filing then runs as the sending member; and the job that reads a
+  `apps/api/src/inbound/inbound.service.ts`, whose filing then runs as the sending member, and which also refuses mail
+  to a previously used receipts address, keeps it with no sender until the address is released, and refuses an email
+  that arrived before its workspace took the address (`ReceiptsAddress`, platform-level, read only under `app.admin`
+  and `app.system`); and the job that reads a
   payroll match's files, `apps/api/src/payroll/payroll-match.worker.ts`, which the database lets change only what
   reading fills, migration `20261016001300`). It sees every workspace and marks the connection `app.system = on`; only the
   `User` and `Membership` write policies and the `User` and `Workspace` read policies admit that mark (no longer
@@ -418,7 +429,13 @@ read-only subagents, one per area of the diff, before merging:
 1. Split the diff by area (for example API and rules, data model and migrations, web app, config). Each
    reviewer reads every hunk in its area and reports at most 8 ranked findings, each with a concrete failure
    scenario. Tell each what earlier reviews already fixed.
-2. Verify the top claims against the code, then report at most 15 findings, one line each (`file:line — summary`).
+2. Verify the top claims against the code, then report at most 15 findings to the owner. Each finding gives the
+   place (`file:line`), then **a scenario in plain words**: who does what, on which screen, and what goes wrong for
+   them (for example "The CEO uploads March's payroll; Save fails halfway; the two months it reopened stay reopened
+   with nothing attached"). Then the fix, also in plain words. No internal names or shorthand the owner would have to
+   ask about ("the owner's run", "the general list", "release log"): say what it is on the screen or in the database
+   the first time ("the upload the owner started, kept on the server until Save"). Say how many findings there were
+   in all, and list the ones left out with one line each on why.
 3. Fix in parallel by area with disjoint file lists, then run the CI gates locally (`npm run lint`,
    `npm run format:check`, `npm run typecheck`, `npm run build`, `npm run test`) before pushing. After a clean
    build confirm `apps/api/dist/main.js` exists.

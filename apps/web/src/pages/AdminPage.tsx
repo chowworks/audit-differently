@@ -34,9 +34,9 @@ const TOOLS: {
     to: '/admin/email',
     icon: 'mail',
     title: 'Email administration',
-    text: 'See emailed receipts that went nowhere or were refused or failed, and run them again.',
-    sub: "Emails that didn't get filed. Fix the cause, then run one again.",
-    how: "An email shows here when it reached no workspace (an unknown address, a sender who couldn't be verified, or a failure before anyone knew whose it was), or when a workspace's email was refused or failed. You see who sent it, to which address and its subject, never its attachments. Run again puts it back in the queue; the page checks what became of it for a minute. Emails are removed 30 days after they arrive.",
+    text: 'See emailed receipts that went nowhere or were refused or failed, run them again, and release old receipts addresses.',
+    sub: "Emails that didn't get filed, and every receipts address used. Fix the cause, then run one again.",
+    how: "An email shows here when it reached no workspace (an unknown address, a sender who couldn't be verified, or a failure before anyone knew whose it was), or when a workspace's email was refused or failed. You see who sent it, to which address and its subject, never its attachments. Run again puts it back in the queue; the page checks what became of it for a minute. Emails are removed 30 days after they arrive. Mail sent to a previously used receipts address isn't listed here: it's counted on that address under Previously used addresses.",
   },
   {
     to: '/admin/highlights',
@@ -113,12 +113,16 @@ export function AdminToolHead({ to }: { to: string }) {
   )
 }
 
-/** The longer explanation of a tool, closed until asked for; it goes at the end of the tool's main card. */
-export function AdminHow({ to }: { to: string }) {
+/**
+ * The longer explanation of a tool, closed until asked for; it goes at the end of the tool's main card. A tool with a
+ * second section (Email administration's receipts addresses) gives that section's own `text`.
+ */
+export function AdminHow({ to, text }: { to: string; text?: React.ReactNode }) {
   return (
     <details className="ad-toolhow">
       <summary>How this works</summary>
-      <p>{tool(to).how}</p>
+      {/* A string is one paragraph; anything else (a bold line and a list) is shown as it is. */}
+      {text && typeof text !== 'string' ? text : <p>{text ?? tool(to).how}</p>}
     </details>
   )
 }
