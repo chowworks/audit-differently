@@ -97,6 +97,7 @@ async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Findi
         totalCost: true,
         date: true,
         reportLine: true,
+        budgetLineId: true,
         allocatedAmount: true,
       },
     })
@@ -116,6 +117,14 @@ async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Findi
       dueDay: report.engagement.reportDueDay,
       budget,
       previouslyBilled,
+      budgetLines: report.engagement.budgetLines.map((b) => ({
+        id: b.id,
+        name: b.name,
+        amount: Number(b.amount),
+        previouslyBilled: earlier
+          .filter((e) => e.budgetLineId === b.id)
+          .reduce((t, e) => t + Number(e.allocatedAmount), 0),
+      })),
       submittedAt: report.submittedAt?.toISOString() ?? null,
       expenses: report.expenses.map((e) => ({
         id: e.id,
@@ -127,6 +136,7 @@ async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Findi
         allocatedAmount: Number(e.allocatedAmount),
         allocationType: e.allocationType as 'direct' | 'payroll' | 'usage',
         reportLine: e.reportLine as ReportLine,
+        budgetLineId: e.budgetLineId,
         documents: e.documents.map((d) => d.purpose as DocumentPurpose),
         proofs: e.documents.map(proofOf),
       })),

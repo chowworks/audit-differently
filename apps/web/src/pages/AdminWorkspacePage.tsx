@@ -3,7 +3,7 @@ import type { AdminWorkspaceDetail } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
 import { shortDate } from '@/lib/format'
 import { Card, Empty, ErrorNote } from '@/components/ui'
-import { BudgetItems, People, Rename, Tags } from '@/pages/WorkspacePage'
+import { People, Rename, Tags } from '@/pages/WorkspacePage'
 import { ReceiptsAddress } from '@/components/ReceiptsInbox'
 import { AdminCrumbs } from '@/pages/AdminPage'
 
@@ -57,7 +57,6 @@ export function AdminWorkspacePage() {
           <People w={w} onChange={reload} base={BASE} findPeople />
           <Rename w={w} onChange={reload} base={BASE} />
           <ReceiptsAddress w={{ ...w, canManage: false }} onChange={reload} />
-          <BudgetItems w={w} onChange={reload} base={BASE} />
           <Tags w={w} onChange={reload} base={BASE} />
           <Card title="Suggestions">
             {w.suggestions.length === 0 && <Empty>No suggestions yet.</Empty>}

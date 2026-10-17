@@ -74,9 +74,13 @@ export const DEFAULT_BUDGET_ITEMS: readonly BudgetItem[] = [
   { key: 'wex', label: 'Work Experience (WEX)', reportLine: 'wex' },
 ]
 
-/** A budget line as the budget section adds or changes it. `category` is a budget item's key (add only). */
+/**
+ * A budget line as the budget section adds or changes it: the line as the contract's approved budget names it, the line
+ * of the funder's monthly form it rolls up to (fixed once it has spending), its approved amount and a short note.
+ */
 export interface BudgetLineInput {
-  category?: string
+  name?: string
+  reportLine?: ReportLine
   amount?: number | null
   narrative?: string | null
 }
@@ -325,6 +329,7 @@ export const CHECK_CODES = [
   'late-submission',
   'unallowable-category',
   'proof-mismatch',
+  'no-budget-line',
 ] as const
 export type CheckCode = (typeof CHECK_CODES)[number]
 
@@ -511,13 +516,18 @@ export interface ExpenseInput {
   allocatedAmount: number
   allocationType: AllocationType
   allocationNote?: string | null
-  reportLine: ReportLine
+  /** The engagement's budget line it is spent against; its form line follows from it. */
+  budgetLineId: string | null
   /** Tags from the workspace's list (`<type key>:<value key>`). */
   tags?: string[]
 }
 
 export interface ExpenseDto extends ExpenseInput {
   id: string
+  /** The funder's form line, from the budget line (as it was, for an expense still without one). */
+  reportLine: ReportLine
+  /** The budget line's name; null while the expense has none ("needs a budget line"). */
+  budgetLineName: string | null
   memo: string | null
   account: string | null
   allocationNote: string | null
@@ -535,6 +545,18 @@ export interface CheckDto {
   expenseId: string | null
   participantId: string | null
   wexPaymentId: string | null
+}
+
+/** One of the engagement's budget lines in a month: approved, spent before, spent this month, and what is left. */
+export interface BudgetLineRow {
+  id: string
+  name: string
+  reportLine: ReportLine
+  budget: number
+  previouslyBilled: number
+  billedThisPeriod: number
+  cumulative: number
+  remaining: number
 }
 
 export interface LineRow {
@@ -648,16 +670,18 @@ export interface EngagementDetail extends EngagementSummary {
   eligibilityItems: EligibilityItemDef[]
   budgetLines: {
     id: string
-    /** The budget item's key. */
-    category: string
-    /** The item's label in the workspace's list today (its key, if the item has left the list). */
-    label: string
+    /** The line as the contract's approved budget names it. */
+    name: string
     reportLine: ReportLine
     amount: number
     narrative: string | null
+    /** Whether any expense is spent against it: then it keeps its form line and is not removed. */
+    hasSpending: boolean
+    /** Charged to it to date, every month together. */
+    spent: number
   }[]
-  /** The workspace's budget items, for adding a line. */
-  budgetOptions: BudgetItem[]
+  /** Names used for budget lines in the workspace's other engagements (and its old list), to suggest when adding one. */
+  budgetNameSuggestions: string[]
   /** Every tag type of the workspace, for tagging the engagement and its participants. */
   tagTypes: TagType[]
   participants: ParticipantDto[]
@@ -968,6 +992,8 @@ export interface ReportDetail {
     authorizerOrganization: string | null
   }
   lines: LineRow[]
+  /** The engagement's budget lines, each with what was spent against it. */
+  budgetLines: BudgetLineRow[]
   expenses: ExpenseDto[]
   wexPayments: WexPaymentDto[]
   checks: CheckDto[]

@@ -49,8 +49,16 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   (`docs/tenant-isolation.md`). Its people are `Membership` rows with one role each (`ROLES` in
   `packages/types`): `owner` (runs the workspace, signs the report), `bookkeeper` (records, attaches,
   records the month-end closing, submits), `auditor` (reads everything, personal records included, changes
-  nothing). Owners keep the workspace's lists (`Workspace.fundingSources`, `budgetItems`, `tagTypes`) on the workspace's
-  settings page, and set its receipts address once (`receiptsAddress`; it never changes, and admins don't set it).
+  nothing). Owners keep the workspace's lists (`Workspace.fundingSources`, `tagTypes`) under Configuration Data on the
+  workspace's page, and set its receipts address once (`receiptsAddress`; it never changes, and admins don't set it).
+- **Budget lines** = `BudgetLine` rows of an engagement: its approved budget, as the contract states it (step 4, Manage
+  Budget). Each has a name, the line of the funder's monthly report it is on (`reportLine`; the name defaults to it,
+  since this funder budgets by report line), an approved amount and a note. **Every expense is spent against one**
+  (`Expense.budgetLineId`; its `reportLine` follows from it, trigger `Expense_4_budget_line`, migration
+  `20261017000200`), so spending is compared with the approved budget line by line: the month's budget tile, the
+  `budget-overrun` check, a blocking `no-budget-line` check, and the audit package's `Budget vs actual.csv`. A line with
+  spending keeps its report line and is not removed. Imports map categories to budget lines, saved by line name.
+  `Workspace.budgetItems` (the old workspace list) is no longer shown or edited; it stays in the database for now.
 - **Tags** = `Workspace.tagTypes` (owner-kept types and values, stable keys; the built-in "Funding source" type's
   values are `fundingSources`), applied as `tags` (`<type>:<value>`) on `Expense`, `WexPayment` and `Participant`,
   from the list only, never free text. A source in use can't be removed or renamed. Participant and payroll tags
@@ -283,8 +291,9 @@ of two.
   database off this machine without `sslmode=require`; a Railway environment without `REQUIRE_TENANT_RLS=on`, a
   Clerk key or the R2 bucket; production without `NODE_ENV=production`, `TRUST_PROXY` or a live Clerk key. Add
   to it rather than to prose when a rule can be checked.
-- `npm run demo:reset -w @ad/api -- --confirm-host <host:port>` empties the dev database and reseeds. It is a
-  shared database: say what will change and get a yes first ("Database" below). It refuses production.
+- `npm run demo:reset -w @ad/api -- --confirm-host <host:port>` removes the demo workspaces (the full demo and Harbor
+  Tech) and reseeds them; people, Terms acceptances and any other workspace stay, as production's `demo:seed` leaves
+  them. It is a shared database: say what will change and get a yes first ("Database" below). It refuses production.
 - The API loads `@ad/types` from its built `dist`, Vite from `src`. After changing `packages/types`, run
   `npm run build -w @ad/types` and restart the API, or the API runs with the old constants (undefined roles
   and lists, and nothing fails loudly).

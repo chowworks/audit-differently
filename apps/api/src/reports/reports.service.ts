@@ -12,7 +12,6 @@ import {
   PAYROLL_DOCUMENT_KINDS,
   PERSONAL_DOCUMENT_ROLES,
   REPORT_LINE_LABELS,
-  REPORT_LINES,
   type CheckDto,
   type DocumentPurpose,
   type ExpenseDto,
@@ -38,7 +37,7 @@ import { documentDto } from '../documents/document.dto'
 import { linkDocument, NothingChanged, unlessUnchanged } from '../documents/link'
 import type { StagedFile } from '../documents/staged-file'
 import { PrismaService } from '../prisma/prisma.service'
-import { computeLines } from './report-lines'
+import { computeBudgetLines, computeLines } from './report-lines'
 import { recordReopening, REOPENED, REPORT_FIELDS } from './back-to-draft'
 import { currentSignedCopy } from './reopenings'
 import { matchingOf, receiptsInclude, receiptsWhere } from '../receipts/receipt.dto'
@@ -65,9 +64,20 @@ const EXPENSE_FIELDS: Fields = {
   reportLine: { label: 'Report line', show: 'text', labels: REPORT_LINE_LABELS },
 }
 
-/** The expense fields with its tags, by their words in the workspace's list today ("Funding source: …"). */
-const expenseFields = (w: Parameters<typeof tagWords>[0]): Fields => ({
+/**
+ * The expense fields with its tags, by their words in the workspace's list today ("Funding source: …"), and its budget
+ * line by the engagement's name for it.
+ */
+const expenseFields = (
+  w: Parameters<typeof tagWords>[0],
+  lines: { id: string; name: string }[]
+): Fields => ({
   ...EXPENSE_FIELDS,
+  budgetLineId: {
+    label: 'Budget line',
+    show: 'text',
+    labels: Object.fromEntries(lines.map((l) => [l.id, l.name])),
+  },
   tags: { label: 'Tags', show: 'text', labels: tagWords(w) },
 })
 
@@ -180,8 +190,9 @@ export class ReportsService {
   private async detail(caller: Caller, r: ReportRow): Promise<ReportDetail> {
     const earlier = await this.prisma.expense.findMany({
       where: { engagementId: r.engagementId, monthlyReport: { period: { lt: r.period } } },
-      select: { reportLine: true, allocatedAmount: true },
+      select: { reportLine: true, budgetLineId: true, allocatedAmount: true },
     })
+    const lineNames = new Map(r.engagement.budgetLines.map((b) => [b.id, b.name]))
     const documents = await this.prisma.document.findMany({
       where: { workspaceId: r.workspaceId! },
       orderBy: { uploadedAt: 'desc' },
@@ -270,7 +281,12 @@ export class ReportsService {
         earlier.map((e) => ({ reportLine: e.reportLine, amount: Number(e.allocatedAmount) })),
         r.expenses.map((e) => ({ reportLine: e.reportLine, amount: Number(e.allocatedAmount) }))
       ),
-      expenses: r.expenses.map(expenseDto),
+      budgetLines: computeBudgetLines(
+        [...r.engagement.budgetLines].sort((a, b) => a.sortOrder - b.sortOrder),
+        earlier,
+        r.expenses
+      ),
+      expenses: r.expenses.map((e) => expenseDto(e, lineNames)),
       wexPayments: r.wexPayments.map(wexDto),
       checks: [...r.checks]
         .sort(
@@ -343,8 +359,10 @@ export class ReportsService {
     if (total >= 1e10 || allocated >= 1e10) throw bad('Amounts must be under $10,000,000,000')
     if (!ALLOCATION_TYPES.includes(input.allocationType))
       throw bad('allocationType is not one of the allowed values')
-    if (!REPORT_LINES.includes(input.reportLine))
-      throw bad('reportLine is not one of the seven lines')
+    // Every expense is spent against one of its engagement's budget lines, and reports on that line's form line.
+    const line = r.engagement.budgetLines.find((b) => b.id === input.budgetLineId)
+    if (!line)
+      throw bad("Choose the budget line it is spent against (the engagement's approved budget)")
     return {
       itemNumber,
       date: new Date(`${input.date}T00:00:00Z`),
@@ -355,7 +373,8 @@ export class ReportsService {
       allocatedAmount: allocated.toFixed(2),
       allocationType: input.allocationType,
       allocationNote: input.allocationNote?.trim() || null,
-      reportLine: input.reportLine,
+      budgetLineId: line.id,
+      reportLine: line.reportLine,
       ...(had && input.tags === undefined
         ? {}
         : { tags: cleanTags(input.tags, r.engagement.workspace, 'expense', had) }),
@@ -382,7 +401,11 @@ export class ReportsService {
         subjectId: e.id,
         action: 'create',
         description: `Added expense ${data.itemNumber} to ${monthName(r.period)}`,
-        changes: changesOf(null, data, expenseFields(r.engagement.workspace)),
+        changes: changesOf(
+          null,
+          data,
+          expenseFields(r.engagement.workspace, r.engagement.budgetLines)
+        ),
       })
     )
     await this.checks.refresh(r.id)
@@ -407,7 +430,11 @@ export class ReportsService {
         async (tx) => {
           const before = await tx.expense.findFirst({ where: { id: expenseId } })
           if (!before) throw new NotFoundException()
-          const changes = changesOf(before, data, expenseFields(r.engagement.workspace))
+          const changes = changesOf(
+            before,
+            data,
+            expenseFields(r.engagement.workspace, r.engagement.budgetLines)
+          )
           if (!changes.length) throw new NothingChanged()
           await tx.expense.update({ where: { id: expenseId }, data })
           return { before, changes }
@@ -438,7 +465,11 @@ export class ReportsService {
       subjectId: expenseId,
       action: 'delete',
       description: `Removed expense ${existing.itemNumber} from ${monthName(r.period)}`,
-      changes: changesOf(existing, null, expenseFields(r.engagement.workspace)),
+      changes: changesOf(
+        existing,
+        null,
+        expenseFields(r.engagement.workspace, r.engagement.budgetLines)
+      ),
     })
     await this.checks.refresh(r.id)
     return this.fresh(caller, r.id)
@@ -992,26 +1023,31 @@ export class ReportsService {
   }
 }
 
-export function expenseDto(e: {
-  id: string
-  itemNumber: string
-  date: Date
-  vendor: string
-  memo: string | null
-  account: string | null
-  totalCost: unknown
-  allocatedAmount: unknown
-  allocationType: string
-  allocationNote: string | null
-  reportLine: string
-  tags: string[]
-  documents: {
-    purpose: string
-    mark?: unknown
-    marks?: unknown
-    document: Parameters<typeof documentDto>[0]
-  }[]
-}): ExpenseDto {
+export function expenseDto(
+  e: {
+    id: string
+    itemNumber: string
+    date: Date
+    vendor: string
+    memo: string | null
+    account: string | null
+    totalCost: unknown
+    allocatedAmount: unknown
+    allocationType: string
+    allocationNote: string | null
+    reportLine: string
+    budgetLineId: string | null
+    tags: string[]
+    documents: {
+      purpose: string
+      mark?: unknown
+      marks?: unknown
+      document: Parameters<typeof documentDto>[0]
+    }[]
+  },
+  /** The engagement's budget line names, by id. */
+  lineNames: Map<string, string>
+): ExpenseDto {
   return {
     id: e.id,
     itemNumber: e.itemNumber,
@@ -1024,6 +1060,8 @@ export function expenseDto(e: {
     allocationType: e.allocationType as ExpenseDto['allocationType'],
     allocationNote: e.allocationNote,
     reportLine: e.reportLine as ExpenseDto['reportLine'],
+    budgetLineId: e.budgetLineId,
+    budgetLineName: (e.budgetLineId && lineNames.get(e.budgetLineId)) ?? null,
     tags: e.tags,
     documents: e.documents.map((d) => ({
       purpose: d.purpose as DocumentPurpose,

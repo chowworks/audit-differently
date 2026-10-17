@@ -41,8 +41,18 @@ const engagement = (months: Month[]) => ({
   periodEnd: new Date('2027-06-30T00:00:00Z'),
   reportDueDay: 12,
   workspace: { id: W, budgetItems: DEFAULT_BUDGET_ITEMS },
-  budgetLines: ['supplies', 'contractual', 'participant-training', 'travel'].map((category) => ({
+  // Lines made from the workspace's old items keep that item's key as `category`; here each line's id is the key too.
+  budgetLines: [
+    ['supplies', 'Supplies'],
+    ['contractual', 'Contractual / Subawards'],
+    ['participant-training', 'Participant / Training Costs'],
+    ['travel', 'Travel'],
+  ].map(([category, name], sortOrder) => ({
+    id: category,
     category,
+    name,
+    reportLine: 'program-costs',
+    sortOrder,
   })),
   monthlyReports: months,
 })
@@ -151,11 +161,12 @@ describe('ImportsService', () => {
     expect(file.guessedBy).toBe('headers')
     expect(file.guess).toEqual(COLUMNS)
     expect(file.mappingId).toBeNull()
-    expect(file.budgetOptions.map((i) => i.key)).toEqual([
-      'travel',
-      'supplies',
-      'contractual',
-      'participant-training',
+    // The engagement's own budget lines, in its order, by id and name.
+    expect(file.budgetOptions.map((i) => [i.key, i.label])).toEqual([
+      ['supplies', 'Supplies'],
+      ['contractual', 'Contractual / Subawards'],
+      ['participant-training', 'Participant / Training Costs'],
+      ['travel', 'Travel'],
     ])
     // Reading a file in is no record read and no change: nothing is logged.
     expect(log.entries).toEqual([])
@@ -481,6 +492,7 @@ describe('ImportsService', () => {
         totalCost: '186.40',
         allocatedAmount: '186.40',
         allocationType: 'direct',
+        budgetLineId: 'supplies',
         reportLine: 'program-costs',
         importFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
         createdById: `u-${role}-${W}`,
@@ -543,7 +555,14 @@ describe('ImportsService', () => {
         workspaceId: W,
         name: 'QuickBooks mapping',
         columns: COLUMNS,
-        categories: CATEGORIES,
+        // By the budget lines' names, so the mapping carries to another engagement with lines of the same names.
+        categories: {
+          'Office Supplies': 'Supplies',
+          'Contract Services': 'Contractual / Subawards',
+          'Participant Training': 'Participant / Training Costs',
+          Travel: 'Travel',
+          Meals: 'skip',
+        },
         headers: expect.arrayContaining(['Date', 'Split']),
       }),
     })

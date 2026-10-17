@@ -5,7 +5,6 @@ import {
   ENGAGEMENT_KIND_LABELS,
   ENGAGEMENT_TRACKS,
   ENGAGEMENT_TRACK_LABELS,
-  REPORT_LINE_LABELS,
   tagValueLabel,
   type DocumentDto,
   type DocumentKind,
@@ -92,8 +91,7 @@ type Files = Partial<Record<'proposal' | 'award-letter' | 'contract', File>>
 export function engagementBody(
   form: EngagementInput,
   kind: EngagementKind | null,
-  tracks: EngagementTrack[],
-  budgetItems: string[]
+  tracks: EngagementTrack[]
 ): EngagementInput {
   const body: EngagementInput = {
     ...form,
@@ -102,7 +100,6 @@ export function engagementBody(
     requestedAmount: form.requestedAmount || null,
     awardAmount: form.awardAmount || null,
     reportDueDay: Number(form.reportDueDay),
-    budgetItems,
   }
   if (!tracks.includes('proposal')) {
     delete body.solicitation
@@ -144,7 +141,6 @@ export function NewEngagementPage() {
   })
   const [files, setFiles] = useState<Files>({})
   // The workspace's budget items this engagement does not use; every item is ticked to start with.
-  const [unticked, setUnticked] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const set = <K extends keyof EngagementInput>(k: K, v: EngagementInput[K]) =>
@@ -158,7 +154,6 @@ export function NewEngagementPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaces])
   const workspace = workspaces?.find((w) => w.id === form.workspaceId)
-  const budgetItems = (workspace?.budgetItems ?? []).filter((i) => !unticked.includes(i.key))
   const active: StepKey[] = [
     'what',
     ...ENGAGEMENT_TRACKS.flatMap((t) => (tracks.includes(t) && STEP_FOR[t] ? [STEP_FOR[t]!] : [])),
@@ -200,15 +195,7 @@ export function NewEngagementPage() {
     setBusy(true)
     setError(null)
     try {
-      const c = await api.post<EngagementDetail>(
-        '/engagements',
-        engagementBody(
-          form,
-          kind,
-          tracks,
-          budgetItems.map((i) => i.key)
-        )
-      )
+      const c = await api.post<EngagementDetail>('/engagements', engagementBody(form, kind, tracks))
       // A file chosen for a record the person then stopped tracking stays behind.
       const kept = (Object.entries(files) as [DocumentKind, File][]).filter(([k]) =>
         tracks.includes(k as EngagementTrack)
@@ -527,38 +514,6 @@ export function NewEngagementPage() {
                   'Signed contract',
                   'PDF or DOCX. Optional now; it is step 4 of the workflow.'
                 )}
-              <fieldset className="ad-field sm:col-span-2">
-                <span>Approved budget lines</span>
-                <div className="grid gap-2 text-sm sm:grid-cols-2">
-                  {(workspace?.budgetItems ?? []).map((i) => (
-                    <label key={i.key} className="inline-flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={!unticked.includes(i.key)}
-                        onChange={() =>
-                          setUnticked((u) =>
-                            u.includes(i.key) ? u.filter((k) => k !== i.key) : [...u, i.key]
-                          )
-                        }
-                      />
-                      <span>
-                        {i.label}{' '}
-                        <span className="text-soft">· {REPORT_LINE_LABELS[i.reportLine]}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-                <small>
-                  The items this budget uses. You enter each amount on the engagement page, and can
-                  add or remove lines there. Missing one? An owner adds it under{' '}
-                  {workspace ? (
-                    <Link to={`/workspaces/${workspace.id}#settings`}>the workspace settings</Link>
-                  ) : (
-                    'the workspace settings'
-                  )}
-                  .
-                </small>
-              </fieldset>
               <p className="ad-group-title sm:col-span-2 !mb-0 mt-2">Reporting</p>
               <Field
                 label="Monthly report due on day"
@@ -662,10 +617,6 @@ export function NewEngagementPage() {
                       .filter(Boolean)
                       .join(' · ')
                   : 'later, when it is signed'}
-              </dd>
-              <dt>Budget lines</dt>
-              <dd>
-                {budgetItems.length ? budgetItems.map((i) => i.label).join(', ') : 'none yet'}
               </dd>
             </dl>
           )}

@@ -199,12 +199,14 @@ model BudgetLine {
   id           String     @id @default(uuid())
   workspaceId  String? // set by trigger
   engagementId String
-  category     String // BUDGET_CATEGORIES
+  name         String // the line as the contract's approved budget names it
+  category     String? // the workspace budget item it was made from, for lines made before names (20261017000200)
   reportLine   String // REPORT_LINES
   amount       Decimal    @db.Decimal(12, 2)
   narrative    String?
   sortOrder    Int        @default(0)
   engagement   Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  expenses     Expense[]
 
   @@unique([engagementId, category])
   @@index([workspaceId])
@@ -367,7 +369,9 @@ model Expense {
   allocatedAmount   Decimal           @db.Decimal(12, 2) // the program's share charged to this line
   allocationType    String            @default("direct") // ALLOCATION_TYPES
   allocationNote    String? // e.g. '32.84% of payroll hours in January'
-  reportLine        String // REPORT_LINES
+  reportLine        String // REPORT_LINES; follows the budget line when there is one (trigger Expense_4_budget_line)
+  budgetLineId      String? // the engagement's budget line it is spent against; null until a person chooses
+  budgetLine        BudgetLine?       @relation(fields: [budgetLineId], references: [id], onDelete: NoAction)
   tags              String[]          @default([]) // `<type key>:<value key>`, from Workspace.tagTypes
   // The hash of the imported file row this came from (date, amount, payee, memo, reference); null when typed.
   importFingerprint String?
@@ -383,6 +387,7 @@ model Expense {
   @@unique([engagementId, importFingerprint])
   @@index([workspaceId])
   @@index([monthlyReportId])
+  @@index([budgetLineId])
 }
 
 // ── Documents ───────────────────────────────────────────────────────────────

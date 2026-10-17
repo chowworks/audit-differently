@@ -71,6 +71,7 @@ const engagement = () => ({
     doc('d-memo', 'memo.pdf', 'other'),
     doc('d-signed', 'signed Sep.pdf', 'signed-report', { period: '2026-09' }),
   ],
+  budgetLines: [],
   monthlyReports: [
     {
       period: '2026-09',
@@ -256,10 +257,10 @@ describe('AuditPackageService', () => {
     // The ledger names every file behind a line, the shared statement included.
     const ledger = text(`${MONTH}/Ledger.csv`).split('\r\n')
     expect(ledger[0]).toBe(
-      '"Item #","Date","Vendor","Memo","Account","Total cost","Allocated","Allocation type","Allocation note","Report line","Files"'
+      '"Item #","Date","Vendor","Memo","Account","Total cost","Allocated","Allocation type","Allocation note","Budget line","Report line","Files"'
     )
     expect(ledger[1]).toContain(
-      '"RYS-11","2026-09-02","Ledger & Co.","Monthly accounting","60701","3000.00","555.00","payroll","18.5% of payroll hours","program-costs"'
+      '"RYS-11","2026-09-02","Ledger & Co.","Monthly accounting","60701","3000.00","555.00","payroll","18.5% of payroll hours","Needs a budget line","program-costs"'
     )
     expect(ledger[1]).toContain('Proof of Purchase - Bank Statements/2026-09 Bank Statement.pdf')
     expect(ledger[3]).toContain('Payroll and Timesheet Reports/RYS-13 payroll register.pdf')
@@ -308,7 +309,8 @@ describe('AuditPackageService', () => {
       expect.objectContaining({ userId: 'u-owner' }),
       expect.objectContaining({ workspaceId: W, resource: 'export', action: 'export' })
     )
-    expect(out.files).toBe(paths.length - 5) // README, Index, Participants, Ledger, Payroll are generated
+    // README, Index, Participants, Budget vs actual, Ledger and Payroll are generated
+    expect(out.files).toBe(paths.length - 6)
   })
 
   it('leaves personal records out of a bookkeeper copy and says so', async () => {
@@ -569,7 +571,16 @@ describe('AuditPackageService: the full copy taken before a deletion', () => {
     return {
       ...e,
       documents: [...e.documents, orphan, personalOrphan],
-      budgetLines: [{ category: 'wex', reportLine: 'wex', amount: 9000, narrative: 'Wages' }],
+      budgetLines: [
+        {
+          id: 'bl-wex',
+          name: 'Work experience',
+          category: 'wex',
+          reportLine: 'wex',
+          amount: 9000,
+          narrative: 'Wages',
+        },
+      ],
       monthlyReports: e.monthlyReports.map((r) => ({
         ...r,
         status: 'submitted',

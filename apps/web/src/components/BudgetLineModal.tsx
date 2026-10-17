@@ -1,8 +1,14 @@
 import { useState } from 'react'
-import { REPORT_LINE_LABELS, type BudgetChange, type EngagementDetail } from '@ad/types'
+import {
+  REPORT_LINES,
+  REPORT_LINE_LABELS,
+  type BudgetChange,
+  type EngagementDetail,
+  type ReportLine,
+} from '@ad/types'
 import { useApi } from '@/hooks/useApi'
 import { periodLabel } from '@/lib/format'
-import { Button, ErrorNote, Field, Modal, MoneyInput, Notice, inputClass } from '@/components/ui'
+import { Button, ErrorNote, Field, Modal, MoneyInput, inputClass } from '@/components/ui'
 
 type Line = EngagementDetail['budgetLines'][number]
 
@@ -31,8 +37,9 @@ export function recheckNotice(saved: Pick<BudgetChange, 'backToDraft'>): string 
 }
 
 /**
- * One line of the approved budget (step 4): add one of the workspace's budget items, or change or remove a line.
- * Owners and bookkeepers only; the page shows an auditor the lines without this.
+ * One line of the approved budget (step 4): the line of the funder's monthly report it is, its approved amount, its
+ * name (the report line's own, unless the contract's budget names it differently, e.g. a funder who itemizes) and a
+ * note. Owners and bookkeepers only, from Manage Budget.
  */
 export function BudgetLineModal({
   engagement: c,
@@ -48,14 +55,24 @@ export function BudgetLineModal({
   onSaved: (saved: BudgetChange) => void
 }) {
   const api = useApi()
-  const unused = c.budgetOptions.filter((i) => !c.budgetLines.some((b) => b.category === i.key))
-  const [category, setCategory] = useState(line?.category ?? unused[0]?.key ?? '')
+  const [reportLine, setReportLine] = useState<ReportLine | ''>(line?.reportLine ?? '')
+  const [name, setName] = useState(line?.name ?? '')
   const [amount, setAmount] = useState<number | null>(line ? line.amount : null)
   const [narrative, setNarrative] = useState(line?.narrative ?? '')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const item = c.budgetOptions.find((i) => i.key === category)
   const warning = recheckWarning(c)
+  const taken = new Set(
+    c.budgetLines.filter((b) => b.id !== line?.id).map((b) => b.name.toLowerCase())
+  )
+  const suggestions = c.budgetNameSuggestions.filter((n) => !taken.has(n.toLowerCase()))
+  const nameTaken = taken.has(name.trim().toLowerCase())
+  // The name follows the report line until the person gives it one of its own.
+  const pickLine = (next: ReportLine) => {
+    const own = name.trim() && name.trim() !== (reportLine ? REPORT_LINE_LABELS[reportLine] : '')
+    setReportLine(next)
+    if (!own) setName(REPORT_LINE_LABELS[next])
+  }
   const run = async (fn: () => Promise<BudgetChange>) => {
     setBusy(true)
     setError(null)
@@ -70,72 +87,113 @@ export function BudgetLineModal({
   const save = () =>
     run(() =>
       line
-        ? api.patch<BudgetChange>(`${base}/${line.id}`, { amount, narrative })
-        : api.post<BudgetChange>(base, { category, amount, narrative })
+        ? api.patch<BudgetChange>(`${base}/${line.id}`, { name, reportLine, amount, narrative })
+        : api.post<BudgetChange>(base, { name, reportLine, amount, narrative })
     )
   const remove = () => {
-    if (!line || !confirm(`Remove ${line.label} from the approved budget?`)) return
+    if (!line || !confirm(`Remove ${line.name} from the approved budget?`)) return
     void run(() => api.del<BudgetChange>(`${base}/${line.id}`))
   }
+  const ready = !busy && !!name.trim() && !!reportLine && !nameTaken
   return (
-    <Modal title={line ? line.label : 'Add a budget line'} onClose={onClose}>
+    <Modal title={line ? `Edit ${line.name}` : 'Add a budget line'} onClose={onClose}>
       <ErrorNote message={error} />
-      {warning && <Notice tone="warn">{warning}</Notice>}
       <div className="grid gap-4">
-        {line ? (
-          <p className="text-sm text-soft">Reports as {REPORT_LINE_LABELS[line.reportLine]}.</p>
-        ) : unused.length === 0 ? (
-          <p className="text-sm text-soft">
-            Every budget item of the workspace is on this budget. An owner adds items in the
-            workspace settings.
-          </p>
-        ) : (
+        <div className="grid gap-4 sm:grid-cols-[3fr_2fr]">
           <Field
-            label="Budget item"
-            hint={item ? `Reports as ${REPORT_LINE_LABELS[item.reportLine]}` : undefined}
+            label="Monthly report line"
+            required
+            hint={line?.hasSpending ? 'Fixed: it has spending' : undefined}
           >
             <select
               className={inputClass}
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
+              value={reportLine}
+              disabled={line?.hasSpending}
+              onChange={(e) => pickLine(e.target.value as ReportLine)}
+              autoFocus={!line}
             >
-              {unused.map((i) => (
-                <option key={i.key} value={i.key}>
-                  {i.label}
+              <option value="" disabled>
+                Choose a line of the report
+              </option>
+              {REPORT_LINES.map((l) => (
+                <option key={l} value={l}>
+                  {REPORT_LINE_LABELS[l]}
                 </option>
               ))}
             </select>
           </Field>
-        )}
-        <Field label="Approved amount" hint="As the approved budget states it. Blank is $0.">
-          <MoneyInput value={amount} onChange={setAmount} autoFocus />
+          <Field label="Approved amount">
+            <MoneyInput value={amount} onChange={setAmount} />
+          </Field>
+        </div>
+        <Field
+          label="Name"
+          required
+          hint="The report line's own, unless the contract's budget names it differently"
+          error={nameTaken ? 'This engagement already has a line of that name' : null}
+        >
+          <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
+          <NameSuggestions names={suggestions} typed={name} onPick={setName} />
         </Field>
-        <Field label="Narrative" hint="What the budget narrative says this line pays for">
-          <textarea
+        <Field label="Note">
+          <input
             className={inputClass}
-            rows={3}
+            placeholder="Optional, e.g. reduced from $3,000 at award"
             value={narrative}
             onChange={(e) => setNarrative(e.target.value)}
           />
         </Field>
       </div>
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          {line && (
-            <Button kind="danger" onClick={remove} disabled={busy}>
-              Remove line
-            </Button>
-          )}
+          {line &&
+            (line.hasSpending ? (
+              <span className="text-xs text-soft">Has spending, so it stays</span>
+            ) : (
+              <Button kind="ghost" className="text-danger" onClick={remove} disabled={busy}>
+                Remove line
+              </Button>
+            ))}
         </div>
-        <div className="ad-actions">
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {warning && <span className="max-w-[260px] text-right text-xs text-soft">{warning}</span>}
           <Button kind="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button kind="primary" onClick={save} disabled={busy || (!line && !item)}>
+          <Button kind="primary" onClick={() => void save()} disabled={!ready}>
             {line ? 'Save' : 'Add line'}
           </Button>
         </div>
       </div>
     </Modal>
+  )
+}
+
+/**
+ * The names this workspace's other engagements give their budget lines, as pills under the name: pressing one fills
+ * it, so the same line is named the same everywhere. Filtered by what is typed; hidden once the name is one of them.
+ */
+function NameSuggestions({
+  names,
+  typed,
+  onPick,
+}: {
+  names: string[]
+  typed: string
+  onPick: (name: string) => void
+}) {
+  const t = typed.trim().toLowerCase()
+  if (names.some((n) => n.toLowerCase() === t)) return null
+  const shown = names.filter((n) => !t || n.toLowerCase().includes(t)).slice(0, 8)
+  if (!shown.length) return null
+  return (
+    <span className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-soft">Used in other engagements:</span>
+      {shown.map((n) => (
+        <button key={n} type="button" className="ad-chip ad-chip-muted" onClick={() => onPick(n)}>
+          {n}
+        </button>
+      ))}
+    </span>
   )
 }

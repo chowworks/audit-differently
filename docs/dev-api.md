@@ -62,7 +62,8 @@ The retained copy is the one key outside the `<workspaceId>/...` layout, on purp
 ## Every day
 
 `npm run dev` runs the API and the web app on your machine against the dev database. The dev database is shared:
-`npm run demo:reset -w @ad/api -- --confirm-host <host:port>` empties it and reseeds, so say so before you run it.
+`npm run demo:reset -w @ad/api -- --confirm-host <host:port>` removes the demo workspaces and reseeds them (people, their
+Terms acceptances and other workspaces stay), so say so before you run it.
 Migrations are shared the same way: `db:migrate` applies yours for everyone.
 
 ## The demo people

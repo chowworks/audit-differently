@@ -1,5 +1,17 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { REPORT_LINE_LABELS, WRITE_ROLES, type BudgetChange, type BudgetLineInput } from '@ad/types'
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
+import {
+  REPORT_LINES,
+  REPORT_LINE_LABELS,
+  WRITE_ROLES,
+  type BudgetChange,
+  type BudgetLineInput,
+  type ReportLine,
+} from '@ad/types'
 import type { Prisma } from '@prisma/client'
 import { ChecksService } from '../checks/checks.service'
 import { AccessLogService } from '../core/access-log.service'
@@ -7,14 +19,14 @@ import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { changesOf, type Fields } from '../core/changes'
 import { PrismaService } from '../prisma/prisma.service'
 import { backToDraft, BECAUSE } from '../reports/back-to-draft'
-import { budgetItemsOf } from '../workspaces/budget-items'
 import { EngagementsService } from './engagements.service'
 
-/** A budget line in the access log: the line and the amount by value, the narrative (free text) by name alone. */
+/** A budget line in the access log: its name, form line and amount by value, the note (free text) by name alone. */
 export const BUDGET_LINE_FIELDS: Fields = {
-  reportLine: { label: 'Report line', show: 'text', labels: REPORT_LINE_LABELS },
+  name: { label: 'Name', show: 'text' },
+  reportLine: { label: 'Rolls up to', show: 'text', labels: REPORT_LINE_LABELS },
   amount: { label: 'Amount', show: 'money' },
-  narrative: { label: 'Narrative' },
+  narrative: { label: 'Note' },
 }
 
 type Sent = BudgetChange['backToDraft']
@@ -30,13 +42,26 @@ function amountOf(given: unknown): string {
 
 function narrativeOf(given: unknown): string | null {
   const text = typeof given === 'string' ? given.trim() : ''
-  if (text.length > 2000) throw new BadRequestException('Keep the narrative under 2,000 characters')
+  if (text.length > 2000) throw new BadRequestException('Keep the note under 2,000 characters')
   return text || null
 }
 
+function nameOf(given: unknown): string {
+  const name = typeof given === 'string' ? given.trim().replace(/\s+/g, ' ') : ''
+  if (!name) throw new BadRequestException('Name the budget line as the approved budget does')
+  if (name.length > 120) throw new BadRequestException('Keep the name under 120 characters')
+  return name
+}
+
+function reportLineOf(given: unknown): ReportLine {
+  if (!REPORT_LINES.includes(given as ReportLine))
+    throw new BadRequestException("Choose the line of the funder's monthly form it rolls up to")
+  return given as ReportLine
+}
+
 /**
- * The approved budget of an engagement (step 4): one line per budget item of the workspace it uses, with the amount
- * and the narrative of the approved budget. Owners and bookkeepers add, change and remove lines; an auditor reads them
+ * The approved budget of an engagement (step 4): its budget lines as the contract names them, each with the funder form
+ * line it rolls up to, its approved amount and a note. Every expense is spent against one of them. Owners and bookkeepers add, change and remove lines; an auditor reads them
  * on the engagement page. The month checks compare spending with these lines, so every change runs them again.
  */
 @Injectable()
@@ -50,22 +75,20 @@ export class BudgetService {
 
   async add(caller: Caller, engagementId: string, input: BudgetLineInput): Promise<BudgetChange> {
     const c = await this.writable(caller, engagementId)
-    const items = budgetItemsOf(c.workspace)
-    const item = items.find((i) => i.key === input?.category)
-    if (!item) throw new BadRequestException("Choose one of the workspace's budget items")
-    if (await this.prisma.budgetLine.findFirst({ where: { engagementId, category: item.key } }))
-      throw new BadRequestException(`${item.label} is already on the budget`)
     const values = {
-      reportLine: item.reportLine,
-      amount: amountOf(input.amount),
-      narrative: narrativeOf(input.narrative),
+      name: nameOf(input?.name),
+      reportLine: reportLineOf(input?.reportLine),
+      amount: amountOf(input?.amount),
+      narrative: narrativeOf(input?.narrative),
     }
+    await this.refuseTaken(engagementId, values.name)
+    const sortOrder = await this.prisma.budgetLine.count({ where: { engagementId } })
     let backed: Sent = []
     await this.log.change(
       caller,
       async (tx) => {
         const row = await tx.budgetLine.create({
-          data: { engagementId, category: item.key, sortOrder: items.indexOf(item), ...values },
+          data: { engagementId, sortOrder, ...values },
         })
         backed = await this.backToDraft(tx, caller, c)
         return row
@@ -75,7 +98,7 @@ export class BudgetService {
         resource: 'engagement',
         subjectId: c.id,
         action: 'create',
-        description: `Added ${item.label} to the approved budget of ${c.name}`,
+        description: `Added ${values.name} to the approved budget of ${c.name}`,
         changes: changesOf(null, values, BUDGET_LINE_FIELDS),
       }
     )
@@ -88,8 +111,25 @@ export class BudgetService {
     lineId: string,
     input: BudgetLineInput
   ): Promise<BudgetChange> {
-    const { c, line, label } = await this.line(caller, engagementId, lineId)
-    const values: { amount?: string; narrative?: string | null } = {}
+    const { c, line, label, hasSpending } = await this.line(caller, engagementId, lineId)
+    const values: {
+      name?: string
+      reportLine?: ReportLine
+      amount?: string
+      narrative?: string | null
+    } = {}
+    if (input && 'name' in input) {
+      values.name = nameOf(input.name)
+      if (values.name.toLowerCase() !== line.name.toLowerCase())
+        await this.refuseTaken(engagementId, values.name)
+    }
+    if (input && 'reportLine' in input) {
+      values.reportLine = reportLineOf(input.reportLine)
+      if (values.reportLine !== line.reportLine && hasSpending)
+        throw new ConflictException(
+          `${label} has spending, so it keeps the line it rolls up to: add a new line instead`
+        )
+    }
     if (input && 'amount' in input) values.amount = amountOf(input.amount)
     if (input && 'narrative' in input) values.narrative = narrativeOf(input.narrative)
     const changes = changesOf(line, values, BUDGET_LINE_FIELDS)
@@ -116,7 +156,11 @@ export class BudgetService {
   }
 
   async remove(caller: Caller, engagementId: string, lineId: string): Promise<BudgetChange> {
-    const { c, line, label } = await this.line(caller, engagementId, lineId)
+    const { c, line, label, hasSpending } = await this.line(caller, engagementId, lineId)
+    if (hasSpending)
+      throw new ConflictException(
+        `${label} has spending against it: move those expenses to another line first`
+      )
     let backed: Sent = []
     await this.log.change(
       caller,
@@ -157,8 +201,18 @@ export class BudgetService {
       where: { id: lineId, engagementId, ...tenantWhere(caller) },
     })
     if (!line) throw new NotFoundException()
-    const label = budgetItemsOf(c.workspace).find((i) => i.key === line.category)?.label
-    return { c, line, label: label ?? line.category }
+    const hasSpending = (await this.prisma.expense.count({ where: { budgetLineId: line.id } })) > 0
+    return { c, line, label: line.name, hasSpending }
+  }
+
+  /** A name is the engagement's once, whatever its case (the database's unique index says the same). */
+  private async refuseTaken(engagementId: string, name: string) {
+    const lines = await this.prisma.budgetLine.findMany({
+      where: { engagementId },
+      select: { name: true },
+    })
+    if (lines.some((l) => l.name.toLowerCase() === name.toLowerCase()))
+      throw new BadRequestException(`${name} is already on the budget`)
   }
 
   /**

@@ -18,7 +18,7 @@ const form: EngagementInput = {
 
 describe('the new engagement as posted', () => {
   it('sends every field when both steps are kept', () => {
-    const b = engagementBody(form, 'grant', ['proposal', 'award-letter'], [])
+    const b = engagementBody(form, 'grant', ['proposal', 'award-letter'])
     expect(b).toMatchObject({
       solicitation: 'RFP-0000',
       requestedAmount: 50000,
@@ -27,7 +27,7 @@ describe('the new engagement as posted', () => {
   })
 
   it('leaves out the fields of a step that is not kept, and keeps the funder and amount', () => {
-    const b = engagementBody(form, 'grant', [], ['staff'])
+    const b = engagementBody(form, 'grant', [])
     for (const k of ['solicitation', 'requestedAmount', 'proposalSubmittedOn', 'awardedOn'])
       expect(b).not.toHaveProperty(k)
     expect(b).toMatchObject({
@@ -35,7 +35,8 @@ describe('the new engagement as posted', () => {
       funderContact: 'grants@example.org',
       tags: ['funding-source:source-a'],
       awardAmount: 45000,
-      budgetItems: ['staff'],
     })
+    // The budget is entered on the engagement, from Manage Budget: nothing is picked at setup.
+    expect(b).not.toHaveProperty('budgetItems')
   })
 })

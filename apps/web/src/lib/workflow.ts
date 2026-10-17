@@ -419,10 +419,9 @@ export function workflow(
         fact(
           'contract',
           'budget',
-          'Approved budget lines',
-          'Enter the approved budget lines',
-          c.budgetLineCount > 0,
-          c.budgetLineCount > 0 ? `${c.budgetLineCount} lines` : undefined
+          'Approved budget',
+          'Enter the approved budget',
+          c.budgetLineCount > 0
         ),
       ],
       state: 'todo',

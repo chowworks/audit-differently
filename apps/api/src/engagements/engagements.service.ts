@@ -233,7 +233,10 @@ export class EngagementsService {
       where: { id, ...tenantWhere(caller) },
       include: {
         ...this.summaryInclude,
-        budgetLines: { orderBy: { sortOrder: 'asc' } },
+        budgetLines: {
+          orderBy: { sortOrder: 'asc' },
+          include: { _count: { select: { expenses: true } } },
+        },
         participants: {
           include: { documents: { include: { document: true } } },
           orderBy: { displayName: 'asc' },
@@ -241,6 +244,25 @@ export class EngagementsService {
       },
     })
     if (!c) throw new NotFoundException()
+    // What was charged to each budget line to date, every month together.
+    const spentByLine = new Map(
+      (
+        await this.prisma.expense.groupBy({
+          by: ['budgetLineId'],
+          where: { engagementId: c.id, ...tenantWhere(caller) },
+          _sum: { allocatedAmount: true },
+        })
+      ).map((g) => [g.budgetLineId, Number(g._sum.allocatedAmount ?? 0)])
+    )
+    // The names budget lines have in this workspace's other engagements, to suggest.
+    const used = await this.prisma.budgetLine.findMany({
+      where: { engagement: { workspaceId: c.workspaceId }, ...tenantWhere(caller) },
+      select: { name: true },
+      distinct: ['name'],
+    })
+    const suggestions = [...new Set(used.map((u) => u.name.trim()))].sort((a, b) =>
+      a.localeCompare(b)
+    )
     return {
       ...this.summary(c),
       funderContact: c.funderContact,
@@ -259,13 +281,14 @@ export class EngagementsService {
       eligibilityItems: eligibilityItemsOf(c),
       budgetLines: c.budgetLines.map((b) => ({
         id: b.id,
-        category: b.category,
-        label: budgetItemsOf(c.workspace).find((i) => i.key === b.category)?.label ?? b.category,
+        name: b.name,
         reportLine: b.reportLine as ReportLine,
         amount: Number(b.amount),
         narrative: b.narrative,
+        hasSpending: b._count.expenses > 0,
+        spent: spentByLine.get(b.id) ?? 0,
       })),
-      budgetOptions: budgetItemsOf(c.workspace),
+      budgetNameSuggestions: suggestions,
       tagTypes: allTagTypes(c.workspace),
       participants: c.participants.map(participantDto),
       canManage: workspaceRole(caller, c.workspaceId, WRITE_ROLES),
@@ -413,6 +436,7 @@ export class EngagementsService {
               ...(budget.length && {
                 budgetLines: {
                   create: budget.map((i) => ({
+                    name: i.label,
                     category: i.key,
                     reportLine: i.reportLine,
                     amount: '0.00',

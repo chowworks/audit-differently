@@ -663,6 +663,54 @@ suite('tenant isolation', () => {
     })
   })
 
+  describe('budget lines (migration 20261017000200)', () => {
+    it("ties an expense to its own engagement's budget line, whose form line it takes", async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        await insert(db, 'BudgetLine', {
+          id: 'BL-sup',
+          engagementId: 'E-W1',
+          name: 'Supplies',
+          reportLine: 'program-costs',
+        })
+        await insert(db, 'BudgetLine', {
+          id: 'BL-sal',
+          engagementId: 'E-W1',
+          name: 'Personnel',
+          reportLine: 'staff-salaries',
+        })
+        // Names are the engagement's own, once each, whatever the case.
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "BudgetLine" ("id","engagementId","name","reportLine","amount") VALUES ('BL-dup','E-W1',' supplies ','program-costs',0)`
+            )
+          ).error
+        ).toMatch(/BudgetLine_engagementId_name_key/)
+        await db.query(`UPDATE "Expense" SET "budgetLineId" = 'BL-sal' WHERE id = 'X-W1'`)
+        expect(await one(`SELECT "reportLine" FROM "Expense" WHERE id = 'X-W1'`)).toEqual({
+          reportLine: 'staff-salaries',
+        })
+        // Another engagement's line is refused (and, here, not even visible).
+        expect(
+          (await attempt(`UPDATE "Expense" SET "budgetLineId" = 'BL-W2' WHERE id = 'X-W1'`)).error
+        ).toMatch(/its own engagement/)
+        // A line with spending keeps its form line and is not removed; one without spending changes freely.
+        expect(
+          (await attempt(`UPDATE "BudgetLine" SET "reportLine" = 'wex' WHERE id = 'BL-sal'`)).error
+        ).toMatch(/keeps the report line/)
+        expect(
+          (await attempt(`UPDATE "BudgetLine" SET "reportLine" = 'wex' WHERE id = 'BL-sup'`)).rows
+        ).toBe(1)
+        expect((await attempt(`DELETE FROM "BudgetLine" WHERE id = 'BL-sal'`)).error).toMatch(
+          /Expense_budgetLineId_fkey/
+        )
+        // Deleting the month takes its expenses, and then the line can go.
+        await db.query(`DELETE FROM "MonthlyReport" WHERE id = 'R-W1'`)
+        expect((await attempt(`DELETE FROM "BudgetLine" WHERE id = 'BL-sal'`)).rows).toBe(1)
+      })
+    })
+  })
+
   describe('emailed receipts (migration 20261015001000)', () => {
     const queued = (id: string, ws = 'NULL') =>
       `INSERT INTO "InboundReceipt" ("id","emailId","workspaceId","toAddress","receivedAt") VALUES ('${id}','email-${id}',${ws},'${id.toLowerCase()}@receipts.example.org',now()) RETURNING id`

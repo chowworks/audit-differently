@@ -367,10 +367,6 @@
 .rl-c-line-over.rl-c-line-attention {
   background: var(--rl-caution);
 }
-.rl-c-over {
-  display: block;
-  font-size: 12px;
-}
 .rl-c-neg {
   color: var(--danger);
   font-weight: 700;

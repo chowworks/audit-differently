@@ -5,14 +5,14 @@ import {
   ALLOCATION_TYPE_LABELS,
   ALLOCATION_TYPES,
   PAYROLL_REPORT_LINES,
-  REPORT_LINES,
   REPORT_LINE_LABELS,
+  type BudgetLineRow,
   type DocumentKind,
   type DocumentPurpose,
   type ExpenseDto,
   type ExpenseInput,
-  type LineRow,
   type ParticipantDto,
+  type ReportLine,
   type WexPaymentInput,
   type ClosingInput,
   type ReportDetail,
@@ -209,7 +209,7 @@ export function ReportPage() {
         <ExpenseModal
           kind={editing.kind}
           expense={editing.expense}
-          lines={r.lines}
+          lines={r.budgetLines}
           participants={r.participants}
           onSaveWex={async (input) => {
             setData(await api.post<ReportDetail>(`/reports/${r.id}/wex`, input))
@@ -420,20 +420,12 @@ export function ReportPage() {
 }
 
 type EntryKind = 'expense' | 'payroll'
-const kindOf = (line: ExpenseInput['reportLine']): EntryKind =>
+const kindOf = (line: ReportLine): EntryKind =>
   PAYROLL_REPORT_LINES.has(line) ? 'payroll' : 'expense'
 
-/**
- * The lines a form offers: its own kind's lines that this engagement has a budget for, and the line an edited row
- * is on. With no budget line of that kind yet, every line of the kind, so the form is never a dead end.
- */
-function lineChoices(kind: EntryKind, lines: LineRow[], current?: ExpenseInput['reportLine']) {
-  const ofKind = REPORT_LINES.filter((l) => kindOf(l) === kind)
-  const budgeted = ofKind.filter(
-    (l) => l === current || lines.some((x) => x.line === l && x.budget > 0)
-  )
-  return { choices: budgeted.length ? budgeted : ofKind, unbudgeted: !budgeted.length }
-}
+/** The engagement's budget lines a form offers: those of its own kind (payroll or not). */
+const lineChoices = (kind: EntryKind, lines: BudgetLineRow[]) =>
+  lines.filter((l) => kindOf(l.reportLine) === kind)
 
 function ExpenseModal({
   kind,
@@ -448,7 +440,7 @@ function ExpenseModal({
 }: {
   kind: EntryKind
   expense: ExpenseDto | null
-  lines: LineRow[]
+  lines: BudgetLineRow[]
   /** The engagement's participants: a payroll item may pay one of them (a work-experience payment). */
   participants: ParticipantDto[]
   onSaveWex: (input: WexPaymentInput) => Promise<void>
@@ -457,7 +449,7 @@ function ExpenseModal({
   onClose: () => void
   onSave: (input: ExpenseInput) => Promise<void>
 }) {
-  const { choices, unbudgeted } = lineChoices(kind, lines, expense?.reportLine)
+  const choices = lineChoices(kind, lines)
   const payroll = kind === 'payroll'
   // Add payroll pays a vendor (a staff member or payroll provider) or a participant (work experience).
   const [payee, setPayee] = useState<'vendor' | 'participant'>('vendor')
@@ -472,7 +464,7 @@ function ExpenseModal({
       allocatedAmount: 0,
       allocationType: 'direct',
       allocationNote: '',
-      reportLine: choices[0],
+      budgetLineId: choices.length === 1 ? choices[0]!.id : null,
       tags: [],
     }
   )
@@ -599,21 +591,24 @@ function ExpenseModal({
               label="Budget line"
               required
               hint={
-                unbudgeted
-                  ? `This engagement has no ${payroll ? 'payroll' : 'expense'} budget line yet. Add one on its budget.`
-                  : undefined
+                choices.length === 0
+                  ? `This engagement has no ${payroll ? 'payroll' : 'expense'} budget line yet. Add one on its approved budget (step 4).`
+                  : 'The line of the approved budget it is spent against'
               }
             >
               <select
                 className={inputClass}
-                value={form.reportLine}
-                onChange={(e) => set('reportLine', e.target.value as ExpenseInput['reportLine'])}
+                value={form.budgetLineId ?? ''}
+                onChange={(e) => set('budgetLineId', e.target.value || null)}
                 required
                 data-testid="f-line"
               >
+                <option value="" disabled>
+                  Choose a budget line
+                </option>
                 {choices.map((l) => (
-                  <option key={l} value={l}>
-                    {REPORT_LINE_LABELS[l]}
+                  <option key={l.id} value={l.id}>
+                    {l.name} · {REPORT_LINE_LABELS[l.reportLine]}
                   </option>
                 ))}
               </select>

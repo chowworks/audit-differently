@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ENGAGEMENT_KIND_LABELS,
-  REPORT_LINES,
-  REPORT_LINE_LABELS,
   ROLES,
   ROLE_HELP,
   ROLE_LABELS,
@@ -11,7 +9,6 @@ import {
   TAG_TARGET_LABELS,
   type BudgetItem,
   type EngagementSummary,
-  type ReportLine,
   type Role,
   type TagTarget,
   type TagType,
@@ -329,7 +326,6 @@ export function WorkspacePage() {
         <section className="ad-section">
           <SectionHead icon="sliders" title="Configuration Data" />
           <div className="grid gap-4">
-            <BudgetItems w={w} onChange={reload} />
             <Tags w={w} onChange={reload} />
             <MoreLists w={w} onChange={reload} />
           </div>
@@ -673,135 +669,6 @@ export function Rename({
 }
 
 /** An item being edited: one without a key is new, and the API gives it one when the list is saved. */
-type DraftItem = { key?: string; label: string; reportLine: ReportLine }
-
-/** The budget items an engagement may use, each with the monthly-report line it rolls into. */
-export function BudgetItems({
-  w,
-  onChange,
-  base = '/workspaces',
-}: {
-  w: Managed
-  onChange: () => Promise<void>
-  base?: string
-}) {
-  const api = useApi()
-  const [items, setItems] = useState<DraftItem[]>(w.budgetItems)
-  const [label, setLabel] = useState('')
-  const [line, setLine] = useState<ReportLine>('program-costs')
-  const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState<number | null>(null)
-  const [busy, setBusy] = useState(false)
-  useEffect(() => setItems(w.budgetItems), [w.budgetItems])
-  const dirty = JSON.stringify(items) !== JSON.stringify(w.budgetItems)
-  const add = () => {
-    const v = label.trim()
-    if (v && !items.some((i) => i.label.toLowerCase() === v.toLowerCase()))
-      setItems([...items, { label: v, reportLine: line }])
-    setLabel('')
-  }
-  const rename = (at: number, v: string) =>
-    setItems(items.map((i, n) => (n === at ? { ...i, label: v } : i)))
-  const save = async () => {
-    setBusy(true)
-    setError(null)
-    setSaved(null)
-    try {
-      await api.patch(`${base}/${w.id}/lists`, { budgetItems: items })
-      await onChange()
-      setSaved(Date.now())
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <Card title="Budget Line Items">
-      <p className="mb-3 text-sm text-soft">
-        What an approved budget is made of, and the line of the monthly report each one rolls into.
-        A new engagement uses the items it ticks. Renaming an item renames it on every engagement;
-        to move an item to another report line, remove it and add a new one.
-      </p>
-      <ErrorNote message={error} />
-      <table className="ad-table">
-        <tbody>
-          {items.map((i, n) => (
-            <tr key={i.key ?? `new-${n}`}>
-              <td>
-                {w.canManage ? (
-                  <input
-                    className={inputClass}
-                    aria-label={`Name of ${i.label || 'item'}`}
-                    value={i.label}
-                    onChange={(e) => rename(n, e.target.value)}
-                  />
-                ) : (
-                  <span className="font-semibold">{i.label}</span>
-                )}
-              </td>
-              <td className="text-sm text-soft">reports as {REPORT_LINE_LABELS[i.reportLine]}</td>
-              {w.canManage && (
-                <td className="ad-num">
-                  <Button
-                    size="sm"
-                    kind="ghost"
-                    aria-label={`Remove ${i.label}`}
-                    onClick={() => setItems(items.filter((_, x) => x !== n))}
-                  >
-                    ✕
-                  </Button>
-                </td>
-              )}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {items.length === 0 && <p className="text-sm text-soft">No budget items yet.</p>}
-      {w.canManage && (
-        <>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <input
-              className={`${inputClass} flex-1`}
-              placeholder="Add an item, e.g. Rent"
-              aria-label="Add a budget item"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  add()
-                }
-              }}
-            />
-            <select
-              className={`${inputClass} w-auto`}
-              aria-label="Report line it rolls into"
-              value={line}
-              onChange={(e) => setLine(e.target.value as ReportLine)}
-            >
-              {REPORT_LINES.map((l) => (
-                <option key={l} value={l}>
-                  {REPORT_LINE_LABELS[l]}
-                </option>
-              ))}
-            </select>
-            <Button onClick={add} disabled={!label.trim()}>
-              Add
-            </Button>
-          </div>
-          <div className="mt-3 flex items-center justify-end gap-3">
-            <SavedMark at={saved}>List saved</SavedMark>
-            <Button kind="primary" size="sm" onClick={save} disabled={busy || !dirty}>
-              Save list
-            </Button>
-          </div>
-        </>
-      )}
-    </Card>
-  )
-}
-
 /** A tag type being edited: one without a key (or a value without one) is new; the API keys it on save. */
 export type DraftType = {
   key?: string

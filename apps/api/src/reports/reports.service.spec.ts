@@ -71,7 +71,22 @@ const report = (status = 'draft') => ({
     preparerOrganization: null,
     authorizerName: null,
     authorizerOrganization: null,
-    budgetLines: [],
+    budgetLines: [
+      {
+        id: 'bl-acct',
+        name: 'Accounting',
+        reportLine: 'program-costs',
+        amount: 6000,
+        sortOrder: 0,
+      },
+      {
+        id: 'bl-staff',
+        name: 'Personnel',
+        reportLine: 'staff-salaries',
+        amount: 18000,
+        sortOrder: 1,
+      },
+    ],
     participants: [
       {
         id: 'p-1',
@@ -131,6 +146,7 @@ const stored = {
   allocationType: 'direct',
   allocationNote: null,
   reportLine: 'program-costs',
+  budgetLineId: 'bl-acct',
 }
 
 function service(status = 'draft', over: Record<string, unknown> = {}) {
@@ -265,7 +281,7 @@ const expense: ExpenseInput = {
   totalCost: 100,
   allocatedAmount: 50,
   allocationType: 'direct',
-  reportLine: 'program-costs',
+  budgetLineId: 'bl-acct',
 }
 const wex: WexPaymentInput = {
   participantId: 'p-1',
@@ -896,7 +912,7 @@ describe('ReportsService', () => {
         ...expense,
         allocatedAmount: 75,
         allocationType: 'usage',
-        reportLine: 'staff-salaries',
+        budgetLineId: 'bl-staff',
       }),
       await draft.service.attachToExpense(who, 'x-1', 'payment', 'd-1'),
       await draft.service.detachFromExpense(who, 'x-1', 'd-1'),
@@ -934,6 +950,7 @@ describe('ReportsService', () => {
         { field: 'Account (general ledger)', after: '60701 Accounting Fees' },
         { field: 'Allocation', after: 'Direct (all of it)' },
         { field: 'Report line', after: 'Program Costs' },
+        { field: 'Budget line', after: 'Accounting' },
         { field: 'Vendor' },
         { field: 'Memo' },
       ])
@@ -942,6 +959,7 @@ describe('ReportsService', () => {
       { field: 'Amount charged to this program', before: '50.00', after: '75.00' },
       { field: 'Allocation', before: 'Direct (all of it)', after: 'Shared, by usage' },
       { field: 'Report line', before: 'Program Costs', after: 'Staff Salaries' },
+      { field: 'Budget line', before: 'Accounting', after: 'Personnel' },
     ])
     expect(entries[5]!.changes).toEqual([
       { field: 'Participant' },

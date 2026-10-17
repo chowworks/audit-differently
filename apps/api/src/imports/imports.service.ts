@@ -34,7 +34,6 @@ import { dollars, howMany, monthName } from '../core/changes'
 import { EngagementsService } from '../engagements/engagements.service'
 import { PrismaService } from '../prisma/prisma.service'
 import { ReportsService } from '../reports/reports.service'
-import { budgetItemsOf } from '../workspaces/budget-items'
 import { aiConfigured, aiGuessColumns } from './ai-guess'
 import {
   cleanCategories,
@@ -58,6 +57,7 @@ type Ready = Transaction & {
   period: string
   itemNumber: string
   reportLine: ReportLine
+  budgetLineId: string
   fingerprint: string
 }
 
@@ -106,14 +106,28 @@ export class ImportsService {
   }
 
   /**
-   * The workspace's budget items this engagement has a line for, payroll lines left out: an import is money paid
-   * out to vendors, as Add expense is; payroll goes through Add payroll.
+   * The engagement's budget lines a category may map to (`key` is the line's id), payroll lines left out: an import is
+   * money paid out to vendors, as Add expense is; payroll goes through Add payroll.
    */
   private options(c: Engagement): BudgetItem[] {
-    const used = new Set(c.budgetLines.map((b) => b.category))
-    return budgetItemsOf(c.workspace).filter(
-      (i) => used.has(i.key) && !PAYROLL_REPORT_LINES.has(i.reportLine)
-    )
+    return [...c.budgetLines]
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .filter((b) => !PAYROLL_REPORT_LINES.has(b.reportLine as ReportLine))
+      .map((b) => ({ key: b.id, label: b.name, reportLine: b.reportLine as ReportLine }))
+  }
+
+  /**
+   * A saved mapping names budget lines by their name, so it carries to another engagement whose lines are named the
+   * same; one saved before names (a workspace budget item's key) finds the line made from that item. Anything else is
+   * left for the person to choose.
+   */
+  private lineFor(c: Engagement, saved: string): string | null {
+    if (saved === IMPORT_SKIP) return IMPORT_SKIP
+    const options = this.options(c)
+    const byName = options.find((o) => o.label.toLowerCase() === saved.toLowerCase())
+    if (byName) return byName.key
+    const legacy = c.budgetLines.find((b) => b.category === saved)
+    return legacy && options.some((o) => o.key === legacy.id) ? legacy.id : null
   }
 
   /** Step 1: the file's columns, a few rows, the saved mappings, and the first guess at the mapping. */
@@ -124,16 +138,17 @@ export class ImportsService {
       where: { workspaceId: c.workspaceId },
       orderBy: { updatedAt: 'desc' },
     })
-    // A saved mapping may come from another engagement: its category choices for budget lines this one does not use
+    // A saved mapping may come from another engagement: its category choices for budget lines this one does not have
     // are left out, so those categories wait for the person in step 3 instead of refusing the import.
-    const usable = new Set([...this.options(c).map((i) => i.key), IMPORT_SKIP])
     const mappings: ImportMappingDto[] = saved.map((m) => ({
       id: m.id,
       name: m.name,
       headers: m.headers,
       columns: m.columns as ImportColumns,
       categories: Object.fromEntries(
-        Object.entries(m.categories as ImportCategories).filter(([, to]) => usable.has(to))
+        Object.entries(m.categories as ImportCategories)
+          .map(([from, to]) => [from, this.lineFor(c, to)] as const)
+          .filter((e): e is readonly [string, string] => e[1] !== null)
       ),
       matches: sameHeaders(m.headers, table.headers),
     }))
@@ -245,6 +260,7 @@ export class ImportsService {
               totalCost: r.amount.toFixed(2),
               allocatedAmount: r.amount.toFixed(2),
               allocationType: 'direct',
+              budgetLineId: r.budgetLineId,
               reportLine: r.reportLine,
               importFingerprint: r.fingerprint,
               createdById: caller.userId,
@@ -305,10 +321,15 @@ export class ImportsService {
     const name = typeof given === 'string' ? given.trim() : ''
     if (!name) throw new BadRequestException('Name the mapping to save it')
     if (name.length > 60) throw new BadRequestException('Keep the mapping name under 60 characters')
+    // Saved by the budget lines' names, not this engagement's ids, so the mapping carries to another engagement.
+    const names = new Map(this.options(c).map((o) => [o.key, o.label]))
+    const byName = Object.fromEntries(
+      Object.entries(categories).map(([from, to]) => [from, names.get(to) ?? to])
+    )
     const data = {
       headers: table.headers,
       columns: columns as Prisma.InputJsonValue,
-      categories: categories as Prisma.InputJsonValue,
+      categories: byName as Prisma.InputJsonValue,
     }
     const columnWords = IMPORT_FIELDS.filter((f) => columns[f])
       .map((f) => `${IMPORT_FIELD_LABELS[f]}: ${columns[f]}`)
@@ -448,6 +469,7 @@ export class ImportsService {
         continue
       }
       const reportLine = items.get(target)!.reportLine
+      const budgetLineId = target
       let itemNumber: string
       if (t.reference) {
         itemNumber = t.reference
@@ -466,6 +488,7 @@ export class ImportsService {
         period,
         itemNumber,
         reportLine,
+        budgetLineId,
         fingerprint,
       })
     }

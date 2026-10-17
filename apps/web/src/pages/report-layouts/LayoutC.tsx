@@ -9,13 +9,11 @@ import {
   ALLOCATION_TYPE_LABELS,
   DOCUMENT_PURPOSE_LABELS,
   PAYROLL_REPORT_LINES,
-  REPORT_LINE_LABELS,
   type CheckDto,
   type DocumentPurpose,
   type ExpenseDto,
   type LineRow,
   type ReportDetail,
-  type ReportLine,
   type TagTarget,
   type WexPaymentDto,
 } from '@ad/types'
@@ -81,16 +79,37 @@ const matchesText = (text: string, parts: (string | number | null | undefined)[]
 }
 
 /** A budget-overrun check names its line first ("program-costs: cumulative … by $1,234.00."). */
-function overrunOf(k: CheckDto, lines: LineRow[]) {
-  const line = lines.find((l) => k.message.startsWith(`${l.line}:`))
+/** The engagement's budget lines as the budget tile lists them; `line` is the budget line's id. */
+type TileLine = Omit<LineRow, 'line'> & { line: string }
+const tileLines = (r: ReportDetail): TileLine[] =>
+  r.budgetLines.map((b) => ({
+    line: b.id,
+    label: b.name,
+    budget: b.budget,
+    previouslyBilled: b.previouslyBilled,
+    billedThisPeriod: b.billedThisPeriod,
+    cumulative: b.cumulative,
+    remaining: b.remaining,
+  }))
+
+/** What a filter on the budget line calls an expense's line: its id, or "none" while it has none. */
+const lineKey = (e: ExpenseDto) => e.budgetLineId ?? 'none'
+const lineName = (r: ReportDetail, key: string) =>
+  key === 'none'
+    ? 'Needs a budget line'
+    : key === 'wex-payments'
+      ? 'Work experience payments'
+      : (r.budgetLines.find((b) => b.id === key)?.name ?? key)
+
+function overrunOf(k: CheckDto, lines: TileLine[]) {
+  const line = lines.find((l) => k.message.startsWith(`${l.label}:`))
   if (!line) return null
-  const by = /by (\$[\d,.]+)/.exec(k.message)?.[1] ?? money(Math.max(0, -line.remaining))
-  return { line: line.line, by }
+  return { line: line.line }
 }
 
 /** Where each check shows: on its expense row, its payroll row, its report line, or above the grid. */
 function placeChecks(r: ReportDetail) {
-  const onLine = new Map<ReportLine, { check: CheckDto; by: string }>()
+  const onLine = new Map<string, { check: CheckDto }>()
   const loose: CheckDto[] = []
   let late: CheckDto | null = null
   const expenseIds = new Set(r.expenses.map((e) => e.id))
@@ -100,8 +119,8 @@ function placeChecks(r: ReportDetail) {
     if (k.code === 'late-submission') {
       late ??= k
     } else if (k.code === 'budget-overrun') {
-      const o = overrunOf(k, r.lines)
-      if (o) onLine.set(o.line, { check: k, by: o.by })
+      const o = overrunOf(k, tileLines(r))
+      if (o) onLine.set(o.line, { check: k })
       else loose.push(k)
     } else if (k.expenseId ? expenseIds.has(k.expenseId) : false) continue
     else if (k.wexPaymentId ? wexIds.has(k.wexPaymentId) : false) continue
@@ -165,8 +184,9 @@ export function LayoutC({ r, busy, notice, highlight, sections: s, act }: MonthL
   const filterTo = (q: Quick) => setQuick((now) => (now === q ? null : q))
   const next = nextActionOf(r, p, act, () => setQuick('other'))
   const unmatched = r.matching.receipts.filter((x) => !x.dismissed && x.matchedTo.length === 0)
-  const filterLine = (line: ReportLine, label: string) => {
-    const payroll = PAYROLL_REPORT_LINES.has(line)
+  const filterLine = (line: string, label: string) => {
+    const of = r.budgetLines.find((b) => b.id === line)
+    const payroll = !!of && PAYROLL_REPORT_LINES.has(of.reportLine)
     const [tokens, set] = payroll ? [payTokens, setPayTokens] : [expTokens, setExpTokens]
     if (!tokens.some((t) => t.field === 'line' && t.value === line))
       set([...tokens.filter((t) => t.field !== 'line'), { field: 'line', value: line, label }])
@@ -288,8 +308,8 @@ function Tiles({
   p: MonthProgress
   quick: Quick
   onQuick: (q: Quick) => void
-  onLine: (line: ReportLine, label: string) => void
-  overruns: Map<ReportLine, { check: CheckDto; by: string }>
+  onLine: (line: string, label: string) => void
+  overruns: Map<string, { check: CheckDto }>
   /** The month's late-submission check, shown on the Due tile. */
   late: CheckDto | null
   /** The stepper, under the three small tiles, beside the taller budget tile. */
@@ -304,7 +324,7 @@ function Tiles({
         86_400_000
     )
   )
-  const used = r.lines.filter(
+  const used = tileLines(r).filter(
     (l) => l.budget > 0 || l.billedThisPeriod > 0 || l.previouslyBilled > 0
   )
   // Over-budget lines first, so the collapsed tile always shows them.
@@ -337,7 +357,6 @@ function Tiles({
               >
                 {l.label}
               </button>
-              {o && <span className="rl-c-over">over by {o.by}</span>}
             </td>
             <td className="ad-num">{money(l.billedThisPeriod)}</td>
             <td className={`ad-num ${l.remaining < 0 ? 'rl-c-neg' : ''}`}>{money(l.remaining)}</td>
@@ -769,7 +788,7 @@ const tagChoices = (r: ReportDetail, target: TagTarget): FieldChoices => ({
 
 const matchesTokens = (
   tokens: FilterToken[],
-  row: { tags: string[]; line: ReportLine; missing: DocumentPurpose[] }
+  row: { tags: string[]; line: string; missing: DocumentPurpose[] }
 ) =>
   tokens.every((t) =>
     t.field === 'tag'
@@ -820,10 +839,7 @@ function ExpensesSection({
     {
       field: 'line',
       hint: 'a budget line',
-      options: [...new Set(all.map((e) => e.reportLine))].map((l) => ({
-        value: l,
-        label: REPORT_LINE_LABELS[l],
-      })),
+      options: [...new Set(all.map(lineKey))].map((l) => ({ value: l, label: lineName(r, l) })),
     },
     {
       field: 'missing',
@@ -843,7 +859,7 @@ function ExpensesSection({
     return (
       matchesTokens(tokens, {
         tags: e.tags,
-        line: e.reportLine,
+        line: lineKey(e),
         missing: missingOf(requiredPurposes(e), e.documents),
       }) &&
       matchesText(search, [
@@ -987,7 +1003,7 @@ function ExpensesSection({
                       <TagChips types={r.tagTypes} tags={e.tags} />
                     </td>
                     <td>
-                      {REPORT_LINE_LABELS[e.reportLine]}
+                      {e.budgetLineName ?? <span className="text-danger">Needs a budget line</span>}
                       {e.allocationType !== 'direct' && (
                         <span className="ad-table-sub">
                           {ALLOCATION_TYPE_LABELS[e.allocationType]}
@@ -1132,7 +1148,7 @@ function PayrollSection({
           needed: requiredPurposes(row.e),
           docs: row.e.documents,
           tags: row.e.tags,
-          line: row.e.reportLine,
+          line: lineKey(row.e),
           words: [
             row.e.vendor,
             row.e.itemNumber,
@@ -1147,7 +1163,7 @@ function PayrollSection({
           needed: PAYROLL_PURPOSES,
           docs: row.w.documents,
           tags: row.w.tags,
-          line: 'wex' as ReportLine,
+          line: 'wex-payments',
           words: [row.w.participantName, row.w.participantNumber, row.w.grossAmount],
         }
   const fields: FieldChoices[] = [
@@ -1163,7 +1179,7 @@ function PayrollSection({
       hint: 'a budget line',
       options: [...new Set(all.map((row) => facts(row).line))].map((l) => ({
         value: l,
-        label: REPORT_LINE_LABELS[l],
+        label: lineName(r, l),
       })),
     },
     {
@@ -1286,7 +1302,7 @@ function PayrollSection({
                           <span className="ad-mono font-semibold">{row.e.itemNumber}</span>{' '}
                           <span className="font-semibold">{row.e.vendor}</span>
                           <span className="ad-table-sub">
-                            {REPORT_LINE_LABELS[row.e.reportLine]}
+                            {row.e.budgetLineName ?? 'Needs a budget line'}
                           </span>
                         </>
                       ) : (

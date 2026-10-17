@@ -60,6 +60,10 @@ const engagement = () => ({
 function service() {
   const prisma = {
     workspace: scoped({ id: W, budgetItems: DEFAULT_BUDGET_ITEMS, tagTypes: DEFAULT_TAG_TYPES }),
+    // The names other engagements' budget lines have, to suggest.
+    budgetLine: { findMany: jest.fn().mockResolvedValue([]) },
+    // What was spent on each budget line to date.
+    expense: { groupBy: jest.fn().mockResolvedValue([]) },
     engagement: {
       ...scoped(engagement()),
       create: jest.fn().mockResolvedValue({ id: 'e-1' }),
@@ -162,8 +166,20 @@ describe('EngagementsService', () => {
     await s.create(member('bookkeeper'), { ...input, budgetItems: ['wex', 'travel'] })
     expect(prisma.engagement.create.mock.calls[0]![0].data.budgetLines).toEqual({
       create: [
-        { category: 'travel', reportLine: 'program-costs', amount: '0.00', sortOrder: 2 },
-        { category: 'wex', reportLine: 'wex', amount: '0.00', sortOrder: 9 },
+        {
+          name: 'Travel',
+          category: 'travel',
+          reportLine: 'program-costs',
+          amount: '0.00',
+          sortOrder: 2,
+        },
+        {
+          name: 'Work Experience (WEX)',
+          category: 'wex',
+          reportLine: 'wex',
+          amount: '0.00',
+          sortOrder: 9,
+        },
       ],
     })
     expect(log.entries.at(-1)!.changes).toContainEqual({

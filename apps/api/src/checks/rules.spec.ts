@@ -9,6 +9,7 @@ const expense = (overrides: Partial<RuleExpense> = {}): RuleExpense => ({
   allocatedAmount: 100,
   allocationType: 'direct',
   reportLine: 'program-costs',
+  budgetLineId: 'bl-supplies',
   documents: ['invoice', 'payment'],
   ...overrides,
 })
@@ -20,6 +21,7 @@ const month = (overrides: Partial<RuleMonth> = {}): RuleMonth => ({
   dueDay: 12,
   budget: { 'program-costs': 1000, wex: 500, indirect: 0 },
   previouslyBilled: {},
+  budgetLines: [{ id: 'bl-supplies', name: 'Supplies', amount: 1000, previouslyBilled: 0 }],
   expenses: [expense()],
   ...overrides,
 })
@@ -74,17 +76,38 @@ describe('runRules', () => {
     expect(found[0].severity).toBe('attention')
   })
 
-  it('reports a budget overrun once per line', () => {
+  it('reports a budget overrun once per budget line, as the contract approved it', () => {
     const found = runRules(
       month({
-        previouslyBilled: { 'program-costs': 950 },
-        expenses: [expense({ allocatedAmount: 60, totalCost: 60 })],
+        budgetLines: [{ id: 'bl-supplies', name: 'Supplies', amount: 1000, previouslyBilled: 950 }],
+        expenses: [
+          expense({ allocatedAmount: 30, totalCost: 30 }),
+          expense({
+            id: 'e2',
+            itemNumber: 'T-2',
+            allocatedAmount: 30,
+            totalCost: 30,
+            date: '2026-07-11',
+          }),
+        ],
       })
     )
     expect(found).toEqual([
       expect.objectContaining({
         code: 'budget-overrun',
-        message: expect.stringContaining('$10.00'),
+        message: 'Supplies: spent $1010.00 to date, over the approved $1000.00 by $10.00.',
+      }),
+    ])
+  })
+
+  it('blocks an expense spent against no budget line', () => {
+    const found = runRules(month({ expenses: [expense({ budgetLineId: null })] }))
+    expect(found).toEqual([
+      expect.objectContaining({
+        code: 'no-budget-line',
+        severity: 'blocker',
+        expenseId: 'e1',
+        message: expect.stringContaining('choose the budget line it is spent against'),
       }),
     ])
   })

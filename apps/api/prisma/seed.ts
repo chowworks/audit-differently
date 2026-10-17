@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto'
 import 'reflect-metadata'
 import {
   DOCUMENT_SENSITIVITY,
+  REPORT_LINE_LABELS,
+  type ReportLine,
   type DocumentKind,
   type EligibilityItem,
   DEFAULT_TAG_TYPES,
@@ -72,7 +74,17 @@ async function seat(p: Person) {
       NOT: { userId: { startsWith: 'pending-' } },
     },
   })
-  if (claimedByEmail || seatTaken) return
+  if (seatTaken) return
+  // Someone signed in with this address already (dev keeps its people when the demo is reset): that account takes the
+  // seat, as it would have on its first sign-in. Production's demo people are .example addresses nobody signs in with.
+  if (claimedByEmail) {
+    await prisma.membership.upsert({
+      where: { userId_workspaceId: { userId: claimedByEmail.id, workspaceId: p.workspaceId } },
+      update: { role: p.role },
+      create: { userId: claimedByEmail.id, workspaceId: p.workspaceId, role: p.role },
+    })
+    return
+  }
   await prisma.user.upsert({
     where: { id: p.id },
     update: { displayName: p.name, email: p.email },
@@ -122,12 +134,15 @@ async function engagement(
     update: data,
     create: { workspaceId: ws.id, number, ...data },
   })
-  for (const [i, [category, reportLine, amount, narrative]] of budget.entries())
+  for (const [i, [category, reportLine, amount, narrative]] of budget.entries()) {
+    // One line per line of the monthly report, named as the report names it.
+    const name = REPORT_LINE_LABELS[reportLine as ReportLine] ?? category
     await prisma.budgetLine.upsert({
       where: { engagementId_category: { engagementId: c.id, category } },
-      update: { reportLine, amount, narrative, sortOrder: i },
-      create: { engagementId: c.id, category, reportLine, amount, narrative, sortOrder: i },
+      update: { name, reportLine, amount, narrative, sortOrder: i },
+      create: { engagementId: c.id, category, name, reportLine, amount, narrative, sortOrder: i },
     })
+  }
   return c
 }
 
@@ -240,6 +255,14 @@ type Line = {
   bank?: string
   tags?: string[]
 }
+/** The budget line a demo expense is spent against: its engagement's line for the same line of the monthly report. */
+function budgetLineOf(
+  l: { line: string },
+  lines: { id: string; reportLine: string }[]
+): string | null {
+  return lines.find((b) => b.reportLine === l.line)?.id ?? null
+}
+
 type Extra = {
   submittedAt?: Date
   preparedByName?: string
@@ -325,8 +348,10 @@ async function month(
       }
     : null
 
+  const budgetLines = await prisma.budgetLine.findMany({ where: { engagementId } })
   for (const l of lines) {
     const data = {
+      budgetLineId: budgetLineOf(l, budgetLines),
       monthlyReportId: report.id,
       date: d(l.date),
       vendor: l.vendor,
@@ -616,21 +641,15 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
       authorizerOrganization: DEMO_WORKSPACE_NAME,
     },
     [
-      ['personnel', 'staff-salaries', 18000, 'Program coordinator, half time.'],
-      ['fringe', 'staff-fringe', 0, 'N/A'],
-      ['travel', 'program-costs', 1500, 'Mileage for school site visits.'],
-      ['equipment', 'program-costs', 0, 'N/A'],
-      ['supplies', 'program-costs', 6000, 'Laptops and lab supplies.'],
-      ['contractual', 'program-costs', 24000, 'Bookkeeping and payroll services.'],
+      ['staff-salaries', 'staff-salaries', 18000, 'Program coordinator, half time.'],
       [
-        'participant-training',
         'program-costs',
-        60500,
-        'Instruction, classroom rent share, certification vouchers.',
+        'program-costs',
+        92000,
+        'Instruction, lab supplies, bookkeeping, classroom rent share, certifications.',
       ],
-      ['other', 'program-costs', 0, 'N/A'],
-      ['indirect', 'indirect', 0, 'Not claimed.'],
       ['wex', 'wex', 15000, 'Paid work experience, 8 youth, 10 hours a week.'],
+      ['indirect', 'indirect', 0, 'Not claimed.'],
     ]
   )
 
@@ -1302,11 +1321,9 @@ async function main() {
       authorizerOrganization: 'Harbor Tech Collective',
     },
     [
-      ['supplies', 'program-costs', 3000, 'Lab supplies.'],
-      ['contractual', 'program-costs', 12000, 'Bookkeeping.'],
-      ['participant-training', 'program-costs', 60000, 'Instruction and certification.'],
-      ['indirect', 'indirect', 0, 'Not claimed.'],
+      ['program-costs', 'program-costs', 75000, 'Instruction, certification, bookkeeping.'],
       ['wex', 'wex', 15000, 'Paid work experience.'],
+      ['indirect', 'indirect', 0, 'Not claimed.'],
     ]
   )
   await participant(htc.id, '900101', 'Taylor Placeholder', 'new')

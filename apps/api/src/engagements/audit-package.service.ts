@@ -6,8 +6,10 @@ import {
   ENGAGEMENT_TRACKS,
   PAYROLL_DOCUMENT_KINDS,
   PERSONAL_DOCUMENT_ROLES,
+  REPORT_LINE_LABELS,
   personalRolesFor,
   type DocumentPurpose,
+  type ReportLine,
   type Role,
   type StatementMark,
 } from '@ad/types'
@@ -18,7 +20,6 @@ import { zipEntries, type ZipSource } from './zip-stream'
 import { splitParts, streamPart, type ExportObject, type PartLayout } from './export-parts'
 import { staffName, tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { howMany } from '../core/changes'
-import { budgetItemsOf } from '../workspaces/budget-items'
 import { itemCopy, markPlace, NOT_DRAWN } from '../payroll/mark-pdf'
 import { PrismaService } from '../prisma/prisma.service'
 import {
@@ -162,6 +163,7 @@ export class AuditPackageService {
     if (!c) throw new NotFoundException()
     const personal = workspaceRole(caller, c.workspaceId, [...PERSONAL_DOCUMENT_ROLES] as Role[])
     const root = safe(`${c.name}${c.number ? ` (${c.number})` : ''}`)
+    const lineNames = new Map(c.budgetLines.map((b) => [b.id, b.name]))
     const files: Record<string, Uint8Array> = {}
     const objects: ExportObject[] = []
     const placedDocs = new Set<string>()
@@ -314,6 +316,7 @@ export class AuditPackageService {
           'Allocated',
           'Allocation type',
           'Allocation note',
+          'Budget line',
           'Report line',
           'Files',
         ],
@@ -356,6 +359,7 @@ export class AuditPackageService {
           allocated.toFixed(2),
           e.allocationType,
           e.allocationNote ?? '',
+          (e.budgetLineId && lineNames.get(e.budgetLineId)) ?? 'Needs a budget line',
           e.reportLine,
           paths.join('; '),
         ])
@@ -446,6 +450,30 @@ export class AuditPackageService {
     }
     files[`${root}/Participants.csv`] = strToU8(csv(list))
 
+    // What the auditor compares first: the approved budget, line by line, against what was spent on each.
+    const spent = new Map<string | null, number>()
+    for (const r of c.monthlyReports)
+      for (const e of r.expenses)
+        spent.set(e.budgetLineId, (spent.get(e.budgetLineId) ?? 0) + Number(e.allocatedAmount))
+    files[`${root}/Budget vs actual.csv`] = strToU8(
+      csv([
+        ['Budget line', 'Rolls up to', 'Approved', 'Spent', 'Left'],
+        ...c.budgetLines.map((b) => {
+          const used = spent.get(b.id) ?? 0
+          return [
+            b.name,
+            REPORT_LINE_LABELS[b.reportLine as ReportLine] ?? b.reportLine,
+            Number(b.amount).toFixed(2),
+            used.toFixed(2),
+            (Number(b.amount) - used).toFixed(2),
+          ]
+        }),
+        ...(spent.get(null)
+          ? [['Needs a budget line', '', '', spent.get(null)!.toFixed(2), '']]
+          : []),
+      ])
+    )
+
     if (options.complete) {
       // Anything the layout above did not reach, so a deletion loses no stored file the owner may see.
       for (const d of c.documents) {
@@ -457,9 +485,9 @@ export class AuditPackageService {
       }
       files[`${root}/Budget.csv`] = strToU8(
         csv([
-          ['Category', 'Report line', 'Amount', 'Narrative'],
+          ['Budget line', 'Report line', 'Amount', 'Note'],
           ...c.budgetLines.map((b) => [
-            budgetItemsOf(c.workspace).find((i) => i.key === b.category)?.label ?? b.category,
+            b.name,
             b.reportLine,
             Number(b.amount).toFixed(2),
             b.narrative ?? '',

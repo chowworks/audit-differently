@@ -21,6 +21,7 @@ const travel = () => ({
   id: 'b-1',
   workspaceId: W,
   engagementId: 'e-1',
+  name: 'Travel',
   category: 'travel',
   reportLine: 'program-costs',
   amount: 1500,
@@ -59,7 +60,7 @@ const mixed = () => [
   month('r-3', '2026-10', 'draft'),
 ]
 
-function service(lines = [travel()], months = drafts()) {
+function service(lines = [travel()], months = drafts(), spending = 0) {
   const rows = scoped(...lines)
   const prisma = {
     engagement: scoped(engagement()),
@@ -72,10 +73,14 @@ function service(lines = [travel()], months = drafts()) {
         if (engagementId !== undefined && found.engagementId !== engagementId) return null
         return found
       }),
+      findMany: jest.fn(async () => lines.filter((l) => l.engagementId === 'e-1')),
+      count: jest.fn(async () => lines.filter((l) => l.engagementId === 'e-1').length),
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'b-2', ...data })),
       update: jest.fn(async ({ data }: { data: object }) => ({ ...travel(), ...data })),
       delete: jest.fn(async () => travel()),
     },
+    // How many expenses are spent against the line.
+    expense: { count: jest.fn(async () => spending) },
     monthlyReport: {
       findMany: jest.fn(async (args: { where: { status?: { in: string[] } } }) =>
         months
@@ -133,9 +138,9 @@ describe('BudgetService', () => {
   it('answers a member of another workspace with 404 and writes nothing', async () => {
     const { service: s, log, writes } = service()
     const who = stranger()
-    await expect(s.add(who, 'e-1', { category: 'rent-1a2b', amount: 100 })).rejects.toThrow(
-      NotFoundException
-    )
+    await expect(
+      s.add(who, 'e-1', { name: 'Rent', reportLine: 'program-costs', amount: 100 })
+    ).rejects.toThrow(NotFoundException)
     await expect(s.update(who, 'e-1', 'b-1', { amount: 1 })).rejects.toThrow(NotFoundException)
     await expect(s.remove(who, 'e-1', 'b-1')).rejects.toThrow(NotFoundException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
@@ -145,7 +150,9 @@ describe('BudgetService', () => {
   it('lets an auditor change nothing', async () => {
     const { service: s, log, writes } = service()
     const who = member('auditor')
-    await expect(s.add(who, 'e-1', { category: 'rent-1a2b' })).rejects.toThrow(ForbiddenException)
+    await expect(s.add(who, 'e-1', { name: 'Rent', reportLine: 'program-costs' })).rejects.toThrow(
+      ForbiddenException
+    )
     await expect(s.update(who, 'e-1', 'b-1', { amount: 1 })).rejects.toThrow(ForbiddenException)
     await expect(s.remove(who, 'e-1', 'b-1')).rejects.toThrow(ForbiddenException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
@@ -161,15 +168,19 @@ describe('BudgetService', () => {
     for (const w of writes) expect(w).not.toHaveBeenCalled()
   })
 
-  it('takes only an item of the workspace list, once, with an amount of $0 or more', async () => {
+  it('takes a named line, once per engagement, with its form line and an amount of $0 or more', async () => {
     const { service: s, writes } = service()
     const who = member('bookkeeper')
+    const rent = { name: 'Rent', reportLine: 'program-costs' as const }
     for (const bad of [
-      { category: 'not-an-item' },
-      { category: 'travel', amount: 10 },
-      { category: 'rent-1a2b', amount: -5 },
-      { category: 'rent-1a2b', amount: 'lots' as unknown as number },
-      { category: 'rent-1a2b', narrative: 'x'.repeat(2001) },
+      { reportLine: 'program-costs' as const },
+      { name: '   ', reportLine: 'program-costs' as const },
+      { name: 'Rent' },
+      { name: 'Rent', reportLine: 'not-a-line' as never },
+      { name: ' travel ', reportLine: 'program-costs' as const, amount: 10 },
+      { ...rent, amount: -5 },
+      { ...rent, amount: 'lots' as unknown as number },
+      { ...rent, narrative: 'x'.repeat(2001) },
     ])
       await expect(s.add(who, 'e-1', bad)).rejects.toThrow(BadRequestException)
     await expect(s.update(who, 'e-1', 'b-1', { amount: -1 })).rejects.toThrow(BadRequestException)
@@ -181,12 +192,17 @@ describe('BudgetService', () => {
     async (role) => {
       const { service: s, prisma, checks, log } = service()
       const who = member(role)
-      await s.add(who, 'e-1', { category: 'rent-1a2b', amount: 1200, narrative: 'Classroom rent' })
+      await s.add(who, 'e-1', {
+        name: 'Rent',
+        reportLine: 'program-costs',
+        amount: 1200,
+        narrative: 'Classroom rent',
+      })
       expect(prisma.budgetLine.create).toHaveBeenCalledWith({
         data: {
           engagementId: 'e-1',
-          category: 'rent-1a2b',
-          sortOrder: 10,
+          sortOrder: 1,
+          name: 'Rent',
           reportLine: 'program-costs',
           amount: '1200.00',
           narrative: 'Classroom rent',
@@ -210,9 +226,10 @@ describe('BudgetService', () => {
           action: 'create',
           description: 'Added Rent to the approved budget of Coding Pathway',
           changes: [
-            { field: 'Report line', after: 'Program Costs' },
+            { field: 'Name', after: 'Rent' },
+            { field: 'Rolls up to', after: 'Program Costs' },
             { field: 'Amount', after: '1200.00' },
-            { field: 'Narrative' },
+            { field: 'Note' },
           ],
         },
         {
@@ -230,9 +247,10 @@ describe('BudgetService', () => {
           action: 'delete',
           description: 'Removed Travel from the approved budget of Coding Pathway',
           changes: [
-            { field: 'Report line', before: 'Program Costs' },
+            { field: 'Name', before: 'Travel' },
+            { field: 'Rolls up to', before: 'Program Costs' },
             { field: 'Amount', before: '1500.00' },
-            { field: 'Narrative' },
+            { field: 'Note' },
           ],
         },
       ])
@@ -333,7 +351,8 @@ describe('BudgetService', () => {
   it('does it on adding and removing a line too, and not when nothing changed', async () => {
     const add = service([travel()], mixed())
     expect(
-      (await add.service.add(member('owner'), 'e-1', { category: 'rent-1a2b' })).backToDraft
+      (await add.service.add(member('owner'), 'e-1', { name: 'Rent', reportLine: 'program-costs' }))
+        .backToDraft
     ).toHaveLength(2)
     const remove = service([travel()], mixed())
     expect((await remove.service.remove(member('owner'), 'e-1', 'b-1')).backToDraft).toHaveLength(2)
@@ -362,9 +381,27 @@ describe('BudgetService', () => {
     expect(checks.refresh).not.toHaveBeenCalled()
   })
 
+  it('renames a line, and keeps a line with spending on its form line and on the budget', async () => {
+    const { service: s, prisma, log } = service([travel()], drafts(), 3)
+    const who = member('owner')
+    await s.update(who, 'e-1', 'b-1', { name: 'Staff travel' })
+    expect(prisma.budgetLine.update).toHaveBeenCalledWith({
+      where: { id: 'b-1' },
+      data: { name: 'Staff travel' },
+    })
+    expect(log.entries.at(-1)?.changes).toEqual([
+      { field: 'Name', before: 'Travel', after: 'Staff travel' },
+    ])
+    await expect(s.update(who, 'e-1', 'b-1', { reportLine: 'indirect' })).rejects.toThrow(
+      /keeps the line it rolls up to/
+    )
+    await expect(s.remove(who, 'e-1', 'b-1')).rejects.toThrow(/has spending/)
+    expect(prisma.budgetLine.delete).not.toHaveBeenCalled()
+  })
+
   it('enters a blank amount as $0 until the contract says', async () => {
     const { service: s, prisma } = service()
-    await s.add(member('owner'), 'e-1', { category: 'rent-1a2b', amount: null })
+    await s.add(member('owner'), 'e-1', { name: 'Rent', reportLine: 'program-costs', amount: null })
     expect(prisma.budgetLine.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ amount: '0.00', narrative: null }),
     })

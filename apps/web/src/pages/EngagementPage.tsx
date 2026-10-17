@@ -2,7 +2,6 @@ import { Fragment, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ENGAGEMENT_KIND_LABELS,
-  REPORT_LINE_LABELS,
   tagValueLabel,
   type AuditPackagePartsDto,
   type DocumentDto,
@@ -39,6 +38,7 @@ import { DeleteModal } from '@/components/DeleteModal'
 import { AttachModal } from '@/components/AttachModal'
 import { AddParticipantModal } from '@/components/AddParticipantModal'
 import { BudgetLineModal, recheckNotice } from '@/components/BudgetLineModal'
+import { BudgetSummary, ManageBudgetModal } from '@/components/BudgetSummary'
 import { ImportTransactionsModal } from '@/components/ImportTransactionsModal'
 import { DocumentMenuModal } from '@/components/DocumentMenuModal'
 import { EditEngagementModal } from '@/components/EditEngagementModal'
@@ -87,6 +87,8 @@ export function EngagementPage() {
   const [monthsOpen, setMonthsOpen] = useState<'ledger' | 'submission' | null>(null)
   const [importing, setImporting] = useState(false)
   // The budget line being changed, or 'new' to add one.
+  // Manage Budget is open; a line's dialog opened from it goes back to it when it closes.
+  const [managing, setManaging] = useState(false)
   const [budgetLine, setBudgetLine] = useState<
     EngagementDetail['budgetLines'][number] | 'new' | null
   >(null)
@@ -171,7 +173,6 @@ export function EngagementPage() {
       await api.download(`/engagements/${c.id}/audit-package?part=${n}`, fileName)
       setNotice({ tone: 'ok', text: `Part ${n} downloaded. The export is in the access log.` })
     })
-  const budgetTotal = c.budgetLines.reduce((t, b) => t + b.amount, 0)
   const remaining = (c.awardAmount ?? 0) - c.cumulativeBilled
   const billedPct = c.awardAmount ? Math.min(100, (c.cumulativeBilled / c.awardAmount) * 100) : 0
   const editFor = (key: StepKey): Focus =>
@@ -197,11 +198,7 @@ export function EngagementPage() {
         onRecord={(kind, title) => setRecord({ kind, title })}
         onFact={(r) =>
           // The budget is entered line by line in its own section, not in the Details modal.
-          r.key !== 'contract:budget'
-            ? setEditing(editFor(s.key))
-            : c.budgetLines.length
-              ? document.getElementById('budget')?.scrollIntoView({ behavior: 'smooth' })
-              : setBudgetLine('new')
+          r.key !== 'contract:budget' ? setEditing(editFor(s.key)) : setManaging(true)
         }
         onOpen={(d, kind) => openMenu(d, kind)}
         onUse={() => keep(s.key as EngagementTrack)}
@@ -217,48 +214,7 @@ export function EngagementPage() {
           </p>
         )}
         {s.key === 'contract' && (
-          <div id="budget" className="mt-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="ad-group-title !mb-0">Approved budget · {money(budgetTotal)}</p>
-              {c.canManage && (
-                <Button size="sm" onClick={() => setBudgetLine('new')}>
-                  + Add line
-                </Button>
-              )}
-            </div>
-            {c.budgetLines.length === 0 && (
-              <p className="text-sm text-soft">
-                No budget lines yet.
-                {c.canManage && ' Add one line per item of the approved budget.'}
-              </p>
-            )}
-            {c.budgetLines.length > 0 && (
-              <table className="ad-table">
-                <tbody>
-                  {c.budgetLines.map((b) => (
-                    <tr key={b.id}>
-                      <td>
-                        <span className="font-semibold">{b.label}</span>
-                        <span className="ad-table-sub">
-                          {[b.narrative, `reports as ${REPORT_LINE_LABELS[b.reportLine]}`]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        </span>
-                      </td>
-                      <td className="ad-num">{money(b.amount)}</td>
-                      {c.canManage && (
-                        <td className="ad-num">
-                          <Button size="sm" kind="ghost" onClick={() => setBudgetLine(b)}>
-                            Change
-                          </Button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+          <BudgetSummary lines={c.budgetLines} onManage={() => setManaging(true)} />
         )}
         {s.key === 'participants' && (
           <StepSummary
@@ -627,6 +583,15 @@ export function EngagementPage() {
           engagementId={c.id}
           onClose={() => setImporting(false)}
           onImported={(result) => setData(result.engagement)}
+        />
+      )}
+      {managing && !budgetLine && (
+        <ManageBudgetModal
+          lines={c.budgetLines}
+          canManage={c.canManage}
+          onAdd={() => setBudgetLine('new')}
+          onEdit={(b) => setBudgetLine(b)}
+          onClose={() => setManaging(false)}
         />
       )}
       {budgetLine && (

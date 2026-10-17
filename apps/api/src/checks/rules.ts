@@ -28,6 +28,8 @@ export interface RuleExpense {
   allocatedAmount: number
   allocationType: 'direct' | 'payroll' | 'usage'
   reportLine: ReportLine
+  /** The engagement's budget line it is spent against; null: none chosen yet. */
+  budgetLineId?: string | null
   /** Purposes of the documents attached to this expense. */
   documents: DocumentPurpose[]
   /** Its payroll proofs with the words highlighted on each, for the mismatch rule; none on other lines. */
@@ -66,6 +68,8 @@ export interface RuleMonth {
   budget: Partial<Record<ReportLine, number>>
   /** Cumulative billed on earlier reports, per line. */
   previouslyBilled: Partial<Record<ReportLine, number>>
+  /** The engagement's budget lines: approved, and spent against each on earlier reports. */
+  budgetLines?: { id: string; name: string; amount: number; previouslyBilled: number }[]
   expenses: RuleExpense[]
   /** The month's work-experience payments. */
   wexPayments?: RuleWex[]
@@ -286,18 +290,29 @@ export function runRules(month: RuleMonth): Finding[] {
       })
   }
 
-  // Budget overrun per line.
-  const billedNow: Partial<Record<ReportLine, number>> = {}
+  // Every expense is spent against one of the engagement's budget lines: the auditor compares each line with the
+  // approved budget, so an expense on no line blocks the month.
   for (const e of month.expenses)
-    billedNow[e.reportLine] = (billedNow[e.reportLine] ?? 0) + e.allocatedAmount
-  for (const [line, amount] of Object.entries(billedNow) as [ReportLine, number][]) {
-    const cumulative = (month.previouslyBilled[line] ?? 0) + amount
-    const budget = month.budget[line] ?? 0
-    if (cumulative > budget + 0.005)
+    if (!e.budgetLineId)
+      findings.push({
+        code: 'no-budget-line',
+        severity: 'blocker',
+        expenseId: e.id,
+        message: `${e.itemNumber} (${e.vendor}, ${money(e.allocatedAmount)}): choose the budget line it is spent against.`,
+      })
+
+  // Budget overrun per budget line, as the contract approved it.
+  for (const line of month.budgetLines ?? []) {
+    const now = month.expenses
+      .filter((e) => e.budgetLineId === line.id)
+      .reduce((t, e) => t + e.allocatedAmount, 0)
+    if (!now) continue
+    const cumulative = line.previouslyBilled + now
+    if (cumulative > line.amount + 0.005)
       findings.push({
         code: 'budget-overrun',
         severity: 'attention',
-        message: `${line}: cumulative ${money(cumulative)} exceeds the budget of ${money(budget)} by ${money(cumulative - budget)}.`,
+        message: `${line.name}: spent ${money(cumulative)} to date, over the approved ${money(line.amount)} by ${money(cumulative - line.amount)}.`,
       })
   }
 
