@@ -292,7 +292,7 @@ export function NewEngagementPage() {
         {workspace ? (
           <Link to={`/workspaces/${workspace.id}`}>{workspace.name}</Link>
         ) : (
-          <Link to="/workspaces">My workspaces</Link>
+          <Link to="/workspaces">Workspace Manager</Link>
         )}{' '}
         / Set up an award
       </nav>

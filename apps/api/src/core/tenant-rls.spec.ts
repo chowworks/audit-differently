@@ -749,6 +749,31 @@ suite('tenant isolation', () => {
       })
     })
 
+    it('dismisses only a receipt that needs filing, and keeps it dismissed (migration 20261017000100)', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        await db.query(`UPDATE "InboundReceipt" SET status = 'failed' WHERE id = 'IR-W1'`)
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET status = 'dismissed' WHERE id = 'IR-W1'`))
+            .error
+        ).toMatch(/needs filing/)
+        await db.query(`UPDATE "InboundReceipt" SET status = 'unmatched' WHERE id = 'IR-W1'`)
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET status = 'dismissed' WHERE id = 'IR-W1'`))
+            .rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET status = 'received' WHERE id = 'IR-W1'`))
+            .error
+        ).toMatch(/stays dismissed/)
+      })
+      // The clean-up removes it, as it does a refused one.
+      await as({ workspaces: ['W1', 'W2'], system: true }, async () => {
+        await db.query(`UPDATE "InboundReceipt" SET status = 'unmatched' WHERE id = 'IR-W1'`)
+        await db.query(`UPDATE "InboundReceipt" SET status = 'dismissed' WHERE id = 'IR-W1'`)
+        expect((await attempt(`DELETE FROM "InboundReceipt" WHERE id = 'IR-W1'`)).rows).toBe(1)
+      })
+    })
+
     it('never claims a row past its last attempt, fails one a crash left behind, and never claims a hand filing', async () => {
       await as({ workspaces: ['W1', 'W2'], system: true }, async () => {
         await db.query(

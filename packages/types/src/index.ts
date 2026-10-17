@@ -1209,6 +1209,7 @@ export const INBOUND_RECEIPT_STATUSES = [
   'unmatched',
   'rejected',
   'failed',
+  'dismissed',
 ] as const
 export type InboundReceiptStatus = (typeof INBOUND_RECEIPT_STATUSES)[number]
 export const INBOUND_RECEIPT_STATUS_LABELS: Record<InboundReceiptStatus, string> = {
@@ -1218,6 +1219,17 @@ export const INBOUND_RECEIPT_STATUS_LABELS: Record<InboundReceiptStatus, string>
   unmatched: 'Needs filing',
   rejected: 'Refused',
   failed: 'Failed',
+  dismissed: 'Dismissed',
+}
+
+/** Why a person dismissed an emailed receipt that needs filing: a fixed list, so nothing personal is typed in. */
+export const DISMISS_REASONS = ['personal', 'duplicate', 'not-a-receipt', 'other'] as const
+export type DismissReason = (typeof DISMISS_REASONS)[number]
+export const DISMISS_REASON_LABELS: Record<DismissReason, string> = {
+  personal: 'Personal, not for this grant',
+  duplicate: 'Already on file',
+  'not-a-receipt': 'Not a receipt',
+  other: 'Something else',
 }
 
 /** The workspace's receipts address: its local part, 3 to 40 lowercase letters, digits and hyphens. */

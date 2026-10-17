@@ -21,6 +21,7 @@ import {
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { usePeopleSearch } from '@/hooks/usePeopleSearch'
+import { TagsTable } from '@/pages/TagsTable'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { nextDue, workflow } from '@/lib/workflow'
 import {
@@ -110,7 +111,7 @@ export function WorkspacePage() {
     },
   ]
   const hand = (
-    <HandCard lead="One workspace per team.">
+    <HandCard title="What's a workspace?" icon="🗄️" lead="One workspace per team.">
       <p>Everyone you invite sees the same records. Invite the auditor to pull what they need.</p>
     </HandCard>
   )
@@ -118,7 +119,7 @@ export function WorkspacePage() {
   return (
     <>
       <nav className="ad-crumbs" aria-label="Breadcrumb">
-        <Link to="/workspaces">My workspaces</Link> / {w.name}
+        <Link to="/workspaces">Workspace Manager</Link> / {w.name}
       </nav>
       <div className="ad-head">
         <div className="flex items-start gap-4">
@@ -306,19 +307,28 @@ export function WorkspacePage() {
 
       {/* Row 3: emailed receipts */}
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
-        <section className="ad-section lg:col-span-2">
-          <SectionHead icon="mail" title="Emailed receipts" />
+        <section className="ad-section lg:col-span-3">
+          <SectionHead icon="mail" title="Reconcile emailed receipts" />
           <ReceiptsInbox workspaceId={w.id} engagements={engagements} />
         </section>
       </div>
 
-      {/* Row 4: settings */}
-      <div className="mt-6 grid gap-4 lg:grid-cols-3">
-        <section className="ad-section lg:col-span-2">
-          <SectionHead icon="sliders" title="Settings" />
+      {/* Row 4: the workspace's own settings */}
+      <div className="mt-6 grid gap-4">
+        <section className="ad-section">
+          <SectionHead icon="sliders" title="Workspace Settings" />
           <div className="grid gap-4">
             {w.canManage && <Rename w={w} onChange={reload} />}
             <ReceiptsAddress w={w} onChange={reload} />
+          </div>
+        </section>
+      </div>
+
+      {/* Row 5: the lists records are kept against */}
+      <div className="mt-6 grid gap-4">
+        <section className="ad-section">
+          <SectionHead icon="sliders" title="Configuration Data" />
+          <div className="grid gap-4">
             <BudgetItems w={w} onChange={reload} />
             <Tags w={w} onChange={reload} />
             <MoreLists w={w} onChange={reload} />
@@ -707,7 +717,7 @@ export function BudgetItems({
     }
   }
   return (
-    <Card title="Budget items">
+    <Card title="Budget Line Items">
       <p className="mb-3 text-sm text-soft">
         What an approved budget is made of, and the line of the monthly report each one rolls into.
         A new engagement uses the items it ticks. Renaming an item renames it on every engagement;
@@ -793,7 +803,7 @@ export function BudgetItems({
 }
 
 /** A tag type being edited: one without a key (or a value without one) is new; the API keys it on save. */
-type DraftType = {
+export type DraftType = {
   key?: string
   label: string
   appliesTo: TagTarget[]
@@ -900,6 +910,116 @@ export function Tags({
       setBusy(false)
     }
   }
+  // One tag type's editor (its name, what it applies to, its values), whichever layout shows it.
+  const editor = (t: DraftType, at: number) => (
+    <>
+      {w.canManage ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            className={`${inputClass} flex-1`}
+            aria-label={`Name of ${t.label || 'tag type'}`}
+            value={t.label}
+            onChange={(e) => change(at, { label: e.target.value })}
+          />
+          {!(admin && t.key) && (
+            <Button
+              size="sm"
+              kind="ghost"
+              aria-label={`Remove ${t.label}`}
+              onClick={() => setTypes(types.filter((_, n) => n !== at))}
+            >
+              ✕
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-baseline gap-2">
+          <b>{t.label}</b>
+          <span className="text-xs text-soft">{appliesWords(t.appliesTo)}</span>
+        </div>
+      )}
+      {w.canManage && (
+        <div className="mt-2 flex flex-wrap gap-3 text-sm">
+          <span className="text-soft">Applies to</span>
+          {TAG_TARGETS.map((x) => (
+            <label key={x} className="inline-flex items-center gap-1">
+              <input
+                type="checkbox"
+                checked={t.appliesTo.includes(x)}
+                onChange={(e) =>
+                  change(at, {
+                    appliesTo: TAG_TARGETS.filter((y) =>
+                      y === x ? e.target.checked : t.appliesTo.includes(y)
+                    ),
+                  })
+                }
+              />
+              {TAG_TARGET_LABELS[x]}
+            </label>
+          ))}
+        </div>
+      )}
+      <ul className={`ad-taglist mt-2 ${admin ? 'ad-taglist-solid' : ''}`}>
+        {t.values.map((v, n) => (
+          <li
+            key={v.key ?? `new-${n}`}
+            className={w.canManage && !(admin && v.key) ? undefined : 'pr-3'}
+          >
+            {w.canManage ? (
+              // Renaming keeps the value's key, so every record that has it shows the new name.
+              <input
+                aria-label={`Name of ${v.label || 'this value'} in ${t.label}`}
+                value={v.label}
+                size={Math.max(4, v.label.length)}
+                onChange={(e) =>
+                  change(at, {
+                    values: t.values.map((x, i) => (i === n ? { ...x, label: e.target.value } : x)),
+                  })
+                }
+              />
+            ) : (
+              <span>{v.label}</span>
+            )}
+            {w.canManage && !(admin && v.key) && (
+              <button
+                type="button"
+                aria-label={`Remove ${v.label}`}
+                onClick={() => change(at, { values: t.values.filter((_, x) => x !== n) })}
+              >
+                ✕
+              </button>
+            )}
+          </li>
+        ))}
+        {t.values.length === 0 && <li className="text-soft">No values yet.</li>}
+      </ul>
+      {w.canManage && (
+        <div className="mt-2 flex gap-2">
+          <input
+            className={`${inputClass} ad-input-sm`}
+            placeholder="Add a value, e.g. Under 18"
+            aria-label={`Add a value to ${t.label || 'this tag type'}`}
+            value={drafts[at] ?? ''}
+            onChange={(e) => setDrafts({ ...drafts, [at]: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                addValue(at)
+              }
+            }}
+          />
+          <Button
+            size="sm"
+            kind={admin ? 'navy' : undefined}
+            onClick={() => addValue(at)}
+            disabled={!drafts[at]?.trim()}
+          >
+            Add
+          </Button>
+        </div>
+      )}
+    </>
+  )
   return (
     <Card title="Tags">
       <p className="mb-3 text-sm text-soft">
@@ -910,121 +1030,11 @@ export function Tags({
         log names the field, never the tag.
       </p>
       <ErrorNote message={error} />
-      <div className="grid gap-3">
-        {types.map((t, at) => (
-          <div key={t.key ?? `new-${at}`} className="ad-tagtype">
-            {w.canManage ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  className={`${inputClass} flex-1`}
-                  aria-label={`Name of ${t.label || 'tag type'}`}
-                  value={t.label}
-                  onChange={(e) => change(at, { label: e.target.value })}
-                />
-                {!(admin && t.key) && (
-                  <Button
-                    size="sm"
-                    kind="ghost"
-                    aria-label={`Remove ${t.label}`}
-                    onClick={() => setTypes(types.filter((_, n) => n !== at))}
-                  >
-                    ✕
-                  </Button>
-                )}
-              </div>
-            ) : (
-              <div className="flex flex-wrap items-baseline gap-2">
-                <b>{t.label}</b>
-                <span className="text-xs text-soft">{appliesWords(t.appliesTo)}</span>
-              </div>
-            )}
-            {w.canManage && (
-              <div className="mt-2 flex flex-wrap gap-3 text-sm">
-                <span className="text-soft">Applies to</span>
-                {TAG_TARGETS.map((x) => (
-                  <label key={x} className="inline-flex items-center gap-1">
-                    <input
-                      type="checkbox"
-                      checked={t.appliesTo.includes(x)}
-                      onChange={(e) =>
-                        change(at, {
-                          appliesTo: TAG_TARGETS.filter((y) =>
-                            y === x ? e.target.checked : t.appliesTo.includes(y)
-                          ),
-                        })
-                      }
-                    />
-                    {TAG_TARGET_LABELS[x]}
-                  </label>
-                ))}
-              </div>
-            )}
-            <ul className={`ad-taglist mt-2 ${admin ? 'ad-taglist-solid' : ''}`}>
-              {t.values.map((v, n) => (
-                <li
-                  key={v.key ?? `new-${n}`}
-                  className={w.canManage && !(admin && v.key) ? undefined : 'pr-3'}
-                >
-                  {w.canManage ? (
-                    // Renaming keeps the value's key, so every record that has it shows the new name.
-                    <input
-                      aria-label={`Name of ${v.label || 'this value'} in ${t.label}`}
-                      value={v.label}
-                      size={Math.max(4, v.label.length)}
-                      onChange={(e) =>
-                        change(at, {
-                          values: t.values.map((x, i) =>
-                            i === n ? { ...x, label: e.target.value } : x
-                          ),
-                        })
-                      }
-                    />
-                  ) : (
-                    <span>{v.label}</span>
-                  )}
-                  {w.canManage && !(admin && v.key) && (
-                    <button
-                      type="button"
-                      aria-label={`Remove ${v.label}`}
-                      onClick={() => change(at, { values: t.values.filter((_, x) => x !== n) })}
-                    >
-                      ✕
-                    </button>
-                  )}
-                </li>
-              ))}
-              {t.values.length === 0 && <li className="text-soft">No values yet.</li>}
-            </ul>
-            {w.canManage && (
-              <div className="mt-2 flex gap-2">
-                <input
-                  className={`${inputClass} ad-input-sm`}
-                  placeholder="Add a value, e.g. Under 18"
-                  aria-label={`Add a value to ${t.label || 'this tag type'}`}
-                  value={drafts[at] ?? ''}
-                  onChange={(e) => setDrafts({ ...drafts, [at]: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      addValue(at)
-                    }
-                  }}
-                />
-                <Button
-                  size="sm"
-                  kind={admin ? 'navy' : undefined}
-                  onClick={() => addValue(at)}
-                  disabled={!drafts[at]?.trim()}
-                >
-                  Add
-                </Button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+      <TagsTable types={types} canManage={w.canManage} editor={editor} />
       {!w.canManage && (
-        <p className="mt-3 text-xs text-soft">Need another tag? Suggest it under More lists.</p>
+        <p className="mt-3 text-xs text-soft">
+          Need another tag? Suggest it under Suggest configuration data.
+        </p>
       )}
       {w.canManage && (
         <>
@@ -1107,10 +1117,10 @@ function MoreLists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promis
     }
   }
   return (
-    <Card eyebrow="Coming soon" title="More lists">
+    <Card title="Suggest configuration data">
       <p className="text-sm text-soft">
-        The report lines will be a list here too, so a funder's own forms can be matched without
-        changing the product. Missing something today? Say so.
+        Need a piece of configuration data we don't have, such as a list your funder's forms use?
+        Suggest it.
       </p>
       <ErrorNote message={error} />
       {thanks && <Notice tone="ok">Noted. We keep these and will follow up.</Notice>}
@@ -1118,7 +1128,7 @@ function MoreLists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promis
         <form onSubmit={suggest} className="mt-3 flex gap-2">
           <input
             className={inputClass}
-            placeholder="Suggest an addition, e.g. a fund, a tag or a form your funder uses"
+            placeholder="e.g. the report lines of our funder's own form"
             value={text}
             onChange={(e) => setText(e.target.value)}
           />

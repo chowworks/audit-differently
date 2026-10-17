@@ -19,6 +19,7 @@ const TONE: Record<InboundReceiptStatus, Tone> = {
   unmatched: 'warn',
   rejected: 'danger',
   failed: 'warn',
+  dismissed: 'muted',
 }
 const SIGN: Record<InboundReceiptStatus, string> = {
   received: '🔄',
@@ -27,6 +28,7 @@ const SIGN: Record<InboundReceiptStatus, string> = {
   unmatched: '📥',
   rejected: '⛔',
   failed: '⚠️',
+  dismissed: '🗑️',
 }
 
 /**

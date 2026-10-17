@@ -420,7 +420,7 @@ export function EngagementPage() {
   return (
     <>
       <nav className="ad-crumbs" aria-label="Breadcrumb">
-        <Link to="/workspaces">My workspaces</Link> /{' '}
+        <Link to="/workspaces">Workspace Manager</Link> /{' '}
         <Link to={`/workspaces/${c.workspaceId}`}>{c.workspaceName}</Link> / {c.name}
       </nav>
 

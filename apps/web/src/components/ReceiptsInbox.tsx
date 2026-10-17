@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import {
+  DISMISS_REASONS,
+  DISMISS_REASON_LABELS,
   INBOUND_RECEIPT_STATUS_LABELS,
+  type DismissReason,
   RECEIPTS_ADDRESS_PATTERN,
   type EngagementSummary,
   type InboundReceiptDto,
@@ -9,6 +12,8 @@ import {
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { shortDate } from '@/lib/format'
+import { HandCard } from '@/components/HandCard'
+import { CopyPill } from '@/components/MatchReceipts'
 import {
   Button,
   Card,
@@ -29,6 +34,7 @@ const TONE: Record<InboundReceiptStatus, Tone> = {
   unmatched: 'warn',
   rejected: 'danger',
   failed: 'danger',
+  dismissed: 'muted',
 }
 
 /**
@@ -166,6 +172,7 @@ export function ReceiptsInbox({
   const [busy, setBusy] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [filing, setFiling] = useState<InboundReceiptDto | null>(null)
+  const [dismissing, setDismissing] = useState<InboundReceiptDto | null>(null)
   if (error) return <ErrorNote message={error} />
   if (!data) return <Empty>Loading…</Empty>
   const runAgain = async (id: string) => {
@@ -187,13 +194,25 @@ export function ReceiptsInbox({
           first. Receipts that came in elsewhere still show below.
         </Notice>
       ) : data.address ? (
-        <p className="mb-3 text-sm">
-          Email receipts to <span className="ad-mono">{data.address}</span>. Put the engagement code
-          in the subject. PDF, PNG and JPG attachments only, up to 10 per email.
-        </p>
+        <div className="mb-4">
+          <HandCard
+            title="Email receipts in"
+            icon="📬"
+            lead="Forward receipts to your workspace's email, with the engagement code in the subject."
+          >
+            <CopyPill label="Email" value={data.address} />
+            <ol className="ad-hand-steps">
+              <li>Send from the email you sign in with.</li>
+              <li>Attach PDF, PNG or JPG files, up to 10 per email.</li>
+              <li>
+                Each is filed to its engagement's month; anything that can't be is listed here.
+              </li>
+            </ol>
+          </HandCard>
+        </div>
       ) : (
         <Notice tone="info">
-          Not set up yet: an owner sets the receipts address under Settings.
+          Not set up yet: an owner sets the receipts address under Workspace Settings.
         </Notice>
       )}
       <ErrorNote message={actionError} />
@@ -234,9 +253,14 @@ export function ReceiptsInbox({
                   {data.canManage && (
                     <td className="whitespace-nowrap text-right">
                       {r.status === 'unmatched' && (
-                        <Button size="sm" kind="primary" onClick={() => setFiling(r)}>
-                          File it
-                        </Button>
+                        <>
+                          <Button size="sm" kind="primary" onClick={() => setFiling(r)}>
+                            File it
+                          </Button>{' '}
+                          <Button size="sm" onClick={() => setDismissing(r)}>
+                            Dismiss
+                          </Button>
+                        </>
                       )}{' '}
                       {(r.status === 'failed' || r.status === 'unmatched') && (
                         <Button size="sm" disabled={busy === r.id} onClick={() => runAgain(r.id)}>
@@ -250,6 +274,16 @@ export function ReceiptsInbox({
             </tbody>
           </table>
         </div>
+      )}
+      {dismissing && (
+        <DismissModal
+          receipt={dismissing}
+          onClose={() => setDismissing(null)}
+          onDismissed={(inbox) => {
+            setData(inbox)
+            setDismissing(null)
+          }}
+        />
       )}
       {filing && (
         <FileModal
@@ -344,6 +378,73 @@ function FileModal({
           <Button onClick={onClose}>Cancel</Button>
           <Button type="submit" kind="primary" disabled={busy || !engagementId || !period}>
             File it
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+/** Puts aside a receipt that needs filing but should never be filed, with its reason; it leaves the inbox. */
+function DismissModal({
+  receipt,
+  onClose,
+  onDismissed,
+}: {
+  receipt: InboundReceiptDto
+  onClose: () => void
+  onDismissed: (inbox: ReceiptsInboxDto) => void
+}) {
+  const api = useApi()
+  const [reason, setReason] = useState<DismissReason | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const dismiss = async (ev: React.FormEvent) => {
+    ev.preventDefault()
+    if (!reason) return
+    setBusy(true)
+    setError(null)
+    try {
+      onDismissed(
+        await api.post<ReceiptsInboxDto>(`/inbound-receipts/${receipt.id}/dismiss`, { reason })
+      )
+    } catch (e) {
+      setError((e as Error).message)
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal title="Dismiss this emailed receipt?" onClose={onClose}>
+      <form onSubmit={dismiss} className="grid gap-4">
+        <ErrorNote message={error} />
+        <p className="text-sm">
+          {receipt.subject || '(no subject)'} · {receipt.fromAddress ?? 'unknown sender'}. It leaves
+          the inbox and nothing is filed. The access log keeps who dismissed it and why.
+        </p>
+        <fieldset className="ad-field">
+          <span>
+            Why<i className="ad-req">*</i>
+          </span>
+          <div className="grid gap-2">
+            {DISMISS_REASONS.map((r) => (
+              <label key={r} className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="reason"
+                  checked={reason === r}
+                  onChange={() => setReason(r)}
+                />
+                {DISMISS_REASON_LABELS[r]}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <div className="flex justify-end gap-2">
+          <Button type="button" kind="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" kind="primary" disabled={busy || !reason}>
+            Dismiss
           </Button>
         </div>
       </form>

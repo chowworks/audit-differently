@@ -73,7 +73,7 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   attempt that reaches Clerk is an append-only `PlatformRoleChange` row, shown as "Admin changes"). Platform admins also see and rerun the emailed receipts that went nowhere or were refused or failed, metadata
   only, never attachments (owner's decision, 2026-10-16; Admin tools → Email administration). A rerun of a workspace's
   row writes its access-log line in the same transaction, and the database refuses it without one (`app_admin_reran`,
-  migration `20261016000100`). The signed-in person's own list is "My workspaces"; Admin tools has tiles (Manage admins,
+  migration `20261016000100`). The signed-in person's own list is "Workspace Manager"; Admin tools has tiles (Manage admins,
   Manage workspaces, Email administration). Workspace level
   only: an admin reads no engagement, record, access log or deletion summary and deletes no workspace, and where they
   are also a member they have exactly that membership's rights. An admin **may seat themself** in any workspace, in

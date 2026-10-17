@@ -116,6 +116,15 @@ export class ReceiptsInboxController {
     return this.inbound.runAgain(await this.callers.load(userId), id)
   }
 
+  @Post('inbound-receipts/:id/dismiss')
+  async dismiss(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Body() body: { reason?: unknown }
+  ): Promise<ReceiptsInboxDto> {
+    return this.inbound.dismiss(await this.callers.load(userId), id, body?.reason)
+  }
+
   @Post('inbound-receipts/:id/file')
   async file(
     @UserId() userId: string,

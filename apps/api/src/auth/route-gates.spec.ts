@@ -174,6 +174,7 @@ const GATED = [
   'POST /api/receipts/:id/dismiss',
   'GET /api/workspaces/:id/receipts-inbox',
   'POST /api/inbound-receipts/:id/run-again',
+  'POST /api/inbound-receipts/:id/dismiss',
   'POST /api/inbound-receipts/:id/file',
   'POST /api/reports/:id/payroll-documents',
   'POST /api/reports/:id/payroll-documents/replace',

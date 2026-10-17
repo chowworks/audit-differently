@@ -212,7 +212,7 @@ export function MatchReceipts({
               </ol>
             </>
           ) : (
-            <p>An owner sets it under the workspace’s Settings, once.</p>
+            <p>An owner sets it under the workspace’s Workspace Settings, once.</p>
           )}
         </HandCard>
       </div>
@@ -331,7 +331,7 @@ export function MatchReceipts({
 }
 
 /** A value to paste somewhere else (the receipts email, the grant code), in its pill with a Copy button. */
-function CopyPill({ label, value }: { label: string; value: string }) {
+export function CopyPill({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false)
   return (
     <p className="ad-hand-address">

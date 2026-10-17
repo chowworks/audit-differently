@@ -1,0 +1,14 @@
+/* The tag types table (TagsTable.tsx). */
+.tv-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tv-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--surface-alt, #f1f4f6);
+  border: 1px solid var(--line);
+  font-size: 13px;
+}

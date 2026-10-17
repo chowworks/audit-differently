@@ -16,7 +16,7 @@ export function WorkspacesPage() {
     <>
       <div className="ad-head">
         <div>
-          <h1 className="ad-h1">My workspaces</h1>
+          <h1 className="ad-h1">Workspace Manager</h1>
           <p className="ad-sub">
             A workspace is your team's set of grants and contracts, the people who work on them, and
             the lists they share. What one person records, the whole team sees.

@@ -942,6 +942,37 @@ describe('emailed receipts', () => {
       )
     })
 
+    it('dismisses a receipt that needs filing, with its reason, logged, for an owner or bookkeeper only', async () => {
+      const t = ready()
+      t.engagements[1]!.status = 'active'
+      const row = await t.receive('Lunch receipt')
+      expect(row.status).toBe('unmatched')
+      await expect(asRequest('u-aud', (c) => t.s.dismiss(c, row.id, 'personal'))).rejects.toThrow(
+        ForbiddenException
+      )
+      await expect(asRequest('u-owner', (c) => t.s.dismiss(c, row.id, 'because'))).rejects.toThrow(
+        /Say why/
+      )
+      await asRequest('u-owner', (c) => t.s.dismiss(c, row.id, 'personal'))
+      expect(row).toMatchObject({
+        status: 'dismissed',
+        rejectReason: 'personal, not for this grant',
+      })
+      expect(t.log.entries.at(-1)).toMatchObject({
+        workspaceId: W,
+        description:
+          'Dismissed an emailed receipt from the receipts inbox: personal, not for this grant',
+        changes: [{ field: 'Status', before: 'unmatched', after: 'dismissed' }],
+      })
+      // Dealt with: it is not dismissed twice, nor run again.
+      await expect(
+        asRequest('u-owner', (c) => t.s.dismiss(c, row.id, 'duplicate'))
+      ).rejects.toThrow(ConflictException)
+      await expect(asRequest('u-owner', (c) => t.s.runAgain(c, row.id))).rejects.toThrow(
+        ConflictException
+      )
+    })
+
     it('files an unmatched receipt where the person says, as that person', async () => {
       const t = ready()
       t.engagements[1]!.status = 'active'

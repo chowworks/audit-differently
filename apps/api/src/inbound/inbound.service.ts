@@ -9,7 +9,10 @@ import {
 } from '@nestjs/common'
 import { Prisma, type InboundReceipt } from '@prisma/client'
 import {
+  DISMISS_REASONS,
+  DISMISS_REASON_LABELS,
   WRITE_ROLES,
+  type DismissReason,
   type FileInboundReceiptRequest,
   type InboundReceiptDto,
   type InboundReceiptStatus,
@@ -255,7 +258,7 @@ export class InboundService {
       this.prisma.inboundReceipt.deleteMany({
         where: {
           receivedAt: { lt: before },
-          OR: [{ workspaceId: null }, { status: { in: ['rejected', 'failed'] } }],
+          OR: [{ workspaceId: null }, { status: { in: ['rejected', 'failed', 'dismissed'] } }],
         },
       })
     )
@@ -621,7 +624,8 @@ export class InboundService {
     })
     if (!w) throw new NotFoundException()
     const rows = await this.prisma.inboundReceipt.findMany({
-      where: { AND: [{ workspaceId }, tenantWhere(caller)] },
+      // A dismissed receipt has been dealt with: it leaves the inbox and goes with the 30-day clean-up.
+      where: { AND: [{ workspaceId }, { status: { not: 'dismissed' } }, tenantWhere(caller)] },
       orderBy: { receivedAt: 'desc' },
       take: 100,
     })
@@ -661,6 +665,30 @@ export class InboundService {
       subjectId: id,
       action: 'update',
       description: 'Ran an emailed receipt again from the receipts inbox',
+      changes: changesOf(row, data, STATUS_FIELDS),
+    })
+    return this.inbox(caller, row.workspaceId!)
+  }
+
+  /**
+   * "Dismiss": a receipt that needs filing but should never be filed (personal, a duplicate, not a receipt) is put
+   * aside with its reason, from a fixed list. It leaves the inbox; the database lets only a receipt that needs filing
+   * become dismissed, and nothing changes it after (migration 20261017000100).
+   */
+  async dismiss(caller: Caller, id: string, reason: unknown): Promise<ReceiptsInboxDto> {
+    if (!DISMISS_REASONS.includes(reason as DismissReason))
+      throw new BadRequestException('Say why it is dismissed')
+    const row = await this.changeable(caller, id)
+    if (row.status !== 'unmatched')
+      throw new ConflictException('Only a receipt that needs filing is dismissed')
+    const label = DISMISS_REASON_LABELS[reason as DismissReason]
+    const data = { status: 'dismissed', rejectReason: label.toLowerCase() }
+    await this.log.change(caller, (tx) => tx.inboundReceipt.update({ where: { id }, data }), {
+      workspaceId: row.workspaceId!,
+      resource: 'document',
+      subjectId: id,
+      action: 'update',
+      description: `Dismissed an emailed receipt from the receipts inbox: ${label.toLowerCase()}`,
       changes: changesOf(row, data, STATUS_FIELDS),
     })
     return this.inbox(caller, row.workspaceId!)
