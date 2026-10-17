@@ -1,9 +1,11 @@
 /**
- * Loads (or puts back) the fictional demo workspace, Riverbend Youth Services with its engagement DEMO-26IS-RYS, in the
- * environment it runs in, production included. It creates or updates that one workspace and nothing else: it never
- * empties a table, never touches another workspace's rows, and refuses (changing nothing) when the name or receipts
- * address it uses belongs to a workspace that is not plainly the demo (prisma/seed.ts, `demoWorkspace`). Its files go to
- * the environment's private bucket under the demo workspace's own prefix. Like every writing script it needs
+ * Loads (or builds again) the fictional demo workspace, Riverbend Youth Services with its engagement DEMO-26IS-RYS, in
+ * the environment it runs in, production included. The workspace marked Full demo, if there is one, is removed with its
+ * records and files first (so a demo seeded by an older version comes back whole, not mixed), and then built; nothing
+ * else is touched: no table is emptied, no other workspace's rows change, and it refuses (changing nothing) when the
+ * marked workspace is not plainly the demo, or when the name or receipts address it uses belongs to a workspace that is
+ * not (prisma/seed.ts, `demoWorkspace`). A person seated in the demo seats themself again. Its files go to the
+ * environment's private bucket under the demo workspace's own prefix. Like every writing script it needs
  * --confirm-host, and in production it needs the owner's yes at the time (CLAUDE.md, "Database"); docs/dev-api.md has
  * how to run it there.
  *
@@ -18,7 +20,15 @@
 import './lib/owner-env'
 import { PrismaClient } from '@prisma/client'
 import { assertBypassesRls, dbHost, requireHostConfirmation } from './lib/db-guard'
-import { disconnect, seedDemoWorkspace } from '../prisma/seed'
+import { removeWorkspace } from './lib/remove-workspace'
+import {
+  DEMO_ENGAGEMENT_PREFIX,
+  DEMO_WORKSPACE_NAME,
+  disconnect,
+  seedDemoWorkspace,
+} from '../prisma/seed'
+import { LocalDiskStorage } from '../src/storage/local-disk-storage'
+import { R2DocumentStorage } from '../src/storage/r2-storage'
 
 /** A database on this machine: the one case whose files may stay on this disk. */
 const onThisMachine = (host: string) =>
@@ -32,8 +42,30 @@ async function main(): Promise<void> {
       `R2_DOCUMENTS_BUCKET is not set: the demo files for ${dbHost()} would not reach its bucket`
     )
   const prisma = new PrismaClient()
+  const store = process.env.R2_DOCUMENTS_BUCKET ? new R2DocumentStorage() : new LocalDiskStorage()
   try {
     await assertBypassesRls(prisma)
+    const marked = await prisma.workspace.findMany({
+      where: { featuredDemo: true },
+      include: { engagements: { select: { number: true } } },
+    })
+    if (marked.length > 1)
+      throw new Error(
+        `${marked.length} workspaces are marked Full demo; the demo seed changes none of them`
+      )
+    const old = marked[0]
+    if (old) {
+      // Plainly the demo: its name, and engagements of the demo's own numbering only.
+      const foreign = old.engagements.find(
+        (e) => !(e.number ?? '').startsWith(DEMO_ENGAGEMENT_PREFIX)
+      )
+      if (old.name !== DEMO_WORKSPACE_NAME || foreign)
+        throw new Error(
+          `Workspace ${old.id} ("${old.name}") is marked Full demo but is not plainly the demo; the demo seed leaves it alone`
+        )
+      await removeWorkspace(prisma, store, old.id)
+      console.log(`Removed the earlier demo workspace ${old.id}.`)
+    }
   } finally {
     await prisma.$disconnect()
   }

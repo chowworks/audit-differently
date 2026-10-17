@@ -131,8 +131,10 @@ the same story as dev (July, August, September above) and nothing of Harbor Tech
 `npm run demo:seed -w @ad/api` loads it (`apps/api/scripts/demo-seed.ts`, which calls `seedDemoWorkspace` in
 `apps/api/prisma/seed.ts`). It is safe on a database with real workspaces because:
 
-- it creates or updates that one workspace only, found by its name and its receipts address (`riverbend-youth`); it
-  empties no table, refreshes the checks of the demo's months only, and writes nothing in another workspace;
+- it builds that one workspace again: the workspace marked Full demo (`featuredDemo`), if there is one and it is
+  plainly the demo (its name, and only `DEMO-` engagements), is removed with its records and files first, so a demo
+  seeded by an older version comes back whole; it empties no table and writes nothing in another workspace. Anyone
+  seated in the demo seats themself again;
 - it refuses, changing nothing, when two workspaces match, when the match has another name or receipts address, or
   when it holds an engagement whose number does not start with `DEMO-` (a real customer by that name stays untouched);
 - the dev seed (`db:seed`) and `demo:reset` refuse to run in production; only this script does;

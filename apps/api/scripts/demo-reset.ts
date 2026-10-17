@@ -11,6 +11,7 @@
 import './lib/owner-env'
 import { PrismaClient } from '@prisma/client'
 import { assertBypassesRls, dbHost, requireHostConfirmation } from './lib/db-guard'
+import { removeWorkspace } from './lib/remove-workspace'
 import { seed } from '../prisma/seed'
 import { LocalDiskStorage } from '../src/storage/local-disk-storage'
 import { R2DocumentStorage } from '../src/storage/r2-storage'
@@ -34,25 +35,7 @@ async function main(): Promise<void> {
       select: { id: true, name: true },
     })
     for (const w of demo) {
-      // As deleting a workspace does it (deletion.service.ts): its files, then each engagement's documents, months
-      // and the engagement, then the rest of its documents and the workspace, which takes its memberships, lists and
-      // emailed receipts. Its access log lines and statistics go too: they describe a workspace that no longer exists.
-      await store.deleteByPrefix(`${w.id}/`)
-      await prisma.$transaction(async (tx) => {
-        for (const e of await tx.engagement.findMany({
-          where: { workspaceId: w.id },
-          select: { id: true },
-        })) {
-          await tx.document.deleteMany({ where: { engagementId: e.id } })
-          await tx.monthlyReport.deleteMany({ where: { engagementId: e.id } })
-          await tx.engagement.delete({ where: { id: e.id } })
-        }
-        await tx.document.deleteMany({ where: { workspaceId: w.id } })
-        await tx.dataAccessLog.deleteMany({ where: { workspaceId: w.id } })
-        await tx.matchRunStat.deleteMany({ where: { workspaceId: w.id } })
-        await tx.deletionRecord.deleteMany({ where: { workspaceId: w.id } })
-        await tx.workspace.delete({ where: { id: w.id } })
-      })
+      await removeWorkspace(prisma, store, w.id)
       console.log(`Removed the demo workspace ${w.name}.`)
     }
   } finally {
