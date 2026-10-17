@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DEFAULT_BUDGET_ITEMS, type ImportRequest, type Role } from '@ad/types'
+import type { ImportRequest, Role } from '@ad/types'
 import { member, scoped, stranger, W } from '../core/testing/callers'
 import { fakeLog } from '../core/testing/log'
 import { ImportsService } from './imports.service'
@@ -40,7 +40,7 @@ const engagement = (months: Month[]) => ({
   periodStart: new Date('2026-07-01T00:00:00Z'),
   periodEnd: new Date('2027-06-30T00:00:00Z'),
   reportDueDay: 12,
-  workspace: { id: W, budgetItems: DEFAULT_BUDGET_ITEMS },
+  workspace: { id: W },
   // Lines made from the workspace's old items keep that item's key as `category`; here each line's id is the key too.
   budgetLines: [
     ['supplies', 'Supplies'],

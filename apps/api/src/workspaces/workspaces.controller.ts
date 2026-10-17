@@ -58,7 +58,6 @@ export class WorkspacesController {
     @Param('id') id: string,
     @Body()
     body: {
-      budgetItems?: unknown
       tagTypes?: unknown
       receiptsAddress?: unknown
       readEmailedReceiptsWithAi?: unknown
@@ -68,8 +67,6 @@ export class WorkspacesController {
     // Each card saves its own list: the budget items, the tags, or the receipts address (and its AI setting).
     if (body.readEmailedReceiptsWithAi !== undefined)
       await this.workspaces.setReadEmailedReceiptsWithAi(caller, id, body.readEmailedReceiptsWithAi)
-    if (body.budgetItems !== undefined)
-      await this.workspaces.setBudgetItems(caller, id, body.budgetItems)
     if (body.tagTypes !== undefined) await this.workspaces.setTagTypes(caller, id, body.tagTypes)
     if (body.receiptsAddress !== undefined)
       await this.workspaces.setReceiptsAddress(caller, id, body.receiptsAddress)

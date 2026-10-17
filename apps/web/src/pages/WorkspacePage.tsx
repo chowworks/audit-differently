@@ -7,7 +7,6 @@ import {
   ROLE_LABELS,
   TAG_TARGETS,
   TAG_TARGET_LABELS,
-  type BudgetItem,
   type EngagementSummary,
   type Role,
   type TagTarget,
@@ -341,7 +340,6 @@ type Managed = {
   name: string
   canManage: boolean
   members: WorkspaceMemberDto[]
-  budgetItems: BudgetItem[]
   tagTypes: TagType[]
   /** How many records hold each tag, for the warning before a removal; the admin view has none. */
   tagUses?: TagUses

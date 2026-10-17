@@ -32,10 +32,6 @@ const newWorkspace = {
 const workspace = () => ({
   id: W,
   name: 'Riverbend Youth Services',
-  budgetItems: [
-    { key: 'personnel', label: 'Personnel', reportLine: 'staff-salaries' },
-    { key: 'travel', label: 'Travel', reportLine: 'program-costs' },
-  ],
   tagTypes: [
     {
       key: 'age-group',
@@ -200,85 +196,6 @@ describe('WorkspacesService', () => {
     expect(prisma.membership.update).toHaveBeenCalledWith({
       where: { id: 'm-1' },
       data: { role: 'owner' },
-    })
-  })
-
-  describe('the budget items', () => {
-    const items = [
-      { key: 'personnel', label: 'Staff', reportLine: 'staff-salaries' },
-      { label: 'Rent', reportLine: 'program-costs' },
-    ]
-
-    it('lets an owner rename, add and remove items, keeping each key, and logs the list', async () => {
-      const { service: s, prisma, log } = service()
-      await s.setBudgetItems(member('owner'), W, items)
-      const saved = prisma.workspace.update.mock.calls[0][0].data.budgetItems
-      expect(saved).toEqual([
-        { key: 'personnel', label: 'Staff', reportLine: 'staff-salaries' },
-        {
-          key: expect.stringMatching(/^rent-[0-9a-f]{4}$/),
-          label: 'Rent',
-          reportLine: 'program-costs',
-        },
-      ])
-      expect(log.entries).toEqual([
-        {
-          workspaceId: W,
-          resource: 'workspace',
-          subjectId: W,
-          action: 'update',
-          description: 'Changed the budget items',
-          changes: [
-            {
-              field: 'Budget items',
-              before: 'Personnel (Staff Salaries), Travel (Program Costs)',
-              after: 'Staff (Staff Salaries), Rent (Program Costs)',
-            },
-          ],
-        },
-      ])
-    })
-
-    it('refuses a changed report line, an unknown key, a blank or doubled name, and a bad line', async () => {
-      const { service: s, prisma } = service()
-      const owner = member('owner')
-      for (const bad of [
-        [{ key: 'travel', label: 'Travel', reportLine: 'wex' }],
-        [{ key: 'gone', label: 'Gone', reportLine: 'wex' }],
-        [{ label: ' ', reportLine: 'wex' }],
-        [
-          { label: 'Rent', reportLine: 'wex' },
-          { label: 'rent', reportLine: 'wex' },
-        ],
-        [{ label: 'Rent', reportLine: 'not-a-line' }],
-        'Rent',
-      ])
-        await expect(s.setBudgetItems(owner, W, bad)).rejects.toThrow(BadRequestException)
-      expect(prisma.workspace.update).not.toHaveBeenCalled()
-    })
-
-    it('writes nothing when nothing differs', async () => {
-      const { service: s, prisma, log } = service()
-      await s.setBudgetItems(member('owner'), W, workspace().budgetItems)
-      expect(prisma.workspace.update).not.toHaveBeenCalled()
-      expect(log.entries).toEqual([])
-    })
-
-    it('is for owners and the platform admin: a bookkeeper suggests, a stranger gets 404', async () => {
-      const { service: s, prisma, log } = service()
-      await expect(s.setBudgetItems(member('bookkeeper'), W, items)).rejects.toThrow(
-        ForbiddenException
-      )
-      await expect(s.setBudgetItems(member('auditor'), W, items)).rejects.toThrow(
-        ForbiddenException
-      )
-      await expect(s.setBudgetItems(stranger(), W, items)).rejects.toThrow(NotFoundException)
-      expect(prisma.workspace.update).not.toHaveBeenCalled()
-      await s.setBudgetItems(admin(), W, items)
-      expect(log.entries.map((e) => e.description)).toEqual([
-        'Changed the budget items (by a platform admin)',
-      ])
-      expect((await s.get(member('bookkeeper'), W)).budgetItems).toHaveLength(2)
     })
   })
 

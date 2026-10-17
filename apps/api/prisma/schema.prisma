@@ -25,7 +25,6 @@ model Workspace {
   name                      String
   // The budget items an engagement may use ({ key, label, reportLine }[], DEFAULT_BUDGET_ITEMS in packages/types):
   // the key never changes, so a rename keeps every engagement's lines. The column default is the defaults.
-  budgetItems               Json             @default(dbgenerated())
   // The owners' tag types ({ key, label, appliesTo, values: { key, label }[] }[], TagType in packages/types), "Funding
   // source" among them (DEFAULT_TAG_TYPES for a new workspace). Keys never change, so a rename keeps every record's tags.
   tagTypes                  Json             @default("[]")
@@ -72,7 +71,7 @@ model ImportMapping {
   name        String
   headers     String[]  @default([]) // the file's column names
   columns     Json      @default("{}") // ImportColumns in packages/types: which column holds each field
-  categories  Json      @default("{}") // category in the file -> budget item key, or 'skip'
+  categories  Json      @default("{}") // category in the file -> budget line name, or 'skip'
   createdById String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -193,14 +192,13 @@ model Engagement {
   @@index([workspaceId])
 }
 
-// One approved budget amount per narrative category, with the monthly-report line it rolls into
-// (BUDGET_CATEGORY_TO_LINE in packages/types is the default crosswalk; the funder may override per line).
+// One line of an engagement's approved budget: its name, the line of the funder's monthly report it is on, its
+// approved amount and a note. Every expense is spent against one (Expense.budgetLineId).
 model BudgetLine {
   id           String     @id @default(uuid())
   workspaceId  String? // set by trigger
   engagementId String
   name         String // the line as the contract's approved budget names it
-  category     String? // the workspace budget item it was made from, for lines made before names (20261017000200)
   reportLine   String // REPORT_LINES
   amount       Decimal    @db.Decimal(12, 2)
   narrative    String?
@@ -208,7 +206,6 @@ model BudgetLine {
   engagement   Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
   expenses     Expense[]
 
-  @@unique([engagementId, category])
   @@index([workspaceId])
 }
 

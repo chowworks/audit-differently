@@ -106,7 +106,7 @@ async function engagement(
   tags: string[],
   award: number,
   signers: Record<string, string>,
-  budget: [string, string, number, string][]
+  budget: [ReportLine, number, string][]
 ) {
   const data = {
     kind,
@@ -134,14 +134,13 @@ async function engagement(
     update: data,
     create: { workspaceId: ws.id, number, ...data },
   })
-  for (const [i, [category, reportLine, amount, narrative]] of budget.entries()) {
+  for (const [i, [reportLine, amount, narrative]] of budget.entries()) {
     // One line per line of the monthly report, named as the report names it.
-    const name = REPORT_LINE_LABELS[reportLine as ReportLine] ?? category
-    await prisma.budgetLine.upsert({
-      where: { engagementId_category: { engagementId: c.id, category } },
-      update: { name, reportLine, amount, narrative, sortOrder: i },
-      create: { engagementId: c.id, category, name, reportLine, amount, narrative, sortOrder: i },
-    })
+    const name = REPORT_LINE_LABELS[reportLine as ReportLine]
+    const line = await prisma.budgetLine.findFirst({ where: { engagementId: c.id, name } })
+    const data = { name, reportLine, amount, narrative, sortOrder: i }
+    if (line) await prisma.budgetLine.update({ where: { id: line.id }, data })
+    else await prisma.budgetLine.create({ data: { engagementId: c.id, ...data } })
   }
   return c
 }
@@ -641,15 +640,14 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
       authorizerOrganization: DEMO_WORKSPACE_NAME,
     },
     [
-      ['staff-salaries', 'staff-salaries', 18000, 'Program coordinator, half time.'],
+      ['staff-salaries', 18000, 'Program coordinator, half time.'],
       [
-        'program-costs',
         'program-costs',
         92000,
         'Instruction, lab supplies, bookkeeping, classroom rent share, certifications.',
       ],
-      ['wex', 'wex', 15000, 'Paid work experience, 8 youth, 10 hours a week.'],
-      ['indirect', 'indirect', 0, 'Not claimed.'],
+      ['wex', 15000, 'Paid work experience, 8 youth, 10 hours a week.'],
+      ['indirect', 0, 'Not claimed.'],
     ]
   )
 
@@ -1321,9 +1319,9 @@ async function main() {
       authorizerOrganization: 'Harbor Tech Collective',
     },
     [
-      ['program-costs', 'program-costs', 75000, 'Instruction, certification, bookkeeping.'],
-      ['wex', 'wex', 15000, 'Paid work experience.'],
-      ['indirect', 'indirect', 0, 'Not claimed.'],
+      ['program-costs', 75000, 'Instruction, certification, bookkeeping.'],
+      ['wex', 15000, 'Paid work experience.'],
+      ['indirect', 0, 'Not claimed.'],
     ]
   )
   await participant(htc.id, '900101', 'Taylor Placeholder', 'new')

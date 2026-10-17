@@ -66,7 +66,7 @@ suite('tenant isolation', () => {
         name: `n-${w}`,
         number: `N-${w}`,
       })
-      await insert(db, 'BudgetLine', { id: `BL-${w}`, engagementId: `E-${w}`, category: 'wex' })
+      await insert(db, 'BudgetLine', { id: `BL-${w}`, engagementId: `E-${w}`, name: 'WEX' })
       await insert(db, 'MonthlyReport', { id: `R-${w}`, engagementId: `E-${w}`, period: '2026-07' })
       await insert(db, 'Expense', {
         id: `X-${w}`,
@@ -1788,13 +1788,6 @@ suite('tenant isolation', () => {
         expect(
           (
             await attempt(
-              `UPDATE "Workspace" SET "budgetItems" = '[{"key":"travel","label":"Travel","reportLine":"program-costs"}]' WHERE id = 'W2' RETURNING id`
-            )
-          ).rows
-        ).toBe(1)
-        expect(
-          (
-            await attempt(
               `UPDATE "Workspace" SET "tagTypes" = '[{"key":"age-group","label":"Age group","appliesTo":["participant"],"values":[{"key":"under-18","label":"Under 18"}]}]' WHERE id = 'W2' RETURNING id`
             )
           ).rows
@@ -1993,7 +1986,7 @@ suite('tenant isolation', () => {
       // A row of W1 for each, with real parents; the joins name rows that exist, so only the policy can refuse.
       const rows: Record<string, Record<string, string>> = {
         Engagement: { workspaceId: 'W1', name: 'p', number: 'N-adm' },
-        BudgetLine: { engagementId: 'E-W1', category: 'wex' },
+        BudgetLine: { engagementId: 'E-W1', name: 'WEX' },
         MonthlyReport: { engagementId: 'E-W1', period: '2026-09' },
         Expense: {
           engagementId: 'E-W1',
@@ -2352,7 +2345,7 @@ suite('tenant isolation', () => {
               name: 'x',
               number: 'D',
             })
-            await insert(db, 'BudgetLine', { engagementId: 'E-del', category: 'wex' })
+            await insert(db, 'BudgetLine', { engagementId: 'E-del', name: 'WEX' })
             await insert(db, 'MonthlyReport', {
               id: 'R-del',
               engagementId: 'E-del',

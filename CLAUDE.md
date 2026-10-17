@@ -49,7 +49,7 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   (`docs/tenant-isolation.md`). Its people are `Membership` rows with one role each (`ROLES` in
   `packages/types`): `owner` (runs the workspace, signs the report), `bookkeeper` (records, attaches,
   records the month-end closing, submits), `auditor` (reads everything, personal records included, changes
-  nothing). Owners keep the workspace's lists (`Workspace.fundingSources`, `tagTypes`) under Configuration Data on the
+  nothing). Owners keep the workspace's tags (`Workspace.tagTypes`) under Configuration Data on the
   workspace's page, and set its receipts address once (`receiptsAddress`; it never changes, and admins don't set it).
 - **Budget lines** = `BudgetLine` rows of an engagement: its approved budget, as the contract states it (step 4, Manage
   Budget). Each has a name, the line of the funder's monthly report it is on (`reportLine`; the name defaults to it,
@@ -58,9 +58,10 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   `20261017000200`), so spending is compared with the approved budget line by line: the month's budget tile, the
   `budget-overrun` check, a blocking `no-budget-line` check, and the audit package's `Budget vs actual.csv`. A line with
   spending keeps its report line and is not removed. Imports map categories to budget lines, saved by line name.
-  `Workspace.budgetItems` (the old workspace list) is no longer shown or edited; it stays in the database for now.
-- **Tags** = `Workspace.tagTypes` (owner-kept types and values, stable keys; the built-in "Funding source" type's
-  values are `fundingSources`), applied as `tags` (`<type>:<value>`) on `Expense`, `WexPayment` and `Participant`,
+  The workspace's own list of budget items is gone (migration `20261017000300`); names are suggested from the
+  workspace's other engagements.
+- **Tags** = `Workspace.tagTypes` (owner-kept types and values, stable keys; "Funding source" is the built-in first
+  type, migration `20261016000800`), applied as `tags` (`<type>:<value>`) on `Expense`, `WexPayment` and `Participant`,
   from the list only, never free text. A source in use can't be removed or renamed. Participant and payroll tags
   are personal data: logged by field name ("Tags"), never values.
 - **Engagement tracks** = `Engagement.tracks`: which of proposal, award letter and signed contract the team keeps
@@ -102,7 +103,7 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   attached beside it, and only a copy uploaded after the latest reopening counts. A budget or
   participant-file change re-checks every month, closed and submitted ones included, and the screen warns first. If a funder portal is ever wanted, it is a new line, not a revival of the old
   agency one.
-- The default lists a workspace starts with are fictional (`DEFAULT_FUNDING_SOURCES`), and workspace owners
+- The default lists a workspace starts with are fictional (`DEFAULT_TAG_TYPES`), and workspace owners
   edit them. The funder's form page (`ReportFormPage.tsx`) reproduces the government form the team sends, in the
   form's own wording (Section VI's review checklist, the line numbers and headings; owner's decision, 2026-10-16);
   its filled-in values (names, amounts, contract numbers, signatures) never go into the repository. Owners and bookkeepers ask for additions through `Suggestion` rows, kept for now and sent on
@@ -240,7 +241,7 @@ of two.
   so the Terms gate holds) asks Clerk's backend for the role on every admin request, never the browser, then
   `identifyAdmin`; `PrismaService` sets `app.admin = on` beside the admin's own `app.user_id` and memberships.
   Migration `20261013000200` admits it to read every `Workspace`, `Membership`, `User` and `Suggestion`, insert
-  a `Workspace`, change its lists only (`fundingSources`, `budgetItems`, `tagTypes`; trigger
+  a `Workspace`, change its lists only (`tagTypes`; trigger
   `Workspace_4_admin_lists`; never `receiptsAddress`), give, change and remove memberships,
   insert `pending-` users, and insert `DataAccessLog` lines in its own name in any workspace (no read: the API
   writes them with `createMany`, which reads nothing back). No policy below the workspace admits it. Two triggers

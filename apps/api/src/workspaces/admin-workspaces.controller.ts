@@ -55,7 +55,6 @@ export class AdminWorkspacesController {
     @Param('id') id: string,
     @Body()
     body: {
-      budgetItems?: unknown
       tagTypes?: unknown
       receiptsAddress?: unknown
       readEmailedReceiptsWithAi?: unknown
@@ -71,8 +70,6 @@ export class AdminWorkspacesController {
         "Only the workspace's owners turn on reading emailed receipts with AI"
       )
     // Each card saves its own list: the budget items or the tags.
-    if (body.budgetItems !== undefined)
-      await this.workspaces.setBudgetItems(admin, id, body.budgetItems)
     if (body.tagTypes !== undefined) await this.workspaces.setTagTypes(admin, id, body.tagTypes)
     return this.workspaces.adminGet(admin, id)
   }

@@ -33,11 +33,8 @@ import { runAsSystem } from '../core/tenant-context'
 import { aiConfigured } from '../imports/ai-guess'
 import { receiptsEmail } from '../inbound/config'
 import { PrismaService } from '../prisma/prisma.service'
-import { budgetItemsOf, budgetItemWords, cleanBudgetItems } from './budget-items'
 import { cleanTagTypes, removedTags, tagTypesOf, tagTypeWords, type RemovedTag } from './tags'
 
-/** The budget items by their words, "Travel (Program Costs)": owners' labels, never personal. */
-const BUDGET_ITEM_FIELDS: Fields = { budgetItems: { label: 'Budget items', show: 'list' } }
 /** The tag types by their words, "Age group (Participants): Under 18, 18 to 24": owners' labels, never personal. */
 const TAG_TYPE_FIELDS: Fields = { tagTypes: { label: 'Tag types', show: 'list' } }
 const NAME_FIELDS: Fields = { name: { label: 'Workspace name', show: 'text' } }
@@ -121,7 +118,6 @@ export class WorkspacesService {
       id: string
       name: string
       featuredDemo: boolean
-      budgetItems: unknown
       tagTypes: unknown
       receiptsAddress: string | null
       readEmailedReceiptsWithAi: boolean
@@ -136,7 +132,6 @@ export class WorkspacesService {
       myRole: caller.memberships.find((m) => m.workspaceId === w.id)?.role ?? null,
       memberCount: w._count.memberships,
       engagementCount: w._count.engagements,
-      budgetItems: budgetItemsOf(w),
       tagTypes: tagTypesOf(w),
       canManage: workspaceRole(caller, w.id, ['owner']),
       receiptsAddress: w.receiptsAddress,
@@ -223,7 +218,6 @@ export class WorkspacesService {
       ...dto,
       receiptsAddress: w.receiptsAddress,
       receiptsEmail: receiptsEmail(w.receiptsAddress),
-      budgetItems: budgetItemsOf(w),
       tagTypes: tagTypesOf(w),
       suggestions: suggestionDtos(dto.members, w.suggestions),
     }
@@ -398,39 +392,6 @@ export class WorkspacesService {
         : 'Turned off reading emailed receipts with AI',
       changes: changesOf(w, data, EMAILED_AI_FIELDS),
     })
-  }
-
-  /**
-   * The budget items an engagement may use, kept like the sources of funds: by the owners, and by the platform admin
-   * (trigger Workspace_4_admin_lists). A removed item stays on the engagements that have a line for it.
-   */
-  async setBudgetItems(caller: Caller, id: string, given: unknown): Promise<void> {
-    const w = await this.load(caller, id)
-    allow(runs(caller, id), 'Only an owner edits the lists')
-    const before = budgetItemsOf(w)
-    const clean = cleanBudgetItems(given, before)
-    const changes = changesOf(
-      { budgetItems: before.map(budgetItemWords) },
-      { budgetItems: clean.map(budgetItemWords) },
-      BUDGET_ITEM_FIELDS
-    )
-    if (changes.length === 0) return
-    await this.log.change(
-      caller,
-      (tx) =>
-        tx.workspace.update({
-          where: { id },
-          data: { budgetItems: clean as unknown as Prisma.InputJsonValue },
-        }),
-      {
-        workspaceId: id,
-        resource: 'workspace',
-        subjectId: id,
-        action: 'update',
-        description: byAdmin(caller, 'Changed the budget items'),
-        changes,
-      }
-    )
   }
 
   /**

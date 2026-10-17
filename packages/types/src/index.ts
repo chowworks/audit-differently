@@ -41,38 +41,16 @@ export const PAYROLL_REPORT_LINES: ReadonlySet<ReportLine> = new Set([
   'wex',
 ])
 
-// ── Budget items ────────────────────────────────────────────────────────────
-// What an approved budget is made of. Each workspace keeps its own list (Workspace.budgetItems); an engagement uses
-// an item when it has a budget line for it. The report lines above are the funder form's and stay fixed.
+// ── Budget lines ─────────────────────────────────────────────────────────────
+// An engagement's approved budget is its own list of budget lines (BudgetLine), each on one line of the funder's
+// monthly report above.
 
-/** One item of a workspace's budget list. `key` never changes, so a rename keeps every engagement's lines. */
-export interface BudgetItem {
+/** A budget line as a choice (the import's mapping): `key` is the line's id. */
+export interface BudgetOption {
   key: string
   label: string
-  /** The monthly-report line its spending rolls into; fixed once the item exists. */
   reportLine: ReportLine
 }
-
-/**
- * The generic budget categories a new workspace starts with (the common federal cost categories), and the report
- * line each rolls into. Owners edit the list. The same list is the column's default (migration 20261015000400).
- */
-export const DEFAULT_BUDGET_ITEMS: readonly BudgetItem[] = [
-  { key: 'personnel', label: 'Personnel', reportLine: 'staff-salaries' },
-  { key: 'fringe', label: 'Fringe Benefits', reportLine: 'staff-fringe' },
-  { key: 'travel', label: 'Travel', reportLine: 'program-costs' },
-  { key: 'equipment', label: 'Equipment', reportLine: 'program-costs' },
-  { key: 'supplies', label: 'Supplies', reportLine: 'program-costs' },
-  { key: 'contractual', label: 'Contractual / Subawards', reportLine: 'program-costs' },
-  {
-    key: 'participant-training',
-    label: 'Participant / Training Costs',
-    reportLine: 'program-costs',
-  },
-  { key: 'other', label: 'Other Costs', reportLine: 'program-costs' },
-  { key: 'indirect', label: 'Indirect Costs', reportLine: 'indirect' },
-  { key: 'wex', label: 'Work Experience (WEX)', reportLine: 'wex' },
-]
 
 /**
  * A budget line as the budget section adds or changes it: the line as the contract's approved budget names it, the line
@@ -719,8 +697,6 @@ export interface EngagementInput {
   authorizerName?: string | null
   authorizerOrganization?: string | null
   eligibilityItems?: EligibilityItemDef[]
-  /** On create only: the keys of the workspace's budget items this engagement uses (a line of $0 each). */
-  budgetItems?: string[]
 }
 
 /** A workspace: the team's container for its engagements, people and lists. */
@@ -733,7 +709,6 @@ export interface WorkspaceDto {
   myRole: Role | null
   memberCount: number
   engagementCount: number
-  budgetItems: BudgetItem[]
   /** The owners' tag types, "Funding source" among them like any other. */
   tagTypes: TagType[]
   /** Owners: people, lists, settings. */
@@ -868,7 +843,6 @@ export interface AdminWorkspaceDto {
 export interface AdminWorkspaceDetail extends AdminWorkspaceDto {
   receiptsAddress: string | null
   receiptsEmail: string | null
-  budgetItems: BudgetItem[]
   tagTypes: TagType[]
   suggestions: SuggestionDto[]
 }
@@ -1090,7 +1064,7 @@ export interface ImportFileDto {
   /** The saved mapping chosen for these columns, if any. */
   mappingId: string | null
   /** The budget items this engagement uses (it has a line for), to map categories to. */
-  budgetOptions: BudgetItem[]
+  budgetOptions: BudgetOption[]
 }
 
 /** The mapping the person confirmed, sent with the file (as the `mapping` field) to preview and to import. */

@@ -12,7 +12,7 @@ import {
   IMPORT_SKIP,
   REPORT_STATUS_LABELS,
   WRITE_ROLES,
-  type BudgetItem,
+  type BudgetOption,
   type ImportCategories,
   type ImportColumns,
   type ImportFileDto,
@@ -109,7 +109,7 @@ export class ImportsService {
    * The engagement's budget lines a category may map to (`key` is the line's id), payroll lines left out: an import is
    * money paid out to vendors, as Add expense is; payroll goes through Add payroll.
    */
-  private options(c: Engagement): BudgetItem[] {
+  private options(c: Engagement): BudgetOption[] {
     return [...c.budgetLines]
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .filter((b) => !PAYROLL_REPORT_LINES.has(b.reportLine as ReportLine))
@@ -118,16 +118,11 @@ export class ImportsService {
 
   /**
    * A saved mapping names budget lines by their name, so it carries to another engagement whose lines are named the
-   * same; one saved before names (a workspace budget item's key) finds the line made from that item. Anything else is
-   * left for the person to choose.
+   * same. Anything else is left for the person to choose.
    */
   private lineFor(c: Engagement, saved: string): string | null {
     if (saved === IMPORT_SKIP) return IMPORT_SKIP
-    const options = this.options(c)
-    const byName = options.find((o) => o.label.toLowerCase() === saved.toLowerCase())
-    if (byName) return byName.key
-    const legacy = c.budgetLines.find((b) => b.category === saved)
-    return legacy && options.some((o) => o.key === legacy.id) ? legacy.id : null
+    return this.options(c).find((o) => o.label.toLowerCase() === saved.toLowerCase())?.key ?? null
   }
 
   /** Step 1: the file's columns, a few rows, the saved mappings, and the first guess at the mapping. */

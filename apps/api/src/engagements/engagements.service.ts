@@ -29,7 +29,6 @@ import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { changesOf, howMany, monthName, type Fields } from '../core/changes'
 import { documentDto } from '../documents/document.dto'
 import { PrismaService } from '../prisma/prisma.service'
-import { budgetItemsOf } from '../workspaces/budget-items'
 import { allTagTypes, cleanTags, tagWords } from '../workspaces/tags'
 import { cleanEligibilityItems, eligibilityItemsOf } from './eligibility'
 
@@ -420,10 +419,6 @@ export class EngagementsService {
       throw new BadRequestException('The engagement must end after it starts')
     let created: { id: string }
     const values = { ...data, status: this.statusFor(data) }
-    const budget = await this.enabledItems(input)
-    const budgetChange: LoggedChange[] = budget.length
-      ? [{ field: 'Budget lines', after: budget.map((i) => i.label).join(', ') }]
-      : []
     try {
       created = await this.log.change(
         caller,
@@ -432,18 +427,6 @@ export class EngagementsService {
             data: {
               ...(values as Prisma.EngagementUncheckedCreateInput),
               workspaceId: input.workspaceId,
-              // Each budget item it uses is a line of $0 until the approved budget is entered (step 4).
-              ...(budget.length && {
-                budgetLines: {
-                  create: budget.map((i) => ({
-                    name: i.label,
-                    category: i.key,
-                    reportLine: i.reportLine,
-                    amount: '0.00',
-                    sortOrder: i.sortOrder,
-                  })),
-                },
-              }),
             },
             select: { id: true },
           }),
@@ -453,7 +436,7 @@ export class EngagementsService {
           subjectId: made.id,
           action: 'create',
           description: `Created the engagement ${values.name as string}`,
-          changes: [...changesOf(null, loggable(values, false), fieldsFor(w)), ...budgetChange],
+          changes: changesOf(null, loggable(values, false), fieldsFor(w)),
         })
       )
     } catch (e) {
@@ -462,20 +445,6 @@ export class EngagementsService {
       throw e
     }
     return this.detail(caller, created.id)
-  }
-
-  /** The workspace's budget items a new engagement uses (`budgetItems`, keys), in the list's order. */
-  private async enabledItems(input: EngagementInput) {
-    if (input.budgetItems === undefined) return []
-    if (!Array.isArray(input.budgetItems))
-      throw new BadRequestException('budgetItems must be a list of budget item keys')
-    const w = await this.prisma.workspace.findFirst({ where: { id: input.workspaceId } })
-    const items = budgetItemsOf(w ?? {})
-    const unknown = input.budgetItems.filter((k) => !items.some((i) => i.key === k))
-    if (unknown.length) throw new BadRequestException("Choose from the workspace's budget items")
-    return items
-      .map((i, sortOrder) => ({ ...i, sortOrder }))
-      .filter((i) => input.budgetItems!.includes(i.key))
   }
 
   /** Changes to an engagement's facts; the workspace cannot change. */

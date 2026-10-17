@@ -1,7 +1,6 @@
 import { Prisma } from '@prisma/client'
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
 import {
-  DEFAULT_BUDGET_ITEMS,
   DEFAULT_ELIGIBILITY_ITEMS,
   DEFAULT_TAG_TYPES,
   type EngagementInput,
@@ -59,7 +58,7 @@ const engagement = () => ({
 
 function service() {
   const prisma = {
-    workspace: scoped({ id: W, budgetItems: DEFAULT_BUDGET_ITEMS, tagTypes: DEFAULT_TAG_TYPES }),
+    workspace: scoped({ id: W, tagTypes: DEFAULT_TAG_TYPES }),
     // The names other engagements' budget lines have, to suggest.
     budgetLine: { findMany: jest.fn().mockResolvedValue([]) },
     // What was spent on each budget line to date.
@@ -161,44 +160,9 @@ describe('EngagementsService', () => {
     expect(data).not.toHaveProperty('eligibilityItems')
   })
 
-  it('starts a line of $0 for each budget item it uses, in the list order, and logs them', async () => {
+  it("refuses an auditor's engagement", async () => {
     const { service: s, prisma, log } = service()
-    await s.create(member('bookkeeper'), { ...input, budgetItems: ['wex', 'travel'] })
-    expect(prisma.engagement.create.mock.calls[0]![0].data.budgetLines).toEqual({
-      create: [
-        {
-          name: 'Travel',
-          category: 'travel',
-          reportLine: 'program-costs',
-          amount: '0.00',
-          sortOrder: 2,
-        },
-        {
-          name: 'Work Experience (WEX)',
-          category: 'wex',
-          reportLine: 'wex',
-          amount: '0.00',
-          sortOrder: 9,
-        },
-      ],
-    })
-    expect(log.entries.at(-1)!.changes).toContainEqual({
-      field: 'Budget lines',
-      after: 'Travel, Work Experience (WEX)',
-    })
-    // None asked for: no line, as before.
-    await s.create(member('bookkeeper'), input)
-    expect(prisma.engagement.create.mock.calls[1]![0].data).not.toHaveProperty('budgetLines')
-  })
-
-  it("refuses a budget item the workspace does not have, and an auditor's engagement", async () => {
-    const { service: s, prisma, log } = service()
-    await expect(
-      s.create(member('owner'), { ...input, budgetItems: ['travel', 'yacht'] })
-    ).rejects.toThrow(BadRequestException)
-    await expect(
-      s.create(member('auditor'), { ...input, budgetItems: ['travel'] })
-    ).rejects.toThrow(ForbiddenException)
+    await expect(s.create(member('auditor'), input)).rejects.toThrow(ForbiddenException)
     expect(prisma.engagement.create).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
   })

@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
-import { DEFAULT_BUDGET_ITEMS, type Role } from '@ad/types'
+import type { Role } from '@ad/types'
 import { member, scoped, stranger, W } from '../core/testing/callers'
 import { expectNoneOf, fakeLog } from '../core/testing/log'
 import { BudgetService } from './budget.service'
@@ -9,13 +9,7 @@ const engagement = () => ({
   id: 'e-1',
   workspaceId: W,
   name: 'Coding Pathway',
-  workspace: {
-    id: W,
-    budgetItems: [
-      ...DEFAULT_BUDGET_ITEMS,
-      { key: 'rent-1a2b', label: 'Rent', reportLine: 'program-costs' },
-    ],
-  },
+  workspace: { id: W },
 })
 const travel = () => ({
   id: 'b-1',
