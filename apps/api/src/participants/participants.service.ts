@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
 import { WRITE_ROLES, type ParticipantDto } from '@ad/types'
 import { ChecksService } from '../checks/checks.service'
 import { AccessLogService } from '../core/access-log.service'
@@ -167,6 +172,104 @@ export class ParticipantsService {
     })
     if (!fresh) throw new NotFoundException()
     return participantDto(fresh)
+  }
+
+  /**
+   * Corrects a participant's details: their name, the funder's participant number and whether they are new or carried
+   * over. Personal data: the line names the fields, never their values. The months' checks run again (their words name
+   * the participant). Answers the participant as the list shows them.
+   */
+  async update(
+    caller: Caller,
+    id: string,
+    input: { participantId?: unknown; displayName?: unknown; enrollmentStatus?: unknown }
+  ): Promise<ParticipantDto> {
+    const p = await this.writable(caller, id)
+    const data: { participantId?: string; displayName?: string; enrollmentStatus?: string } = {}
+    const problems: string[] = []
+    if (input?.displayName !== undefined) {
+      const name = typeof input.displayName === 'string' ? input.displayName.trim() : ''
+      if (!name) problems.push('Name the participant')
+      else if (name.length > 120) problems.push('Keep the name under 120 characters')
+      else data.displayName = name
+    }
+    if (input?.participantId !== undefined) {
+      const number = typeof input.participantId === 'string' ? input.participantId.trim() : ''
+      if (!number) problems.push("Give the funder's participant number")
+      else if (number.length > 40) problems.push('Keep the participant number under 40 characters')
+      else if (
+        number !== p.participantId &&
+        (await this.prisma.participant.findFirst({
+          where: {
+            engagementId: p.engagementId,
+            participantId: number,
+            id: { not: id },
+            ...tenantWhere(caller),
+          },
+          select: { id: true },
+        }))
+      )
+        problems.push('Another participant of this engagement has that number')
+      else data.participantId = number
+    }
+    if (input?.enrollmentStatus !== undefined) {
+      if (input.enrollmentStatus !== 'new' && input.enrollmentStatus !== 'carryover')
+        problems.push('Say whether they are new or carried over')
+      else data.enrollmentStatus = input.enrollmentStatus
+    }
+    if (problems.length) throw new BadRequestException(problems.join('. '))
+    const changes = changesOf(p, data, PARTICIPANT_FIELDS)
+    if (changes.length) {
+      const before = await this.lockedChecks(p.engagementId)
+      await this.log.change(caller, (tx) => tx.participant.update({ where: { id }, data }), {
+        workspaceId: p.workspaceId!,
+        resource: 'participant',
+        subjectId: p.id,
+        action: 'update',
+        description: `Changed a participant's details in ${p.engagement.name}`,
+        changes,
+      })
+      await this.refreshReports(caller, p, before)
+    }
+    const fresh = await this.prisma.participant.findFirst({
+      where: { id, ...tenantWhere(caller) },
+      include: { documents: { include: { document: true } } },
+    })
+    if (!fresh) throw new NotFoundException()
+    return participantDto(fresh)
+  }
+
+  /**
+   * Removes a participant added by mistake. Refused while anything depends on them, saying what to take off first:
+   * their work-experience payments (pay history the review reads) and the records in their eligibility file. Personal
+   * data: the line names the fields, never their values.
+   */
+  async remove(caller: Caller, id: string): Promise<void> {
+    const p = await this.writable(caller, id)
+    const [payments, records] = await Promise.all([
+      this.prisma.wexPayment.count({ where: { participantId: id, ...tenantWhere(caller) } }),
+      this.prisma.participantDocument.count({
+        where: { participantId: id, ...tenantWhere(caller) },
+      }),
+    ])
+    const blocking = [
+      payments && `${payments} work-experience payment${payments === 1 ? '' : 's'}`,
+      records && `${records} record${records === 1 ? '' : 's'} in their eligibility file`,
+    ].filter(Boolean)
+    if (blocking.length)
+      throw new ConflictException(
+        `This participant has ${blocking.join(' and ')}: remove ${payments + records === 1 ? 'it' : 'them'} first`
+      )
+    const before = await this.lockedChecks(p.engagementId)
+    await this.log.change(caller, (tx) => tx.participant.delete({ where: { id } }), {
+      workspaceId: p.workspaceId!,
+      resource: 'participant',
+      subjectId: p.id,
+      action: 'delete',
+      description: `Removed a participant from ${p.engagement.name}`,
+      changes: changesOf(p, null, PARTICIPANT_FIELDS),
+    })
+    await this.refreshReports(caller, p, before)
   }
 
   async detach(caller: Caller, id: string, documentId: string): Promise<void> {

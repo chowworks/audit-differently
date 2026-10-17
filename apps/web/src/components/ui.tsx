@@ -294,9 +294,18 @@ export function SavedMark({ at, children }: { at: number | null; children: React
   )
 }
 
+/**
+ * What went wrong, as the one red line at the top of a form, a dialog or a section (CLAUDE.md, "Messages, tips and
+ * notes on screen"): never a box. A problem with one field goes beside that field instead (`Field`'s `error`).
+ */
 export function ErrorNote({ message }: { message: string | null }) {
   if (!message) return null
-  return <Notice tone="danger">{message}</Notice>
+  return (
+    <p className="ad-error" role="alert">
+      <span aria-hidden="true">⚠️</span>
+      <span>{message}</span>
+    </p>
+  )
 }
 
 export function Empty({ children }: { children: React.ReactNode }) {

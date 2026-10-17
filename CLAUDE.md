@@ -350,14 +350,17 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
 - **The end of a flow** (an import done, a batch uploaded): Import transactions' step 5: a green check with what
   happened as a centred heading (`ad-done`), the numbers as the month page's tiles (`ad-done-tiles`), then a
   `HandCard` "What to do next". Never a `Notice`.
-- **What just happened** after a small action on a page ("Matched to expense 2105."): `Notice`, one line, and errors
-  `ErrorNote`. A `Notice` is never used for guidance, a tip, a reminder, the end of a flow, or inside a dialog's steps
-  (there, the problem goes beside its field, or as the red line at the top).
+- **What just happened** after a small action on a page ("Matched to expense 2105."): `Notice`, one line. A `Notice`
+  is never used for guidance, a tip, a reminder, the end of a flow, or inside a dialog's steps (there, the problem goes
+  beside its field, or as the `ErrorNote` at the top).
+- **What went wrong** (a refusal, a failed save): `ErrorNote` (`ad-error`: a soft red band, ⚠️ then the message in
+  bold red), at the top of the form, dialog or section; a problem with one field goes beside that field. Never wrap an
+  error in `Notice` or style a new error box.
 
 - **Something wrong in a form:** say it beside the field, in red under it (`Field`'s `error`), and every problem at
-  once, before the person presses Next, with one line at the top of the form naming the fields still to fix. Never an
-  error box at the top, and never one problem per try. The server checks everything too and answers with every
-  problem in one message; that box is only for what the screen could not know. A choice the screen knows cannot work
+  once, before the person presses Next, with one line at the top of the form naming the fields still to fix. Never the
+  problems listed at the top, and never one problem per try. The server checks everything too and answers with every
+  problem in one message; its `ErrorNote` is only for what the screen could not know. A choice the screen knows cannot work
   here (a saved mapping made for other columns) is not offered.
 
 Keep the words short: one bold line that says the point, then steps as a list, never a paragraph that wraps three

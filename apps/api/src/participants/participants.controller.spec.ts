@@ -87,12 +87,15 @@ function controller(
   findings: Record<string, { before?: Found[]; after?: Found[] }> = {}
 ) {
   const prisma = {
-    participant: { ...scoped(participant), update: jest.fn() },
+    participant: { ...scoped(participant), update: jest.fn(), delete: jest.fn() },
+    // What depends on the participant, for a removal: their payments and their file's records.
+    wexPayment: { count: jest.fn().mockResolvedValue(0) },
     document: {
       ...scoped(document('d-1', W), document('d-other', OTHER)),
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'd-new', ...data })),
     },
     participantDocument: {
+      count: jest.fn().mockResolvedValue(0),
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn(),
       update: jest.fn(),
@@ -409,5 +412,103 @@ describe('ParticipantsController', () => {
     await c.detach(who.userId, 'p-1', 'd-1')
     expect(prisma.participantDocument.deleteMany).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
+  })
+
+  describe("a participant's details and removal", () => {
+    it('corrects the details, logging the fields by name only, and runs the checks again', async () => {
+      const who = member('bookkeeper')
+      const { service, prisma, log, checks } = controller(who)
+      // The participant, then no other participant with the new number.
+      prisma.participant.findFirst = jest
+        .fn()
+        .mockResolvedValueOnce({ ...participant })
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue({ ...participant })
+      await service.update(who, 'p-1', {
+        displayName: 'Jordan Q. Sample',
+        participantId: '900009',
+        enrollmentStatus: 'carryover',
+      })
+      expect(prisma.participant.update).toHaveBeenCalledWith({
+        where: { id: 'p-1' },
+        data: {
+          displayName: 'Jordan Q. Sample',
+          participantId: '900009',
+          enrollmentStatus: 'carryover',
+        },
+      })
+      expect(log.entries).toEqual([
+        {
+          workspaceId: W,
+          resource: 'participant',
+          subjectId: 'p-1',
+          action: 'update',
+          description: "Changed a participant's details in Coding Pathway",
+          changes: [{ field: 'Name' }, { field: 'Participant number' }, { field: 'Enrollment' }],
+        },
+      ])
+      expectNoneOf(log.entries, ['Jordan', '900001', '900009', 'carryover'])
+      expect(checks.refresh).toHaveBeenCalledWith('r-1')
+    })
+
+    it('refuses a blank name, a number another participant has, and an unknown enrollment, all at once', async () => {
+      const who = member('owner')
+      const { service, prisma, log } = controller(who)
+      prisma.participant.findFirst = jest
+        .fn()
+        .mockResolvedValueOnce({ ...participant })
+        .mockResolvedValueOnce({ id: 'p-2' })
+      await expect(
+        service.update(who, 'p-1', {
+          displayName: ' ',
+          participantId: '900002',
+          enrollmentStatus: 'maybe',
+        })
+      ).rejects.toThrow(
+        /Name the participant\. Another participant of this engagement has that number\. Say whether/
+      )
+      expect(prisma.participant.update).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+
+    it('removes a participant with nothing depending on them, logged by field name only', async () => {
+      const who = member('bookkeeper')
+      const { service, prisma, log } = controller(who)
+      await service.remove(who, 'p-1')
+      expect(prisma.participant.delete).toHaveBeenCalledWith({ where: { id: 'p-1' } })
+      expect(log.entries).toEqual([
+        expect.objectContaining({
+          action: 'delete',
+          description: 'Removed a participant from Coding Pathway',
+          changes: expect.arrayContaining([{ field: 'Name' }, { field: 'Participant number' }]),
+        }),
+      ])
+      expectNoneOf(log.entries, ['Jordan', '900001'])
+    })
+
+    it('refuses a removal while they have payments or records, saying what to take off first', async () => {
+      const who = member('owner')
+      const { service, prisma, log } = controller(who)
+      prisma.wexPayment.count.mockResolvedValue(2)
+      prisma.participantDocument.count.mockResolvedValue(1)
+      await expect(service.remove(who, 'p-1')).rejects.toThrow(
+        'This participant has 2 work-experience payments and 1 record in their eligibility file: remove them first'
+      )
+      expect(prisma.participant.delete).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+
+    it('lets an auditor change nothing, and answers another workspace with 404', async () => {
+      const aud = member('auditor')
+      const a = controller(aud)
+      await expect(a.service.update(aud, 'p-1', { displayName: 'X' })).rejects.toThrow(
+        ForbiddenException
+      )
+      await expect(a.service.remove(aud, 'p-1')).rejects.toThrow(ForbiddenException)
+      const other = stranger()
+      const o = controller(other)
+      await expect(o.service.remove(other, 'p-1')).rejects.toThrow(NotFoundException)
+      expect(a.prisma.participant.delete).not.toHaveBeenCalled()
+    })
   })
 })

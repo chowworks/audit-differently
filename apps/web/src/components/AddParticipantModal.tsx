@@ -4,22 +4,32 @@ import { useApi } from '@/hooks/useApi'
 import { Button, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
 import { TagPicker, typesFor } from '@/components/Tags'
 
-/** A participant of the engagement, by the funder's id and the name the team uses. */
+/**
+ * A participant of the engagement, by the funder's id and the name the team uses: added, or (`participant`) corrected
+ * or removed. A removal is refused while they have payments or records in their file, and the dialog says so.
+ */
 export function AddParticipantModal({
   engagementId,
   tagTypes,
+  participant,
   onClose,
   onAdded,
+  onRemoved,
 }: {
   engagementId: string
   tagTypes: TagType[]
+  /** The participant to correct; none to add one. */
+  participant?: ParticipantDto
   onClose: () => void
   onAdded: (participant: ParticipantDto) => void
+  onRemoved?: (id: string) => void
 }) {
   const api = useApi()
-  const [participantId, setParticipantId] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [enrollmentStatus, setEnrollmentStatus] = useState<'new' | 'carryover'>('new')
+  const [participantId, setParticipantId] = useState(participant?.participantId ?? '')
+  const [displayName, setDisplayName] = useState(participant?.displayName ?? '')
+  const [enrollmentStatus, setEnrollmentStatus] = useState<'new' | 'carryover'>(
+    participant?.enrollmentStatus === 'carryover' ? 'carryover' : 'new'
+  )
   const [tags, setTags] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -28,20 +38,41 @@ export function AddParticipantModal({
     setBusy(true)
     setError(null)
     try {
-      const added = await api.post<ParticipantDto>(`/engagements/${engagementId}/participants`, {
-        participantId,
-        displayName,
-        enrollmentStatus,
-        tags,
-      })
-      onAdded(added)
+      const saved = participant
+        ? await api.patch<ParticipantDto>(`/participants/${participant.id}`, {
+            participantId,
+            displayName,
+            enrollmentStatus,
+          })
+        : await api.post<ParticipantDto>(`/engagements/${engagementId}/participants`, {
+            participantId,
+            displayName,
+            enrollmentStatus,
+            tags,
+          })
+      onAdded(saved)
+    } catch (e) {
+      setError((e as Error).message)
+      setBusy(false)
+    }
+  }
+  const remove = async () => {
+    if (!participant || !confirm(`Remove ${participant.displayName} from this engagement?`)) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.del(`/participants/${participant.id}`)
+      onRemoved?.(participant.id)
     } catch (e) {
       setError((e as Error).message)
       setBusy(false)
     }
   }
   return (
-    <Modal title="Add a participant" onClose={onClose}>
+    <Modal
+      title={participant ? `Edit ${participant.displayName}` : 'Add a participant'}
+      onClose={onClose}
+    >
       <form onSubmit={save} className="grid gap-4">
         <ErrorNote message={error} />
         <Field label="Name" required hint="As it appears on the enrollment form">
@@ -71,20 +102,35 @@ export function AddParticipantModal({
             <option value="carryover">Carried over from last year</option>
           </select>
         </Field>
-        {typesFor(tagTypes, 'participant').length > 0 && (
+        {!participant && typesFor(tagTypes, 'participant').length > 0 && (
           // Not a <label>: a label holding buttons would press the first when its words are clicked.
           <div className="ad-field">
             <span>Tags</span>
             <TagPicker types={tagTypes} target="participant" value={tags} onChange={setTags} />
           </div>
         )}
-        <div className="flex justify-end gap-2">
-          <Button type="button" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" kind="primary" disabled={busy}>
-            Add participant
-          </Button>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            {participant && (
+              <Button
+                type="button"
+                kind="ghost"
+                className="text-danger"
+                onClick={() => void remove()}
+                disabled={busy}
+              >
+                Remove participant
+              </Button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" kind="primary" disabled={busy}>
+              {participant ? 'Save' : 'Add participant'}
+            </Button>
+          </div>
         </div>
       </form>
     </Modal>

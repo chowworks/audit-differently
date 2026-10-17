@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { DocumentDto, EligibilityItemDef, EngagementDetail, ParticipantDto } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
+import { AddParticipantModal } from '@/components/AddParticipantModal'
 import { shortDate } from '@/lib/format'
 import { missingItems } from '@/lib/workflow'
 import { Button, Chip, Empty, ErrorNote, Modal, inputClass } from '@/components/ui'
@@ -36,6 +37,7 @@ export function ParticipantsModal({
   const [onlyMissing, setOnlyMissing] = useState(false)
   const [tag, setTag] = useState('')
   const [tagging, setTagging] = useState<ParticipantDto | null>(null)
+  const [editing, setEditing] = useState<ParticipantDto | null>(null)
   const api = useApi()
   const files = c.participants.map((p) => {
     const have = new Set(p.documents.map((d) => d.purpose))
@@ -155,9 +157,14 @@ export function ParticipantsModal({
                         </td>
                         <td className="whitespace-nowrap text-right">
                           {c.canManage && (
-                            <Button size="sm" kind="ghost" onClick={() => setTagging(f.p)}>
-                              tags
-                            </Button>
+                            <>
+                              <Button size="sm" kind="ghost" onClick={() => setEditing(f.p)}>
+                                edit
+                              </Button>
+                              <Button size="sm" kind="ghost" onClick={() => setTagging(f.p)}>
+                                tags
+                              </Button>
+                            </>
                           )}
                           <Button size="sm" onClick={() => setFileFor(f.p.id)}>
                             {c.canManage && f.missing.length > 0 ? 'Complete file' : 'Open file'}
@@ -172,6 +179,22 @@ export function ParticipantsModal({
           </>
         )}
       </Modal>
+      {editing && (
+        <AddParticipantModal
+          engagementId={c.id}
+          tagTypes={c.tagTypes}
+          participant={editing}
+          onClose={() => setEditing(null)}
+          onAdded={(p) => {
+            onChanged({ ...c, participants: c.participants.map((x) => (x.id === p.id ? p : x)) })
+            setEditing(null)
+          }}
+          onRemoved={(id) => {
+            onChanged({ ...c, participants: c.participants.filter((x) => x.id !== id) })
+            setEditing(null)
+          }}
+        />
+      )}
       {tagging && (
         <TagsModal
           title={`Tags for ${tagging.displayName}`}

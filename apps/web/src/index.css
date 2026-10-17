@@ -1232,6 +1232,20 @@
     line-height: 1.5;
   }
 
+  /* What went wrong (ErrorNote): a soft red band with the warning sign */
+  .ad-error {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    margin: 0 0 14px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: var(--danger-tint);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--danger);
+  }
+
   /* Notices */
   .ad-notice {
     margin-bottom: 16px;

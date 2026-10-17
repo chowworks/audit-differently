@@ -12,6 +12,21 @@ export class ParticipantsController {
     private readonly callers: CallerService
   ) {}
 
+  @Patch(':id')
+  async update(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Body() body: { participantId?: unknown; displayName?: unknown; enrollmentStatus?: unknown }
+  ): Promise<ParticipantDto> {
+    return this.participants.update(await this.callers.load(userId), id, body ?? {})
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  async remove(@UserId() userId: string, @Param('id') id: string): Promise<void> {
+    await this.participants.remove(await this.callers.load(userId), id)
+  }
+
   @Patch(':id/tags')
   async setTags(
     @UserId() userId: string,
