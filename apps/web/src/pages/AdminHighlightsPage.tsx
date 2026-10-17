@@ -120,8 +120,8 @@ const lastChanged = (s: HighlightSettingDto) =>
 export function AdminHighlightsPage() {
   const api = useApi()
   const { data, error, setData } = useLoad<HighlightSettingDto[]>('/admin/highlights')
-  // The proof type being saved, and the last one saved, for the word beside its name.
-  const [saving, setSaving] = useState<string | null>(null)
+  // The proof types being saved, and the last one saved, for the word beside each name.
+  const [saving, setSaving] = useState<ReadonlySet<string>>(new Set())
   const [saved, setSaved] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   if (error) return <ErrorNote message={error} />
@@ -130,19 +130,26 @@ export function AdminHighlightsPage() {
   const toggle = async (s: HighlightSettingDto, f: HighlightField, on: boolean) => {
     const fields = on ? [...s.fields, f] : s.fields.filter((x) => x !== f)
     if (!fields.length) return
-    const before = data
-    setData(data.map((x) => (x.kind === s.kind ? { ...x, fields } : x)))
-    setSaving(s.kind)
+    // Only this proof type's row changes, so a save of another type running at the same time keeps its own.
+    const put = (row: HighlightSettingDto) =>
+      setData((d) => d && d.map((x) => (x.kind === s.kind ? row : x)))
+    put({ ...s, fields })
+    setSaving((k) => new Set(k).add(s.kind))
     setSaved(null)
     setSaveError(null)
     try {
-      setData(await api.put<HighlightSettingDto[]>(`/admin/highlights/${s.kind}`, { fields }))
+      const all = await api.put<HighlightSettingDto[]>(`/admin/highlights/${s.kind}`, { fields })
+      put(all.find((x) => x.kind === s.kind) ?? { ...s, fields })
       setSaved(s.kind)
     } catch (e) {
-      setData(before)
+      put(s)
       setSaveError((e as Error).message)
     } finally {
-      setSaving(null)
+      setSaving((k) => {
+        const next = new Set(k)
+        next.delete(s.kind)
+        return next
+      })
     }
   }
   return (
@@ -156,7 +163,7 @@ export function AdminHighlightsPage() {
               <div className="ad-hl-head">
                 <b>{kindTitle(s.kind)}</b>
                 <span className="text-xs text-soft" role="status">
-                  {saving === s.kind ? 'Saving…' : saved === s.kind ? '✓ Saved' : lastChanged(s)}
+                  {saving.has(s.kind) ? 'Saving…' : saved === s.kind ? '✓ Saved' : lastChanged(s)}
                 </span>
               </div>
               <div className="ad-hl-chips">
@@ -172,7 +179,7 @@ export function AdminHighlightsPage() {
                       <input
                         type="checkbox"
                         checked={on}
-                        disabled={last || saving === s.kind}
+                        disabled={last || saving.has(s.kind)}
                         onChange={(e) => void toggle(s, f, e.target.checked)}
                       />
                       {HIGHLIGHT_FIELD_LABELS[f]}

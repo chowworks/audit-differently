@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useUser } from '@clerk/clerk-react'
 import type { AdminListDto, AdminUserDto, PlatformRoleChangeDto } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
+import { usePeopleSearch } from '@/hooks/usePeopleSearch'
 import { shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty, ErrorNote, SavedMark, inputClass } from '@/components/ui'
 import { HandCard } from '@/components/HandCard'
@@ -24,37 +25,10 @@ function Admins() {
   const admins = useLoad<AdminListDto>('/admin/admins')
   const changes = useLoad<PlatformRoleChangeDto[]>('/admin/role-changes')
   const [query, setQuery] = useState('')
-  const [found, setFound] = useState<AdminUserDto[] | null>(null)
+  const { found, error: searchError } = usePeopleSearch(query)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<{ at: number; text: string } | null>(null)
-  const apiRef = useRef(api)
-  apiRef.current = api
-  // Searches as the admin types, a moment after the last key; an answer to an older query is dropped.
-  useEffect(() => {
-    const q = query.trim()
-    if (!q) {
-      setFound(null)
-      return
-    }
-    let current = true
-    const timer = setTimeout(async () => {
-      try {
-        const people = await apiRef.current.get<AdminUserDto[]>(
-          `/admin/users?q=${encodeURIComponent(q)}`
-        )
-        if (!current) return
-        setError(null)
-        setFound(people)
-      } catch (e) {
-        if (current) setError((e as Error).message)
-      }
-    }, 300)
-    return () => {
-      current = false
-      clearTimeout(timer)
-    }
-  }, [query])
   const setRole = async (u: AdminUserDto, role: 'admin' | null) => {
     const who = u.email ?? u.displayName ?? u.id
     if (!confirm(role ? `Make ${who} a platform admin?` : `Remove ${who} as a platform admin?`))
@@ -64,7 +38,6 @@ function Admins() {
     try {
       await api.put<AdminUserDto>(`/admin/users/${u.id}/role`, { role })
       // The admins list is the one place a person shows as an admin: the search is done with.
-      setFound(null)
       setQuery('')
       setDone({
         at: Date.now(),
@@ -102,13 +75,8 @@ function Admins() {
           // Removing is done from the admins list above, so there is one place for it.
           <span className="text-xs text-soft">already an admin</span>
         ) : u.role === 'admin' ? (
-          <Button
-            kind="ghost"
-            className="text-danger"
-            disabled={busy}
-            onClick={() => setRole(u, null)}
-          >
-            remove admin
+          <Button kind="navy" size="sm" disabled={busy} onClick={() => setRole(u, null)}>
+            Remove admin
           </Button>
         ) : (
           <Button kind="navy" size="sm" disabled={busy} onClick={() => setRole(u, 'admin')}>
@@ -159,6 +127,7 @@ function Admins() {
             <code>*@example.org</code> a whole domain). Only people who have signed in at least once
             can be found.
           </p>
+          <ErrorNote message={searchError} />
           {done && (
             <p className="mt-2">
               <SavedMark at={done.at}>{done.text}</SavedMark>
@@ -229,7 +198,7 @@ function AdminChanges({
                     {role(c.oldRole)} → {role(c.newRole)}{' '}
                     {c.outcome === 'failed' && (
                       <Chip tone="warn" fill title={c.error ?? undefined}>
-                        failed
+                        ⚠️ failed
                       </Chip>
                     )}
                   </td>

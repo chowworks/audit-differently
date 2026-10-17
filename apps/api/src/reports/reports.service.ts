@@ -599,14 +599,19 @@ export class ReportsService {
           const changes = changesOf(before, data, WEX_FIELDS)
           if (!changes.length) throw new NothingChanged()
           await tx.wexPayment.update({ where: { id: wexId }, data })
-          return changes
+          // Its proof was matched, and highlighted, for the person it named: for someone else it is matched again.
+          const unlinked =
+            before.participantId === data.participantId
+              ? 0
+              : (await tx.wexPaymentDocument.deleteMany({ where: { wexPaymentId: wexId } })).count
+          return { changes, unlinked }
         },
-        (changes) => ({
+        ({ changes, unlinked }) => ({
           workspaceId: r.workspaceId!,
           resource: 'report',
           subjectId: wexId,
           action: 'update',
-          description: `Changed a work-experience payment in ${monthName(r.period)}`,
+          description: `Changed a work-experience payment in ${monthName(r.period)}${unlinked ? `; detached its ${howMany(unlinked, 'proof')}, to be matched again for the participant now named` : ''}`,
           changes,
         })
       )
@@ -625,14 +630,21 @@ export class ReportsService {
     })
     if (!existing) throw new NotFoundException()
     const r = await this.editable(caller, existing.monthlyReportId)
-    await this.log.change(caller, (tx) => tx.wexPayment.delete({ where: { id: wexId } }), {
-      workspaceId: r.workspaceId!,
-      resource: 'report',
-      subjectId: wexId,
-      action: 'delete',
-      description: `Removed a work-experience payment from ${monthName(r.period)}`,
-      changes: changesOf(existing, null, WEX_FIELDS),
-    })
+    await this.log.change(
+      caller,
+      async (tx) => {
+        await lockDraft(tx, r.id)
+        return tx.wexPayment.delete({ where: { id: wexId } })
+      },
+      {
+        workspaceId: r.workspaceId!,
+        resource: 'report',
+        subjectId: wexId,
+        action: 'delete',
+        description: `Removed a work-experience payment from ${monthName(r.period)}`,
+        changes: changesOf(existing, null, WEX_FIELDS),
+      }
+    )
     await this.checks.refresh(r.id)
     return this.fresh(caller, r.id)
   }
@@ -880,18 +892,42 @@ export class ReportsService {
       workspaceRole(caller, r.engagement.workspaceId, ['owner']),
       'Only an owner deletes a month'
     )
-    const files = await this.prisma.document.count({ where: monthFiles(r) })
-    if (!isEmptyMonth(r, files))
-      throw new ConflictException(
+    const notEmpty = () =>
+      new ConflictException(
         `${monthName(r.period)} is not empty: only a draft month with no expenses, payroll or files can be deleted`
       )
-    await this.log.change(caller, (tx) => tx.monthlyReport.delete({ where: { id: r.id } }), {
-      workspaceId: r.workspaceId!,
-      resource: 'report',
-      subjectId: r.id,
-      action: 'delete',
-      description: `Deleted ${monthName(r.period)}, a month with nothing to submit`,
-    })
+    const files = await this.prisma.document.count({ where: monthFiles(r) })
+    if (!isEmptyMonth(r, files)) throw notEmpty()
+    await this.log.change(
+      caller,
+      async (tx) => {
+        // Checked again on the month as it stands, locked: a closing, an expense or a payment written meanwhile
+        // waits for this delete (and then finds no month), or was written first and is counted here.
+        const [month] = await tx.$queryRaw<{ status: string }[]>`
+          SELECT "status" FROM "MonthlyReport" WHERE "id" = ${r.id} FOR UPDATE`
+        if (!month) throw new NotFoundException()
+        const left =
+          (await tx.expense.count({ where: { monthlyReportId: r.id } })) +
+          (await tx.wexPayment.count({ where: { monthlyReportId: r.id } })) +
+          (await tx.reportReopening.count({ where: { monthlyReportId: r.id } })) +
+          (await tx.document.count({ where: monthFiles(r) }))
+        if (month.status !== 'draft' || left) throw notEmpty()
+        // An unsaved payroll match holds staged files the delete would leave in storage: it is saved or discarded
+        // first, or goes by itself after RUN_HOURS (payroll-match.sweeper.ts).
+        if (await tx.payrollMatchRun.count({ where: { monthlyReportId: r.id } }))
+          throw new ConflictException(
+            `Payroll is being matched for ${monthName(r.period)}: save or discard that match first (an unsaved one goes by itself after a day)`
+          )
+        return tx.monthlyReport.delete({ where: { id: r.id } })
+      },
+      {
+        workspaceId: r.workspaceId!,
+        resource: 'report',
+        subjectId: r.id,
+        action: 'delete',
+        description: `Deleted ${monthName(r.period)}, a month with nothing to submit`,
+      }
+    )
     return { engagementId: r.engagementId }
   }
 
@@ -1055,6 +1091,18 @@ function checkDto(k: {
     participantId: k.participantId,
     wexPaymentId: k.wexPaymentId,
   }
+}
+
+/**
+ * Inside a change's transaction: the month as it stands, share-locked until the change commits, so a closing approved
+ * meanwhile waits for it, and one approved first refuses it. The database's own month lock (migration
+ * 20261015001100) checks additions and changes only, so a removal is checked here.
+ */
+async function lockDraft(tx: Prisma.TransactionClient, reportId: string): Promise<void> {
+  const [month] = await tx.$queryRaw<{ status: string; period: string }[]>`
+    SELECT "status", "period" FROM "MonthlyReport" WHERE "id" = ${reportId} FOR SHARE`
+  if (!month) throw new NotFoundException()
+  refuseLocked(month)
 }
 
 /** The files filed under a month: anything here keeps the month from being deleted. */

@@ -54,7 +54,7 @@ export function AdminWorkspacePage() {
       </div>
       <div className="grid gap-4 lg:grid-cols-4">
         <div className="grid content-start gap-4 lg:col-span-3">
-          <People w={w} onChange={reload} base={BASE} />
+          <People w={w} onChange={reload} base={BASE} findPeople />
           <Rename w={w} onChange={reload} base={BASE} />
           <ReceiptsAddress w={{ ...w, canManage: false }} onChange={reload} />
           <BudgetItems w={w} onChange={reload} base={BASE} />

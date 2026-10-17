@@ -16,7 +16,7 @@ import {
   type StatementLine,
 } from '@ad/types'
 import { ChecksService } from '../checks/checks.service'
-import { AccessLogService } from '../core/access-log.service'
+import { AccessLogService, type Actor } from '../core/access-log.service'
 import { staffName, tenantWhere, type Caller } from '../core/caller'
 import { howMany, monthName } from '../core/changes'
 import { MatchStatsService, type MatchRun } from '../core/match-stats.service'
@@ -28,7 +28,7 @@ import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-stor
 import { matchSlot, slotsOf, type ProofFile, type ProofItem } from './match-proof'
 import { cleanMark, MAX_PAYROLL_FILES } from './payroll.service'
 import { HighlightSettingsService } from './highlight-settings.service'
-import { PayrollMatchWorker } from './payroll-match.worker'
+import { PayrollMatchWorker, storageName } from './payroll-match.worker'
 import type { PageItem } from './statement-lines'
 import { itemCopy } from './mark-pdf'
 
@@ -166,6 +166,7 @@ export class PayrollMatchService {
             size: d.size,
             sha256: d.sha256,
             storageKey: d.storageKey,
+            storage: storageName(),
           },
         })
       }
@@ -246,6 +247,7 @@ export class PayrollMatchService {
             size: s.data.size,
             sha256: s.data.sha256,
             storageKey: s.data.storageKey,
+            storage: storageName(),
           },
         })
       )
@@ -364,6 +366,12 @@ export class PayrollMatchService {
         highlight[PAYROLL_SLOT_KIND[l.slot]]
       ).candidates[0]
       const mark = found?.mark ? cleanMark(found.mark) : null
+      // A bank statement proves a payment by its line alone: with no line found on it, it is not this payment's proof
+      // (the line is found under Unmatched payments, after Save).
+      if (l.slot === 'bank' && !mark)
+        throw new BadRequestException(
+          `No line for this payment was found on ${f.fileName}: find it under Unmatched payments after saving`
+        )
       const marks = (found?.marks ?? []).slice(0, 20).map(cleanMark)
       return { item, slot: l.slot, file: f, mark, marks }
     })
@@ -507,6 +515,69 @@ export class PayrollMatchService {
       description: `${verb} payroll match${r ? ` for ${monthName(r.period)}` : ''} (${howMany(run.files.filter((f) => !f.documentId).length, 'staged file')})`,
     })
     await this.stats.recordWith('payroll', () => this.statOf(caller, run, outcome))
+    await this.dropStaged(run)
+  }
+
+  /**
+   * Trusted work, inside runAsSystem (payroll-match.sweeper.ts, on a timer): every run past RUN_HOURS in every
+   * workspace goes, with its staged objects, so a wizard closed and never opened again leaves no pay stub or its text
+   * behind. Each removal's line is written in the starter's name in the run's workspace (`AccessLogService.trusted`);
+   * a run saved or discarded meanwhile is skipped. The number removed.
+   */
+  async expireAll(limit = 50): Promise<number> {
+    const old = await this.prisma.payrollMatchRun.findMany({
+      where: { createdAt: { lt: new Date(Date.now() - RUN_HOURS * 3_600_000) } },
+      include: { files: true },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    })
+    let removed = 0
+    for (const run of old)
+      try {
+        if (await this.expire(run)) removed++
+      } catch (e) {
+        this.logger.error(
+          `Could not remove the expired payroll match ${run.id}: ${(e as Error).message}`
+        )
+      }
+    return removed
+  }
+
+  private async expire(run: RunRow): Promise<boolean> {
+    const [starter, r] = await Promise.all([
+      this.prisma.user.findFirst({ where: { id: run.createdById }, select: { email: true } }),
+      this.prisma.monthlyReport.findFirst({
+        where: { id: run.monthlyReportId },
+        select: { period: true },
+      }),
+    ])
+    const actor = { userId: run.createdById, email: starter?.email ?? null }
+    const staged = run.files.filter((f) => !f.documentId).length
+    const gone = await this.log.trusted(
+      actor,
+      (tx) => tx.payrollMatchRun.deleteMany({ where: { id: run.id } }),
+      (d) =>
+        d.count
+          ? [
+              {
+                workspaceId: run.workspaceId!,
+                resource: 'report',
+                subjectId: run.monthlyReportId,
+                action: 'delete',
+                description: `Removed an unsaved payroll match${r ? ` for ${monthName(r.period)}` : ''} left for over ${RUN_HOURS} hours (${howMany(staged, 'staged file')})`,
+              },
+            ]
+          : []
+    )
+    // Saved or discarded in between: its files are the month's documents now, or already gone.
+    if (!gone.count) return false
+    await this.stats.recordWith('payroll', () => this.statOf(actor, run, 'expired'))
+    await this.dropStaged(run)
+    return true
+  }
+
+  /** After the run's rows went: the objects it staged, never a document's (a file with `documentId`). */
+  private async dropStaged(run: RunRow) {
     for (const f of run.files)
       if (!f.documentId && f.storageKey.startsWith(`${run.workspaceId}/`))
         await this.storage
@@ -523,7 +594,7 @@ export class PayrollMatchService {
    * them, and what the matcher found for each proof the month's items need (sure, guessed, nothing). Counts only.
    */
   private async statOf(
-    caller: Caller,
+    caller: Actor,
     run: RunRow,
     outcome: 'saved' | 'discarded' | 'expired'
   ): Promise<MatchRun> {

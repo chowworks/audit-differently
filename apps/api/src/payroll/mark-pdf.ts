@@ -8,13 +8,14 @@ export interface MarkedPdf {
   notDrawn: StatementMark[]
 }
 
-/** The kinds of note a reader puts over a PDF to point at words: a copy for one item drops them all. */
-const POINTERS = new Set(['/Highlight', '/Popup', '/Underline', '/StrikeOut', '/Squiggly'])
+/** The notes a copy for one item keeps: links and form fields, which point at no one. */
+const KEPT = new Set(['/Link', '/Widget'])
 
 /**
- * Removes the highlight notes the file already carries (a bank's statement often comes highlighted), so the only
- * yellow on a copy is the item's own. Links and form fields stay. Highlights printed into the page itself cannot be
- * told from the page and stay.
+ * Removes every note the file already carries over its pages but links and form fields: highlights, boxes, circles,
+ * ink, stamps, sticky notes and the rest (a bank's statement often comes marked up, perhaps around another person's
+ * line), so the only marks on a copy are the item's own. Marks printed into the page itself cannot be told from the
+ * page and stay.
  */
 function stripPointers(pdf: PDFDocument) {
   for (const page of pdf.getPages()) {
@@ -23,7 +24,7 @@ function stripPointers(pdf: PDFDocument) {
     for (let i = annots.size() - 1; i >= 0; i--) {
       const a = annots.lookup(i)
       const kind = a instanceof PDFDict ? a.get(PDFName.of('Subtype'))?.toString() : undefined
-      if (kind && POINTERS.has(kind)) annots.remove(i)
+      if (!kind || !KEPT.has(kind)) annots.remove(i)
     }
   }
 }

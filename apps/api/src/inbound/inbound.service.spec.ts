@@ -9,6 +9,7 @@ import {
   CLAIM_SQL,
   InboundService,
   MAX_ATTEMPTS,
+  NO_ADDRESS,
   REJECT,
   STOPPED,
   namesCode,
@@ -183,14 +184,24 @@ function setup() {
       deleteMany: jest.fn(async () => ({ count: 0 })),
     },
     // The worker's pass, as the SQL does it: what a stopped process left is given up, then what is due is claimed.
-    $executeRawUnsafe: jest.fn(async (_sql: string, max: number, reason: string) => {
-      for (const r of rows.filter((x) => x.nextAttemptAt <= new Date())) {
-        if (r.status === 'filing') r.status = 'unmatched'
-        else if (r.status === 'processing' && r.attempts >= max)
-          Object.assign(r, { status: 'failed', error: reason })
+    $executeRawUnsafe: jest.fn(
+      async (_sql: string, max: number, reason: string, noAddress: string) => {
+        for (const r of rows.filter((x) => x.nextAttemptAt <= new Date())) {
+          if (r.status === 'filing') r.status = 'unmatched'
+          else if (r.status === 'processing' && r.attempts >= max)
+            Object.assign(r, { status: 'failed', error: reason })
+        }
+        // A row queued with no receipts address is never claimed: after a day it fails.
+        for (const r of rows)
+          if (
+            r.status === 'received' &&
+            !r.toAddress &&
+            r.createdAt.getTime() <= Date.now() - 86_400_000
+          )
+            Object.assign(r, { status: 'failed', error: noAddress })
+        return 0
       }
-      return 0
-    }),
+    ),
     $queryRawUnsafe: jest.fn(
       async (sql: string, limit: string | number, max?: number, domain?: string) => {
         // The filing transaction's locked read of the row.
@@ -774,6 +785,23 @@ describe('emailed receipts', () => {
       expect(await t.s.runDue()).toBe(0)
       expect(row).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS, error: STOPPED })
       expect(t.resend.email).not.toHaveBeenCalled()
+    })
+
+    it('ends a row queued with no receipts address once it is a day old, and leaves a newer one', async () => {
+      const t = ready()
+      for (const id of ['em-old', 'em-new'])
+        await t.s.enqueue({
+          type: 'email.received',
+          data: { email_id: id, from: 'bookkeeper@bright-path.example.org', to: [`x@${DOMAIN}`] },
+        })
+      // Queued before the webhook kept only mail to its own domain: no receipts address.
+      for (const r of t.rows) r.toAddress = null
+      t.rows[0]!.createdAt = new Date(Date.now() - 2 * 86_400_000)
+      expect(await t.s.runDue()).toBe(0)
+      expect(t.rows.map((r) => [r.emailId, r.status, r.error])).toEqual([
+        ['em-old', 'failed', NO_ADDRESS],
+        ['em-new', 'received', null],
+      ])
     })
 
     it('files nothing another worker filed while its lease overlapped', async () => {

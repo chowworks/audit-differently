@@ -1066,32 +1066,6 @@
     font-size: 14px;
     font-weight: 700;
   }
-  /* The payroll files being read on the server: how many are done, as words and a bar. */
-  .ad-reading {
-    display: grid;
-    gap: 6px;
-    margin: 0 0 12px;
-    padding: 10px 12px;
-    border-left: 4px solid var(--navy);
-    background: var(--surface-alt);
-    font-size: 14px;
-  }
-  .ad-reading small {
-    color: var(--muted);
-  }
-  .ad-reading-bar {
-    display: block;
-    height: 6px;
-    border-radius: 3px;
-    background: var(--line);
-    overflow: hidden;
-  }
-  .ad-reading-bar span {
-    display: block;
-    height: 100%;
-    background: var(--navy);
-    transition: width 0.4s ease;
-  }
   /* What a payroll zip holds, folder by folder, once opened: the month page's tiles, one per folder. */
   .ad-zip-head {
     display: flex;
@@ -2582,4 +2556,41 @@
   white-space: nowrap;
   vertical-align: middle;
   cursor: help;
+}
+
+/* The payroll wizard's reading status: an hourglass that turns over and a bar that fills as files are read. */
+.ad-hourglass {
+  display: inline-block;
+  animation: ad-hourglass 2s ease-in-out infinite;
+}
+@keyframes ad-hourglass {
+  0%,
+  40% {
+    transform: rotate(0deg);
+  }
+  60%,
+  100% {
+    transform: rotate(180deg);
+  }
+}
+.ad-progress {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+.ad-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ad-hourglass {
+    animation: none;
+  }
+  .ad-progress > span {
+    transition: none;
+  }
 }

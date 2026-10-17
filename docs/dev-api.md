@@ -135,9 +135,13 @@ the same story as dev (July, August, September above) and nothing of Harbor Tech
 - it refuses, changing nothing, when two workspaces match, when the match has another name or receipts address, or
   when it holds an engagement whose number does not start with `DEMO-` (a real customer by that name stays untouched);
 - the dev seed (`db:seed`) and `demo:reset` refuse to run in production; only this script does;
-- its files go to the production bucket under the demo workspace's own prefix (the script refuses without
-  `R2_DOCUMENTS_BUCKET`), and its personas are `.example` addresses no one can verify, so no account takes a seat. A
-  platform admin who wants to walk it seats themself from Admin tools, and the log says so.
+- it adopts an existing workspace only when it is already marked as the demo (`featuredDemo`); one an admin made for
+  a real customer of the same name is refused, and a new demo workspace is marked from its first row;
+- it does not guess where it runs from the shell's variables, so it behaves the same from a laptop: its files go to
+  `R2_DOCUMENTS_BUCKET` under the demo workspace's own prefix (it refuses without it unless the database is on this
+  machine), every run writes its access-log line, and its personas, the owner's seat included, are `.example`
+  addresses no one can verify unless `DEMO_OWNER_EMAIL` names one, so no account takes a seat. A platform admin who
+  wants to walk it seats themself from Admin tools, and the log says so.
 
 Run it only with the owner's yes at the time (it writes to the production database), as the database owner, from a
 shell on the production API service, since production's Postgres has no public address:
@@ -150,4 +154,4 @@ npm run demo:seed -w @ad/api -- --confirm-host <the host it printed>
 ```
 
 Re-running it puts the demo back in its starting shape (its months, links and highlights; anything a visitor added
-stays), and each production run writes one access-log line in the demo workspace saying the demo data was loaded.
+stays), and each run writes one access-log line in the demo workspace saying the demo data was loaded.

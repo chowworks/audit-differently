@@ -1,5 +1,11 @@
 import { PDFDocument, StandardFonts } from 'pdf-lib'
-import { MAX_READ_ATTEMPTS, PayrollMatchWorker } from './payroll-match.worker'
+import { hostname } from 'node:os'
+import {
+  MAX_READ_ATTEMPTS,
+  PayrollMatchWorker,
+  READ_CLAIM_SQL,
+  storageName,
+} from './payroll-match.worker'
 
 async function pdfWith(text: string): Promise<Buffer> {
   const pdf = await PDFDocument.create()
@@ -62,5 +68,30 @@ describe('PayrollMatchWorker', () => {
     await w.read(file({ storageKey: 'W2/E9/2026-01/a.pdf', attempts: MAX_READ_ATTEMPTS }))
     expect(read).not.toHaveBeenCalled()
     expect(written()[0]).toMatchObject({ status: 'failed' })
+  })
+
+  it("claims only the files in this API's own storage", async () => {
+    const bucket = process.env.R2_DOCUMENTS_BUCKET
+    try {
+      process.env.R2_DOCUMENTS_BUCKET = 'ad-dev-fictional'
+      expect(storageName()).toBe('r2:ad-dev-fictional')
+      const prisma = {
+        $executeRawUnsafe: jest.fn().mockResolvedValue(0),
+        $queryRawUnsafe: jest.fn().mockResolvedValue([]),
+      }
+      const w = new PayrollMatchWorker(prisma as never, {} as never)
+      expect(await w.runDue(5)).toBe(0)
+      expect(prisma.$queryRawUnsafe).toHaveBeenCalledWith(
+        READ_CLAIM_SQL,
+        5,
+        MAX_READ_ATTEMPTS,
+        'r2:ad-dev-fictional'
+      )
+      delete process.env.R2_DOCUMENTS_BUCKET
+      expect(storageName()).toBe(`local:${hostname()}`)
+    } finally {
+      if (bucket === undefined) delete process.env.R2_DOCUMENTS_BUCKET
+      else process.env.R2_DOCUMENTS_BUCKET = bucket
+    }
   })
 })

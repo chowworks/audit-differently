@@ -49,7 +49,7 @@ describe('markPdf', () => {
 })
 
 describe('itemCopy', () => {
-  it("removes the file's own highlight notes and keeps its links, then draws only the item's marks", async () => {
+  it("removes the file's own notes of every kind and keeps its links and form fields, then draws only the item's marks", async () => {
     const { PDFDocument: Doc, PDFName: Name } = await import('pdf-lib')
     const pdf = await Doc.create()
     const page = pdf.addPage([612, 792])
@@ -59,7 +59,19 @@ describe('itemCopy', () => {
       )
     page.node.set(
       Name.of('Annots'),
-      pdf.context.obj([note('Highlight'), note('Popup'), note('Link')])
+      pdf.context.obj([
+        note('Highlight'),
+        note('Popup'),
+        note('Link'),
+        // A box drawn round another person's line, and a sticky note beside it.
+        note('Square'),
+        note('Text'),
+        note('Circle'),
+        note('Ink'),
+        note('FreeText'),
+        note('Stamp'),
+        note('Widget'),
+      ])
     )
     const { itemCopy } = await import('./mark-pdf')
     const out = await itemCopy(await pdf.save(), [
@@ -76,6 +88,6 @@ describe('itemCopy', () => {
           .get(Name.of('Subtype'))!
           .toString()
       )
-    expect(kinds).toEqual(['/Link'])
+    expect(kinds).toEqual(['/Link', '/Widget'])
   })
 })

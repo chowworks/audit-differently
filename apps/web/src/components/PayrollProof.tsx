@@ -18,6 +18,7 @@ import {
   type StatementMark,
 } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
+import { ApiError } from '@/services/api'
 import {
   PAYROLL_FOLDERS,
   filesFromZip,
@@ -129,6 +130,8 @@ export function PayrollProof({
   const [run, setRun] = useState<PayrollMatchRunDto | null>(null)
   const [reading, setReading] = useState<string | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
+  // Reading stopped being followed: the run is gone, expired or no longer editable, or the server kept failing.
+  const [pollError, setPollError] = useState<string | null>(null)
   const [finding, setFinding] = useState<PayrollItem | null>(null)
   // An item's own copy of a proof, drawn on the server with only that item's highlights.
   const [viewing, setViewing] = useState<{
@@ -158,13 +161,16 @@ export function PayrollProof({
         setRun(open)
         setStep('Match')
       })
-      .catch(() => undefined)
+      .catch((e: Error) => {
+        if (!gone) setRunError(e.message)
+      })
     return () => {
       gone = true
     }
   }, [reportId, canEdit])
   const runId = run?.id
-  const waiting = !!run?.files.some((f) => f.status === 'waiting' || f.status === 'reading')
+  const waiting =
+    !pollError && !!run?.files.some((f) => f.status === 'waiting' || f.status === 'reading')
   // Before the first poll, the run's own files say how far reading is.
   const shownProgress = progress ?? {
     total: run?.files.length ?? 0,
@@ -175,19 +181,32 @@ export function PayrollProof({
     if (!runId || !waiting) return
     let gone = false
     const poll = async () => {
+      // A refusal (the run expired or was removed, the month is no longer a draft) stops at once; a server or network
+      // failure is tried again, five times in a row at most.
+      let failures = 0
       while (!gone) {
         await new Promise((ok) => setTimeout(ok, 1500))
         if (gone) return
-        const p = await apiRef.current
-          .get<PayrollMatchProgress>(`/payroll-match/${runId}/progress`)
-          .catch(() => null)
-        if (gone || !p) continue
-        setProgress(p)
-        if (p.read + p.failed >= p.total) {
-          // All read: the run once more, with every match, as the page opens it.
-          const done = await apiRef.current.get<PayrollMatchRunDto>(`/payroll-match/${runId}`)
-          if (!gone) setRun(done)
-          return
+        try {
+          const p = await apiRef.current.get<PayrollMatchProgress>(
+            `/payroll-match/${runId}/progress`
+          )
+          if (gone) return
+          failures = 0
+          setProgress(p)
+          if (p.read + p.failed >= p.total) {
+            // All read: the run once more, with every match, as the page opens it.
+            const done = await apiRef.current.get<PayrollMatchRunDto>(`/payroll-match/${runId}`)
+            if (!gone) setRun(done)
+            return
+          }
+        } catch (e) {
+          if (gone) return
+          const refused = e instanceof ApiError && e.status >= 400 && e.status < 500
+          if (refused || ++failures >= 5) {
+            setPollError((e as Error).message)
+            return
+          }
         }
       }
     }
@@ -196,12 +215,23 @@ export function PayrollProof({
       gone = true
     }
   }, [runId, waiting])
+  const [discardError, setDiscardError] = useState<string | null>(null)
   const discard = async () => {
     if (!run) return
-    await api.del(`/payroll-match/${run.id}`).catch(() => undefined)
+    setDiscardError(null)
+    try {
+      await api.del(`/payroll-match/${run.id}`)
+    } catch (e) {
+      // Already gone (removed elsewhere): nothing left to discard. Anything else keeps the upload as it is.
+      if (!(e instanceof ApiError && e.status === 404)) {
+        setDiscardError((e as Error).message)
+        return
+      }
+    }
     setRun(null)
     setPicks({})
     setProgress(null)
+    setPollError(null)
     setStep('Upload')
   }
 
@@ -255,6 +285,10 @@ export function PayrollProof({
     fileId: string
   ): PayrollCandidate | undefined =>
     matchOf(item, slot)?.candidates.find((c) => c.fileId === fileId)
+  // A bank statement proves a payment only by its line: one picked where no line was found is not saved as proof,
+  // and its payment goes on to Unmatched payments to have the line found there.
+  const noLine = (item: PayrollItem, slot: PayrollSlot, fileId: string) =>
+    slot === 'bank' && !candidate(item, slot, fileId)?.mark
   // Why each slot was filled or left empty, for "How Auto-Match decided".
   const whyOf = (item: PayrollItem, slot: PayrollSlot) => {
     const attached = has(item, slot)
@@ -264,6 +298,12 @@ export function PayrollProof({
     const m = matchOf(item, slot)
     const id = chosen ?? m?.pick
     const c = id ? candidate(item, slot, id) : undefined
+    if (id && noLine(item, slot, id))
+      return {
+        tone: 'next',
+        file: fileOf(id)?.fileName,
+        text: 'No line for this payment was found on it: find it under Unmatched payments.',
+      }
     if (chosen)
       return { tone: 'ok', file: fileOf(chosen)?.fileName, text: `Chosen by you. ${c?.why ?? ''}` }
     if (!c) return { tone: 'missing', file: undefined, text: m?.why ?? 'Nothing read yet.' }
@@ -296,7 +336,9 @@ export function PayrollProof({
   const allShown = shown.length > 0 && shown.every((i) => chosen.has(keyOf(i)))
   const toSave = items.flatMap((item) =>
     slotsOf(item)
-      .filter((slot) => !has(item, slot) && pick(item, slot))
+      .filter(
+        (slot) => !has(item, slot) && pick(item, slot) && !noLine(item, slot, pick(item, slot))
+      )
       .map((slot) => {
         return { target: item.target, id: item.id, slot, fileId: pick(item, slot) }
       })
@@ -305,6 +347,9 @@ export function PayrollProof({
   /** Start a run (with the zip's files, or none to match what is already on file) and send the files, 20 at a time. */
   const startRun = async (zip: { file: File; kind: PayrollFolderKind }[], replace: boolean) => {
     setRunError(null)
+    setPollError(null)
+    setDiscardError(null)
+    setProgress(null)
     setReading('Starting…')
     try {
       let current = await api.post<PayrollMatchRunDto>(`/reports/${r.id}/payroll-match`, {
@@ -356,6 +401,7 @@ export function PayrollProof({
       )
       setRun(null)
       setPicks({})
+      setProgress(null)
       setChosen(new Set())
       return true
     } catch (e) {
@@ -447,12 +493,19 @@ export function PayrollProof({
     const value = pick(item, slot)
     const auto = !picks[keyOf(item)]?.[slot] && !!value
     const c = value ? candidate(item, slot, value) : undefined
-    // The cell says how sure it is: green when the line was found (or chosen by hand), amber for a guess, red when missing.
-    const state = !value ? 'missing' : auto && !c?.sure ? 'guess' : 'ok'
+    // The cell says how sure it is: green when the line was found (or chosen by hand), amber for a guess or a bank
+    // statement with no line found, red when missing.
+    const state = !value
+      ? 'missing'
+      : noLine(item, slot, value)
+        ? 'noline'
+        : auto && !c?.sure
+          ? 'guess'
+          : 'ok'
     return (
       <>
         <select
-          className={`${inputClass} ad-match-${state}`}
+          className={`${inputClass} ad-match-${state === 'noline' ? 'guess' : state}`}
           aria-label={`${slot} for ${item.title}`}
           value={value}
           onChange={(e) => setPick(item, slot, e.target.value)}
@@ -468,6 +521,8 @@ export function PayrollProof({
         <span className="ad-match-foot">
           {state === 'missing' ? (
             <small className="ad-match-note-missing">✕ Missing</small>
+          ) : state === 'noline' ? (
+            <small className="ad-match-note-guess">⚠️ No line found: next step</small>
           ) : state === 'guess' ? (
             <small className="ad-match-note-guess">⚠️ ⚡ Best guess: check it</small>
           ) : (
@@ -487,31 +542,38 @@ export function PayrollProof({
 
   // Back and Save on the Match step, with or without payroll items: the zip's files are filed either way.
   const matchActions = (
-    <div className="ad-actions justify-between">
-      <span className="flex gap-2">
-        <Button kind="ghost" onClick={() => setStep('Upload')}>
-          Back: upload
-        </Button>
-        {run && (
-          <Button kind="ghost" onClick={() => void discard()} disabled={saving}>
-            Discard this upload
+    <>
+      <ErrorNote message={discardError} />
+      <div className="ad-actions justify-between">
+        <span className="flex gap-2">
+          <Button kind="ghost" onClick={() => setStep('Upload')}>
+            Back: upload
           </Button>
-        )}
-      </span>
-      <Button
-        kind="primary"
-        onClick={async () => {
-          // Staff lines still without a bank line after this save go on to Unmatched payments.
-          const left = staffItems.filter((i) => !has(i, 'bank') && !pick(i, 'bank')).map(keyOf)
-          if (!(await saveAll())) return
-          setUnmatched(left)
-          setStep(left.length ? 'Unmatched payments' : 'Done')
-        }}
-        disabled={saving || waiting}
-      >
-        {saving ? 'Saving…' : waiting ? 'Reading the files…' : run ? 'Save and continue' : 'Next'}
-      </Button>
-    </div>
+          {run && (
+            <Button kind="ghost" onClick={() => void discard()} disabled={saving}>
+              Discard this upload
+            </Button>
+          )}
+        </span>
+        <Button
+          kind="primary"
+          onClick={async () => {
+            // Staff lines still without a bank line after this save go on to Unmatched payments.
+            const left = staffItems
+              .filter(
+                (i) => !has(i, 'bank') && (!pick(i, 'bank') || noLine(i, 'bank', pick(i, 'bank')))
+              )
+              .map(keyOf)
+            if (!(await saveAll())) return
+            setUnmatched(left)
+            setStep(left.length ? 'Unmatched payments' : 'Done')
+          }}
+          disabled={saving || waiting || !!pollError}
+        >
+          {saving ? 'Saving…' : waiting ? 'Reading the files…' : run ? 'Save and continue' : 'Next'}
+        </Button>
+      </div>
+    </>
   )
 
   return (
@@ -528,27 +590,40 @@ export function PayrollProof({
     >
       <Stepper steps={STEPS} current={step} />
       {run && step === 'Match' && waiting && (
-        <>
-          <div className="ad-reading" role="status">
-            <b>
+        <div className="grid gap-4">
+          <div className="grid gap-2">
+            <p className="text-sm font-semibold" role="status">
+              <span className="ad-hourglass" aria-hidden="true">
+                ⏳
+              </span>{' '}
               Reading the files on the server: {shownProgress.read} of {shownProgress.total} done
               {shownProgress.failed ? `, ${shownProgress.failed} could not be read` : ''}
-            </b>
-            <span className="ad-reading-bar" aria-hidden="true">
+            </p>
+            <span className="ad-progress" aria-hidden="true">
               <span
                 style={{
-                  width: `${Math.round(((shownProgress.read + shownProgress.failed) / Math.max(1, shownProgress.total)) * 100)}%`,
+                  width: `${shownProgress.total ? ((shownProgress.read + shownProgress.failed) / shownProgress.total) * 100 : 0}%`,
                 }}
               />
             </span>
-            <small>
-              You can close this: it keeps reading, and you pick up here when you open it again.
-            </small>
           </div>
+          <HandCard
+            title="Reading your files"
+            icon="⏳"
+            lead="You can close this: it keeps reading."
+          >
+            <p>When you open Match payroll &amp; timecards again, you pick up here.</p>
+          </HandCard>
+          {matchActions}
+        </div>
+      )}
+      {run && step === 'Match' && pollError && (
+        <>
+          <ErrorNote message={pollError} />
           {matchActions}
         </>
       )}
-      {run && step === 'Match' && !waiting && (
+      {run && step === 'Match' && !waiting && !pollError && (
         <p className="ad-replacing" role="status">
           Nothing is saved until you press Save
           {run.replace && r.payrollDocuments.length
@@ -610,14 +685,14 @@ export function PayrollProof({
         </div>
       )}
 
-      {step === 'Match' && !waiting && items.length === 0 && (
+      {step === 'Match' && !waiting && !pollError && items.length === 0 && (
         <>
           <Empty>No payroll lines or work-experience payments this month.</Empty>
           <ErrorNote message={saveError} />
           {matchActions}
         </>
       )}
-      {step === 'Match' && !waiting && items.length > 0 && (
+      {step === 'Match' && !waiting && !pollError && items.length > 0 && (
         <>
           {openItems.length === 0 ? (
             <Empty>Auto-Match proved every payroll item this month.</Empty>
@@ -957,10 +1032,18 @@ export function PayrollProof({
                 it from More, Delete this month.
               </p>
             ) : (
-              r.expenses.length === 0 && (
+              // What the server needs to let an owner delete it, as far as this screen can tell: a draft with no
+              // expense, no payroll, no file and no reopening.
+              r.status === 'draft' &&
+              r.expenses.length === 0 &&
+              r.wexPayments.length === 0 &&
+              r.reopenings.length === 0 &&
+              !r.signedCopy &&
+              r.payrollDocuments.length === 0 &&
+              !r.documents.some((d) => d.period === r.period) && (
                 <p>
-                  This month has no expenses either. If there is nothing to submit, ask an owner to
-                  delete it.
+                  This month has nothing in it at all. If there is nothing to submit, ask an owner
+                  to delete it.
                 </p>
               )
             )}
@@ -1138,9 +1221,9 @@ function UploadPanel({
         </p>
       )}
       <Field
-        label="Payroll zip"
+        label="One zip with four folders: Timesheets, Payroll registers, Pay stubs and Bank statements, as in the sample above."
         required
-        hint={`One zip with four folders: Timesheets, Payroll registers, Pay stubs and Bank statements, as in the sample above. Up to ${mb(ZIP_MAX_BYTES)} and ${ZIP_MAX_FILES} files; each file up to ${mb(FILE_MAX_BYTES)}.`}
+        hint={`Up to ${mb(ZIP_MAX_BYTES)} and ${ZIP_MAX_FILES} files; each file up to ${mb(FILE_MAX_BYTES)}.`}
       >
         <input
           type="file"

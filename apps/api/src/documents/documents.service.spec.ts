@@ -124,6 +124,8 @@ function service() {
       ),
     },
     wexPayment: scoped({ id: 'wx-1', workspaceId: W, monthlyReport: { period: '2026-09' } }),
+    expenseDocument: { findFirst: jest.fn().mockResolvedValue(null), deleteMany: jest.fn() },
+    wexPaymentDocument: { findFirst: jest.fn().mockResolvedValue(null), deleteMany: jest.fn() },
   }
   const log = fakeLog(prisma)
   const storage = {
@@ -651,5 +653,48 @@ describe('DocumentsService', () => {
     expect(Logger.prototype.error).toHaveBeenCalledWith(
       expect.stringContaining(`Document d-inv: its file ${invoice.storageKey}`)
     )
+  })
+
+  it("replacing a month's payroll files keeps a file that proves another month's item, with that link", async () => {
+    const { service: s, prisma, log, storage } = service()
+    const september = row('d-sep', 'bank-statement', 'financial', {
+      engagementId: 'e-1',
+      period: '2026-09',
+    })
+    // The statement also shows an October payment: linked to an expense of October.
+    prisma.expenseDocument.findFirst.mockResolvedValueOnce({
+      expenseId: 'x-oct',
+      documentId: 'd-sep',
+    })
+    await s.removeReplaced(member('bookkeeper'), september as never)
+    const month = { engagementId: 'e-1', period: '2026-09' }
+    expect(prisma.expenseDocument.findFirst).toHaveBeenCalledWith({
+      where: { documentId: 'd-sep', expense: { monthlyReport: { NOT: month } } },
+    })
+    expect(prisma.expenseDocument.deleteMany.mock.calls).toEqual([
+      [
+        {
+          where: { documentId: 'd-sep', expense: { monthlyReport: month } },
+        },
+      ],
+    ])
+    expect(prisma.wexPaymentDocument.deleteMany.mock.calls).toEqual([
+      [
+        {
+          where: { documentId: 'd-sep', wexPayment: { monthlyReport: month } },
+        },
+      ],
+    ])
+    expect(prisma.document.delete).not.toHaveBeenCalled()
+    expect(storage.delete).not.toHaveBeenCalled()
+    expect(log.entries.map((e) => [e.action, e.subjectId])).toEqual([['update', 'd-sep']])
+    expect(log.entries[0]!.description).toContain('kept, as it proves an item of another month')
+
+    // Linked to nothing else: the row and the file go.
+    const again = service()
+    await again.service.removeReplaced(member('bookkeeper'), september as never)
+    expect(again.prisma.document.delete).toHaveBeenCalledWith({ where: { id: 'd-sep' } })
+    expect(again.storage.delete).toHaveBeenCalledWith(september.storageKey)
+    expect(again.log.entries.map((e) => e.action)).toEqual(['delete'])
   })
 })

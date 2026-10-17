@@ -88,17 +88,24 @@ export const CLAIM_SQL = `UPDATE "InboundReceipt"
     FOR UPDATE SKIP LOCKED)
 RETURNING *`
 
+/** Why a row queued with no receipts address was given up, in the inbox's words. */
+export const NO_ADDRESS = 'It was not sent to a receipts address'
+
 /**
  * Gives up what a stopped process left behind, once its lease ran out: a row still "processing" after its last attempt
  * ($1) fails for good with the reason $2 (otherwise one whose filing crashes the process would be claimed forever),
- * and a hand filing that stopped part way goes back to "unmatched" for the person to file again.
+ * and a hand filing that stopped part way goes back to "unmatched" for the person to file again. A row queued with no
+ * receipts address (before the webhook kept only mail to its own domain) is never claimed: after a day it fails with
+ * the reason $3, so it ends and is removed with the others. A row for another domain is left to that domain's API.
  */
 export const EXPIRE_SQL = `UPDATE "InboundReceipt"
    SET "status" = CASE WHEN "status" = 'filing' THEN 'unmatched' ELSE 'failed' END,
-       "error" = CASE WHEN "status" = 'filing' THEN "error" ELSE $2 END,
+       "error" = CASE WHEN "status" = 'filing' THEN "error" WHEN "status" = 'received' THEN $3 ELSE $2 END,
        "updatedAt" = (now() AT TIME ZONE 'UTC')
- WHERE "nextAttemptAt" <= (now() AT TIME ZONE 'UTC')
-   AND ("status" = 'filing' OR ("status" = 'processing' AND "attempts" >= $1))`
+ WHERE ("nextAttemptAt" <= (now() AT TIME ZONE 'UTC')
+     AND ("status" = 'filing' OR ("status" = 'processing' AND "attempts" >= $1)))
+    OR ("status" = 'received' AND "toAddress" IS NULL
+     AND "createdAt" <= (now() AT TIME ZONE 'UTC') - interval '1 day')`
 
 /** The row's filed attachments, read and locked inside a filing transaction: a second worker waits, then sees them. */
 const LOCK_SQL = `SELECT "filedAttachments" FROM "InboundReceipt" WHERE "id" = $1 FOR UPDATE`
@@ -225,7 +232,7 @@ export class InboundService {
     if (!cfg) return 0
     // Trusted work: the claim reads and leases rows of every workspace, and rows of none.
     const rows = await runAsSystem(async () => {
-      await this.prisma.$executeRawUnsafe(EXPIRE_SQL, MAX_ATTEMPTS, STOPPED)
+      await this.prisma.$executeRawUnsafe(EXPIRE_SQL, MAX_ATTEMPTS, STOPPED, NO_ADDRESS)
       return this.prisma.$queryRawUnsafe<InboundReceipt[]>(
         CLAIM_SQL,
         limit,

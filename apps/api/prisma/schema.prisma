@@ -293,6 +293,9 @@ model PayrollMatchFile {
   error       String?
   // How long the job took to read it (migration 20261016001500).
   readMs      Int?
+  // Which storage holds its object, 'r2:<bucket>' or 'local:<host>'; the job claims only its own (migration
+  // 20261016001700). Null on a file staged before it.
+  storage     String?
   createdAt   DateTime        @default(now())
   run         PayrollMatchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 

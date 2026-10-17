@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common'
 import type { Prisma } from '@prisma/client'
+import { hostname } from 'node:os'
 import { runAsSystem } from '../core/tenant-context'
 import { PrismaService } from '../prisma/prisma.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
@@ -13,10 +14,21 @@ export const MAX_READ_ATTEMPTS = 3
 const BATCH = 5
 
 /**
+ * The storage this API's objects are in, as a payroll match's file records it (`PayrollMatchFile.storage`, migration
+ * 20261016001700): the R2 bucket's name, or this machine's disk (StorageModule's choice).
+ */
+export function storageName(): string {
+  const bucket = process.env.R2_DOCUMENTS_BUCKET
+  return bucket ? `r2:${bucket}` : `local:${hostname()}`
+}
+
+/**
  * Claims files waiting to be read, at most $1: a waiting one, or one left "reading" by a worker that stopped (its lease
  * ran out), while it has had fewer than $2 tries. SKIP LOCKED lets several API processes claim at once without taking
- * the same file; the claim counts the try and leases the file for 5 minutes. Parameterized; timestamps are UTC, as
- * Prisma writes them.
+ * the same file; the claim counts the try and leases the file for 5 minutes. Only a file in this API's own storage ($3,
+ * `storageName`) is claimed, or one staged before files said which (null), so an API with another bucket (a second
+ * developer's laptop on the shared dev database) never takes, and fails, this one's files. Parameterized; timestamps
+ * are UTC, as Prisma writes them.
  */
 export const READ_CLAIM_SQL = `UPDATE "PayrollMatchFile"
    SET "status" = 'reading', "attempts" = "attempts" + 1,
@@ -25,6 +37,7 @@ export const READ_CLAIM_SQL = `UPDATE "PayrollMatchFile"
    SELECT "id" FROM "PayrollMatchFile"
     WHERE ("status" = 'waiting' OR ("status" = 'reading' AND "leaseUntil" <= (now() AT TIME ZONE 'UTC')))
       AND "attempts" < $2
+      AND ("storage" IS NULL OR "storage" = $3)
     ORDER BY "createdAt"
     LIMIT $1
     FOR UPDATE SKIP LOCKED)
@@ -110,7 +123,12 @@ export class PayrollMatchWorker implements OnModuleInit, OnModuleDestroy {
   async runDue(limit = BATCH): Promise<number> {
     const files = await runAsSystem(async () => {
       await this.prisma.$executeRawUnsafe(READ_EXPIRE_SQL, MAX_READ_ATTEMPTS, STOPPED)
-      return this.prisma.$queryRawUnsafe<Claimed[]>(READ_CLAIM_SQL, limit, MAX_READ_ATTEMPTS)
+      return this.prisma.$queryRawUnsafe<Claimed[]>(
+        READ_CLAIM_SQL,
+        limit,
+        MAX_READ_ATTEMPTS,
+        storageName()
+      )
     })
     for (const f of files) await this.read(f)
     return files.length

@@ -37,7 +37,7 @@ async function setup(opts: { replace?: boolean; status?: string } = {}) {
   const file = {
     id: 'f-stub',
     runId: 'run-1',
-    documentId: null,
+    documentId: null as string | null,
     kind: 'paystub',
     sensitivity: 'personal',
     fileName: 'paystub-Jordan-Sample.pdf',
@@ -65,11 +65,15 @@ async function setup(opts: { replace?: boolean; status?: string } = {}) {
     document: { create: jest.fn(async ({ data }) => ({ id: 'd-new', ...data })) },
     expenseDocument: { upsert: jest.fn() },
     wexPaymentDocument: { upsert: jest.fn() },
-    payrollMatchRun: { delete: jest.fn() },
+    payrollMatchRun: { delete: jest.fn(), deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
   }
   const earlier = [{ id: 'd-old', kind: 'paystub', storageKey: `${W}/e-1/2026-09/old.pdf` }]
   const prisma = {
-    payrollMatchRun: { findFirst: jest.fn().mockResolvedValue(run) },
+    payrollMatchRun: {
+      findFirst: jest.fn().mockResolvedValue(run),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    user: { findFirst: jest.fn().mockResolvedValue({ email: 'book@example.test' }) },
     expense: { findMany: jest.fn().mockResolvedValue([]) },
     wexPayment: {
       findMany: jest.fn().mockResolvedValue([
@@ -87,7 +91,22 @@ async function setup(opts: { replace?: boolean; status?: string } = {}) {
     matchRunStat: { createMany: jest.fn() },
   }
   const lines: string[] = []
+  const actors: unknown[] = []
   const log = {
+    trusted: jest.fn(
+      async (
+        actor: unknown,
+        write: (t: typeof tx) => Promise<unknown>,
+        entries: (out: unknown) => { description: string }[]
+      ) => {
+        const out = await write(tx)
+        for (const e of entries(out)) {
+          lines.push(e.description)
+          actors.push(actor)
+        }
+        return out
+      }
+    ),
     log: jest.fn(async (_c: unknown, e: { description: string }) => void lines.push(e.description)),
     also: jest.fn(
       async (_tx: unknown, _c: unknown, e: { description: string }) =>
@@ -135,7 +154,20 @@ async function setup(opts: { replace?: boolean; status?: string } = {}) {
   /** The Matching statistics rows written, as createMany got them. */
   const stats = () =>
     prisma.matchRunStat.createMany.mock.calls.map((c) => (c[0] as { data: object[] }).data[0])
-  return { service, tx, prisma, lines, documents, checks, storage, bytes, earlier, stats }
+  return {
+    service,
+    tx,
+    prisma,
+    lines,
+    actors,
+    run,
+    documents,
+    checks,
+    storage,
+    bytes,
+    earlier,
+    stats,
+  }
 }
 
 const link = { target: 'wex' as const, id: 'w-jordan', slot: 'stub' as const, fileId: 'f-stub' }
@@ -210,6 +242,28 @@ describe('PayrollMatchService', () => {
       await expect(s.service.save(caller, 'run-1', { links: [link] })).rejects.toThrow(
         /still being read/
       )
+      expect(s.tx.document.create).not.toHaveBeenCalled()
+    })
+
+    it('refuses a bank statement with no line found for the payment', async () => {
+      const s = await setup()
+      const run = await s.prisma.payrollMatchRun.findFirst()
+      // The sample pay stub, as a bank statement: nothing on it is a $1,234.56 staff payroll of December.
+      Object.assign(run.files[0], { kind: 'bank-statement', sensitivity: 'financial' })
+      s.prisma.expense.findMany.mockResolvedValue([
+        {
+          id: 'e-staff',
+          itemNumber: 'RYS-18',
+          reportLine: 'staff-salaries',
+          totalCost: 1234.56,
+          date: new Date('2026-12-18T00:00:00Z'),
+        },
+      ])
+      await expect(
+        s.service.save(caller, 'run-1', {
+          links: [{ target: 'expense', id: 'e-staff', slot: 'bank', fileId: 'f-stub' }],
+        })
+      ).rejects.toThrow(/No line for this payment was found/)
       expect(s.tx.document.create).not.toHaveBeenCalled()
     })
 
@@ -300,6 +354,45 @@ describe('PayrollMatchService', () => {
       const s = await setup({ replace: true, status: 'waiting' })
       await expect(s.service.save(caller, 'run-1', { links: [link] })).rejects.toThrow()
       expect(s.documents.removeReplaced).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Expiry, on a timer (payroll-match.sweeper.ts)', () => {
+    it("removes a run left past RUN_HOURS in its starter's name, with its staged objects only", async () => {
+      const s = await setup()
+      const old = { ...s.run, createdAt: new Date(Date.now() - 25 * 3_600_000) }
+      old.files = [
+        ...s.run.files,
+        {
+          ...s.run.files[0]!,
+          id: 'f-on-file',
+          documentId: 'd-old',
+          storageKey: `${W}/e-1/2026-09/old.pdf`,
+        },
+      ]
+      s.prisma.payrollMatchRun.findMany.mockResolvedValueOnce([old])
+      expect(await s.service.expireAll()).toBe(1)
+      expect(s.prisma.payrollMatchRun.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { createdAt: { lt: expect.any(Date) } } })
+      )
+      expect(s.tx.payrollMatchRun.deleteMany).toHaveBeenCalledWith({ where: { id: 'run-1' } })
+      expect(s.lines).toEqual([
+        'Removed an unsaved payroll match for September 2026 left for over 24 hours (1 staged file)',
+      ])
+      expect(s.actors).toEqual([{ userId: 'u-book', email: 'book@example.test' }])
+      // The staged pay stub goes; the document already on file stays.
+      expect(s.storage.delete.mock.calls).toEqual([[`${W}/e-1/2026-09/stub.pdf`]])
+      expect(s.stats()).toEqual([expect.objectContaining({ outcome: 'expired' })])
+    })
+
+    it('leaves a run saved or discarded in between alone: no line, no object removed', async () => {
+      const s = await setup()
+      s.prisma.payrollMatchRun.findMany.mockResolvedValueOnce([s.run])
+      s.tx.payrollMatchRun.deleteMany.mockResolvedValueOnce({ count: 0 })
+      expect(await s.service.expireAll()).toBe(0)
+      expect(s.lines).toEqual([])
+      expect(s.storage.delete).not.toHaveBeenCalled()
+      expect(s.stats()).toEqual([])
     })
   })
 })

@@ -135,5 +135,7 @@ export async function apiFetch<T>(
     throw new ApiError(response.status, message, body)
   }
   if (response.status === 204) return undefined as T
-  return response.json() as Promise<T>
+  // A route that answers null (nothing open, nothing found) sends an empty body: that is null, not an error.
+  const text = await response.text()
+  return (text ? JSON.parse(text) : null) as T
 }

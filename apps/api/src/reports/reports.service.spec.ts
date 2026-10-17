@@ -135,6 +135,8 @@ const stored = {
 
 function service(status = 'draft', over: Record<string, unknown> = {}) {
   const prisma = {
+    // The month as the change's transaction reads it, locked: as loaded, unless a test says it changed meanwhile.
+    $queryRaw: jest.fn().mockResolvedValue([{ status, period: '2026-09' }]),
     monthlyReport: {
       ...scoped({ ...report(status), ...over }),
       update: jest.fn(),
@@ -145,6 +147,7 @@ function service(status = 'draft', over: Record<string, unknown> = {}) {
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'x-2', ...data })),
       update: jest.fn(),
       delete: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
     },
     expenseDocument: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -157,12 +160,15 @@ function service(status = 'draft', over: Record<string, unknown> = {}) {
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'wx-2', ...data })),
       update: jest.fn(),
       delete: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
     },
     wexPaymentDocument: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn(),
       update: jest.fn(),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
+    payrollMatchRun: { count: jest.fn().mockResolvedValue(0) },
     document: {
       // Files filed under the month: one, unless a test says the month is empty.
       count: jest.fn().mockResolvedValue(1),
@@ -185,6 +191,7 @@ function service(status = 'draft', over: Record<string, unknown> = {}) {
     },
     check: { findMany: jest.fn().mockResolvedValue([]) },
     reportReopening: {
+      count: jest.fn().mockResolvedValue(0),
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn(async ({ data }: { data: object }) => ({
         id: 'ro-new',
@@ -1075,6 +1082,52 @@ describe('ReportsService', () => {
       expect(prisma.wexPayment.update).toHaveBeenCalledTimes(1)
     })
 
+    it('detaches the proof when the payment names another participant, and says so in the line', async () => {
+      const {
+        service: s,
+        prisma,
+        log,
+      } = service('draft', {
+        engagement: {
+          ...report().engagement,
+          participants: [
+            ...report().engagement.participants,
+            { ...report().engagement.participants[0]!, id: 'p-2', displayName: 'Casey Demo' },
+          ],
+        },
+      })
+      prisma.wexPayment.findFirst.mockResolvedValue({
+        id: 'wx-1',
+        workspaceId: W,
+        monthlyReportId: 'r-1',
+        participantId: 'p-1',
+        tags: [],
+      } as never)
+      prisma.wexPaymentDocument.deleteMany.mockResolvedValueOnce({ count: 3 })
+      await s.updateWexPayment(member('bookkeeper'), 'wx-1', { ...wex, participantId: 'p-2' })
+      expect(prisma.wexPaymentDocument.deleteMany).toHaveBeenCalledWith({
+        where: { wexPaymentId: 'wx-1' },
+      })
+      // The same person, other pay: the proof stays linked.
+      await s.updateWexPayment(member('bookkeeper'), 'wx-1', { ...wex, grossAmount: 300 })
+      expect(prisma.wexPaymentDocument.deleteMany).toHaveBeenCalledTimes(1)
+      expect(log.entries.map((e) => e.description)).toEqual([
+        'Changed a work-experience payment in September 2026; detached its 3 proofs, to be matched again for the participant now named',
+        'Changed a work-experience payment in September 2026',
+      ])
+      expectNoneOf(log.entries, ['Casey', 'Jordan'])
+    })
+
+    it('removes no payroll item once the closing was approved meanwhile', async () => {
+      const { service: s, prisma, log } = service()
+      prisma.$queryRaw.mockResolvedValueOnce([{ status: 'closed', period: '2026-09' }])
+      await expect(s.deleteWexPayment(member('owner'), 'wx-1')).rejects.toThrow(
+        /month-end closing of September 2026 is approved/
+      )
+      expect(prisma.wexPayment.delete).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
+    })
+
     it('changes no payroll item in a month whose closing is approved', async () => {
       const { service: s, prisma } = service('closed')
       await expect(
@@ -1125,6 +1178,34 @@ describe('ReportsService', () => {
       )
       for (const x of [bookkeeper, withFile, submitted, withLine])
         expect(x.prisma.monthlyReport.delete).not.toHaveBeenCalled()
+    })
+
+    it('checks again inside the delete: a closing approved or an expense added meanwhile refuses it', async () => {
+      const closed = service('draft', empty)
+      closed.prisma.document.count.mockResolvedValue(0)
+      closed.prisma.$queryRaw.mockResolvedValueOnce([{ status: 'closed' }])
+      const added = service('draft', empty)
+      added.prisma.document.count.mockResolvedValue(0)
+      added.prisma.expense.count.mockResolvedValueOnce(1)
+      for (const x of [closed, added]) {
+        await expect(x.service.deleteEmptyMonth(member('owner'), 'r-1')).rejects.toThrow(
+          /not empty/
+        )
+        expect(x.prisma.monthlyReport.delete).not.toHaveBeenCalled()
+        expect(x.log.entries).toEqual([])
+      }
+      expect(closed.prisma.$queryRaw.mock.calls[0]![0].join('?')).toContain('FOR UPDATE')
+    })
+
+    it('refuses while an unsaved payroll match holds staged files for the month', async () => {
+      const { service: s, prisma, log } = service('draft', empty)
+      prisma.document.count.mockResolvedValue(0)
+      prisma.payrollMatchRun.count.mockResolvedValueOnce(1)
+      await expect(s.deleteEmptyMonth(member('owner'), 'r-1')).rejects.toThrow(
+        /save or discard that match first/
+      )
+      expect(prisma.monthlyReport.delete).not.toHaveBeenCalled()
+      expect(log.entries).toEqual([])
     })
   })
 

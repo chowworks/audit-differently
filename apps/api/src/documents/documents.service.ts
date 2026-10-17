@@ -471,7 +471,9 @@ export class DocumentsService {
 
   /**
    * Removes a month's payroll document even while it proves payroll items, for "Replace this month's payroll files":
-   * its links to those items go in the same transaction as the row and its access-log line, then the file. The
+   * its links to this month's items go in the same transaction as the row and its access-log line, then the file. A
+   * document that still proves an item of another month (a September statement showing an October payment) is kept,
+   * with that link: only this month's links go, so the other month, closed or submitted perhaps, loses no proof. The
    * month must be a draft (the caller checked) and the document one of the month's payroll documents.
    */
   async removeReplaced(caller: Caller, doc: Prisma.DocumentGetPayload<object>): Promise<void> {
@@ -482,22 +484,42 @@ export class DocumentsService {
     if (!keyInWorkspace(doc)) throw new NotFoundException()
     await this.refuseLockedMonth(doc)
     await this.refuseSubmittedSigned(doc)
-    await this.log.change(
+    const month = { engagementId: doc.engagementId ?? undefined, period: doc.period ?? undefined }
+    const removed = await this.log.change(
       caller,
       async (tx) => {
+        const elsewhere =
+          (await tx.expenseDocument.findFirst({
+            where: { documentId: doc.id, expense: { monthlyReport: { NOT: month } } },
+          })) ??
+          (await tx.wexPaymentDocument.findFirst({
+            where: { documentId: doc.id, wexPayment: { monthlyReport: { NOT: month } } },
+          }))
+        if (elsewhere) {
+          await tx.expenseDocument.deleteMany({
+            where: { documentId: doc.id, expense: { monthlyReport: month } },
+          })
+          await tx.wexPaymentDocument.deleteMany({
+            where: { documentId: doc.id, wexPayment: { monthlyReport: month } },
+          })
+          return { workspaceId: doc.workspaceId, removed: false }
+        }
         await tx.expenseDocument.deleteMany({ where: { documentId: doc.id } })
         await tx.wexPaymentDocument.deleteMany({ where: { documentId: doc.id } })
-        return tx.document.delete({ where: { id: doc.id } })
+        await tx.document.delete({ where: { id: doc.id } })
+        return { workspaceId: doc.workspaceId, removed: true }
       },
-      {
+      (done) => ({
         workspaceId: doc.workspaceId,
         resource: 'document',
         subjectId: doc.id,
-        action: 'delete',
-        description: `Removed ${describe(doc)} when replacing the month's payroll files`,
-      }
+        action: done.removed ? 'delete' : 'update',
+        description: done.removed
+          ? `Removed ${describe(doc)} when replacing the month's payroll files`
+          : `Unlinked ${describe(doc)} from this month's payroll when replacing the month's payroll files; kept, as it proves an item of another month`,
+      })
     )
-    await this.dropStored(caller, doc)
+    if (removed.removed) await this.dropStored(caller, doc)
   }
 
   /**

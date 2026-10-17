@@ -532,9 +532,10 @@ async function month(
 }
 
 /**
- * The demo workspace: found by its name and receipts address, or made. Refuses (throws) when either finds a workspace
- * that is not plainly the demo: two of them, a different name or receipts address, or an engagement whose number
- * does not start with DEMO-. So in production this can only ever touch the demo.
+ * The demo workspace: found by its name and receipts address, or made (marked `featuredDemo` from its first row).
+ * Refuses (throws) when either finds a workspace that is not plainly the demo: two of them, one not marked
+ * `featuredDemo` (a workspace an admin made for a real customer of that name), a different name or receipts address,
+ * or an engagement whose number does not start with DEMO-. So in production this can only ever touch the demo.
  */
 async function demoWorkspace(): Promise<Ws & { receiptsAddress: string | null }> {
   const found = await prisma.workspace.findMany({
@@ -548,9 +549,17 @@ async function demoWorkspace(): Promise<Ws & { receiptsAddress: string | null }>
   const w = found[0]
   if (!w)
     return prisma.workspace.create({
-      data: { name: DEMO_WORKSPACE_NAME, tagTypes: DEFAULT_TAG_TYPES as object[] },
+      data: {
+        name: DEMO_WORKSPACE_NAME,
+        tagTypes: DEFAULT_TAG_TYPES as object[],
+        featuredDemo: true,
+      },
     })
   const foreign = w.engagements.filter((e) => !(e.number ?? '').startsWith(DEMO_ENGAGEMENT_PREFIX))
+  if (!w.featuredDemo)
+    throw new Error(
+      `Workspace ${w.id} ("${w.name}") is not marked as the demo (featuredDemo); the demo seed leaves it alone. If it is the demo, the database owner sets its featuredDemo by hand first.`
+    )
   if (
     w.name !== DEMO_WORKSPACE_NAME ||
     (w.receiptsAddress && w.receiptsAddress !== DEMO_RECEIPTS_ADDRESS) ||
@@ -563,9 +572,9 @@ async function demoWorkspace(): Promise<Ws & { receiptsAddress: string | null }>
 }
 
 export interface DemoOptions {
-  /** Sam Whitfield's seat, the demo's owner. Dev: the project's test account. Production: an unclaimable .example address. */
+  /** Sam Whitfield's seat, the demo's owner. The dev seed: the project's test account. demo:seed: an unclaimable .example address unless DEMO_OWNER_EMAIL names one. */
   ownerEmail: string
-  /** Writes one access-log line saying the fictional demo data was loaded (production). */
+  /** Writes one access-log line saying the fictional demo data was loaded (every demo:seed run). */
   logRun?: boolean
 }
 

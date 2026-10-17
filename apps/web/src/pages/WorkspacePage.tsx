@@ -20,6 +20,7 @@ import {
   type WorkspaceMemberDto,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
+import { usePeopleSearch } from '@/hooks/usePeopleSearch'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { nextDue, workflow } from '@/lib/workflow'
 import {
@@ -345,10 +346,13 @@ export function People({
   w,
   onChange,
   base = '/workspaces',
+  findPeople = false,
 }: {
   w: Managed
   onChange: () => Promise<void>
   base?: string
+  /** Platform admins only (Admin tools): find the person among everyone who has signed in, instead of typing. */
+  findPeople?: boolean
 }) {
   const api = useApi()
   const [open, setOpen] = useState(false)
@@ -447,6 +451,7 @@ export function People({
       {open && (
         <InviteModal
           w={w}
+          findPeople={findPeople}
           onClose={() => setOpen(false)}
           onInvite={async (body) => {
             const ok = await run(() => api.post(`${base}/${w.id}/members`, body))
@@ -461,15 +466,21 @@ export function People({
 
 function InviteModal({
   w,
+  findPeople,
   onClose,
   onInvite,
 }: {
   w: Managed
+  findPeople: boolean
   onClose: () => void
   onInvite: (body: { email: string; displayName: string; role: Role }) => Promise<boolean>
 }) {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
+  // A platform admin finds the person first; an owner types the address (no search across workspaces).
+  const [query, setQuery] = useState('')
+  const { found, error: searchError } = usePeopleSearch(findPeople ? query : '')
+  const memberEmails = new Set(w.members.map((m) => m.email?.toLowerCase()).filter(Boolean))
   const [role, setRole] = useState<Role>('bookkeeper')
   const [busy, setBusy] = useState(false)
   const submit = async (ev: React.FormEvent) => {
@@ -481,12 +492,69 @@ function InviteModal({
   return (
     <Modal title={`Invite someone to ${w.name}`} onClose={onClose}>
       <form onSubmit={submit} className="grid gap-4">
+        {findPeople && (
+          <div>
+            <Field
+              label="Find a person"
+              hint="Type part of a name or email; * is a wildcard. Only people who have signed in at least once are found: for anyone else, type their email below."
+              error={searchError}
+            >
+              <input
+                type="search"
+                className={inputClass}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                autoFocus
+              />
+            </Field>
+            {found?.length === 0 && <Empty>Nobody matches.</Empty>}
+            {!!found?.length && (
+              <table className="ad-table mt-2">
+                <tbody>
+                  {found.slice(0, 8).map((u) => {
+                    const member = !!u.email && memberEmails.has(u.email.toLowerCase())
+                    return (
+                      <tr key={u.id}>
+                        <td>
+                          <span className="font-semibold">{u.displayName ?? u.email ?? u.id}</span>
+                          {u.email && <span className="ad-table-sub">{u.email}</span>}
+                          {!u.displayName && (
+                            <span className="ad-table-sub">No name on their account</span>
+                          )}
+                        </td>
+                        <td className="ad-num">
+                          {member ? (
+                            <Chip tone="muted">already here</Chip>
+                          ) : (
+                            <Button
+                              type="button"
+                              kind="navy"
+                              size="sm"
+                              disabled={!u.email}
+                              onClick={() => {
+                                setEmail(u.email ?? '')
+                                setName(u.displayName ?? '')
+                                setQuery('')
+                              }}
+                            >
+                              Choose
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
         <Field label="Name">
           <input
             className={inputClass}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            autoFocus
+            autoFocus={!findPeople}
           />
         </Field>
         <Field
