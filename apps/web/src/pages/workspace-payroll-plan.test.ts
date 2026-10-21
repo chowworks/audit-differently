@@ -305,6 +305,39 @@ describe('step 2 of the workspace payroll page, in words', () => {
     ])
   })
 
+  it("shows a register naming nobody once as company totals, and a named register's unlisted rows as they are", () => {
+    const r = run({ stubs: [] }) as unknown as WorkspacePayrollRunDto
+    r.files = [
+      ...r.files,
+      { id: 'f-totals', kind: 'payroll-register', fileName: 'Company totals.pdf' },
+    ] as WorkspacePayrollRunDto['files']
+    r.totalsOnly = ['f-totals']
+    r.pays = [
+      {
+        id: 'r:4',
+        kind: 'payroll-register',
+        fileId: 'f-reg',
+        fileName: 'f-reg.pdf',
+        state: 'unassigned',
+        flags: ['not-on-a-list'],
+        staff: null,
+        mark: { page: 1, text: 'Taylor Brooks 400.00' },
+      },
+    ] as unknown as WorkspacePayrollRunDto['pays']
+    expect(nobodyBlock(r, [])!.rows.map((x) => [x.label, x.file, x.text])).toEqual([
+      [
+        'Payroll register',
+        'Company totals.pdf',
+        'Company totals only: the register names no one on your lists. It still proves its run.',
+      ],
+      [
+        'Payroll register',
+        'f-reg.pdf',
+        '“Taylor Brooks 400.00” on page 1: Names nobody on the staff or participant lists.',
+      ],
+    ])
+  })
+
   it('lists staff found or tagged, never someone on the list alone', () => {
     expect(staffRows(run()).map((s) => s.name)).toEqual(['Morgan Lee', 'Priya Shah', 'Sam Ortiz'])
     expect(staffWords(run())).toBe(

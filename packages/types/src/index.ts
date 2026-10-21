@@ -1998,6 +1998,8 @@ export interface WorkspacePayrollRunDto extends PayrollMatchRunDto {
   items: WorkspacePayrollItemDto[]
   months: WorkspacePayrollMonthDto[]
   pays: PayLineDto[]
+  /** The registers that name nobody on the staff or participant lists: the run's company totals, shown once each. */
+  totalsOnly: string[]
   /** What Save will do from the staff list and the participant lists, before anything is written. */
   plan: WorkspacePayrollPlanDto
 }

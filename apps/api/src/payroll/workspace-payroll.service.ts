@@ -2489,12 +2489,16 @@ export class WorkspacePayrollService {
     const several = severalPeopleLines(files, planned.staff, planned.participants)
     const away = awayLines(files, period)
     const pays: PayLineDto[] = []
+    const totalsOnly: string[] = []
     for (const f of run.files) {
       if (!isPayKind(f.kind) || !matchingIds.has(f.id)) continue
       const kind = f.kind
       const stub = kind === 'paystub' ? plan.stubs.find((x) => x.fileId === f.id) : undefined
       const fileLines = payLinesOf(proofFile(f))
-      if (companyTotals(kind, fileLines, planned.staff, planned.participants)) continue
+      if (companyTotals(kind, fileLines, planned.staff, planned.participants)) {
+        totalsOnly.push(f.id)
+        continue
+      }
       const unclear = payUnclearLines(proofFileOf(f))
       fileLines.forEach((line, n) => {
         const person = kind === 'paystub' ? null : staffOn(plan, f.id, line)
@@ -2588,6 +2592,7 @@ export class WorkspacePayrollService {
       items: items.map((i) => i.dto),
       months,
       pays,
+      totalsOnly,
       plan: this.planDto(planned, months),
       runs: suggestedRuns(payRunsOf(planned.files)),
       ai: PayrollAiService.summary(run.files),
