@@ -128,9 +128,10 @@ export function EngagementPage() {
         await api.patch<EngagementDetail>(`/engagements/${c.id}`, { tracks: [...c.tracks, t] })
       )
     )
-  const addMonth = () =>
+  /** Starts a month: the one after the latest (Start in the ledger), or the month the "this month" card names. */
+  const addMonth = (period: string = next) =>
     run(async () => {
-      const report = await api.post<ReportSummary>(`/engagements/${c.id}/reports`, { period: next })
+      const report = await api.post<ReportSummary>(`/engagements/${c.id}/reports`, { period })
       setData((d) =>
         d
           ? {
@@ -258,7 +259,7 @@ export function EngagementPage() {
               s.key === 'ledger' && (
                 <>
                   {canAddMonth && (
-                    <Button size="sm" onClick={addMonth} disabled={!!busy}>
+                    <Button size="sm" onClick={() => addMonth()} disabled={!!busy}>
                       + Start {periodLabel(next)}
                     </Button>
                   )}
@@ -368,7 +369,7 @@ export function EngagementPage() {
   const thisMonth = (
     <ThisMonth
       c={c}
-      onStart={canAddMonth ? addMonth : undefined}
+      onStart={c.canManage ? (period) => addMonth(period) : undefined}
       onUpload={c.canManage ? setUpload : undefined}
     />
   )
@@ -642,7 +643,7 @@ export function EngagementPage() {
             onOpen={(d, period) => openMenu(d, 'signed-report', period)}
             footer={
               monthsOpen === 'ledger' && canAddMonth ? (
-                <Button size="sm" onClick={addMonth} disabled={!!busy}>
+                <Button size="sm" onClick={() => addMonth()} disabled={!!busy}>
                   + Start {periodLabel(next)}
                 </Button>
               ) : null
@@ -1035,7 +1036,8 @@ function ThisMonth({
   onUpload,
 }: {
   c: EngagementDetail
-  onStart?: () => void
+  /** Starts the month the card names (not always the one after the latest: an earlier month may be missing). */
+  onStart?: (period: string) => void
   onUpload?: (u: Upload) => void
 }) {
   const today = new Date()
@@ -1102,7 +1104,7 @@ function ThisMonth({
             Open {periodLabel(due.period)}
           </Link>
         ) : onStart ? (
-          <Button kind="primary" size="sm" onClick={onStart}>
+          <Button kind="primary" size="sm" onClick={() => onStart(due.period)}>
             Start {periodLabel(due.period)}
           </Button>
         ) : null}

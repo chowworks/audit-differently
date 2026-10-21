@@ -18,6 +18,8 @@ export const APP_ROLE_FUNCTIONS: readonly string[] = [
   'app_admin_reran(text,text)',
   // Receipts addresses (migration 20261017000400): whether an address is in use or was used before, for the owner's form.
   'app_receipts_address_taken(text)',
+  // The staff list (migration 20261018000100): the workspaces whose staff the caller reads (owners and auditors).
+  'app_staff_workspace_ids()',
 ]
 
 /** SQL that gives `role` its table access and exactly the functions above, and nothing else. `role` is a plain identifier. */

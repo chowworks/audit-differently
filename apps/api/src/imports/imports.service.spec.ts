@@ -496,6 +496,7 @@ describe('ImportsService', () => {
         reportLine: 'program-costs',
         importFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
         createdById: `u-${role}-${W}`,
+        payrollKind: null,
       })
       expect(new Set(rows.map((r) => r.monthlyReportId))).toEqual(
         new Set(['r-new-2026-08', 'r-sep'])
@@ -579,5 +580,97 @@ describe('ImportsService', () => {
     await expect(
       s.import(member('bookkeeper'), 'e-1', SAMPLE, request({ saveAs: ' ' }))
     ).rejects.toThrow(/Name the mapping/)
+  })
+
+  describe('Payroll transactions confirmation', () => {
+    // A payroll provider's run as an accounting export has it (fictional): its work-experience pay, and a fee.
+    const file = {
+      originalname: 'books.csv',
+      buffer: Buffer.from(
+        [
+          'Date,Name,Memo/Description,Amount,Num,Account,Split',
+          '09/25/2026,PayPeople Payroll,Run 09/25,-784.00,PR-1,63103 Payroll Expenses:Salaries - Work Experience (WEX),Payroll',
+          '09/25/2026,PayPeople Payroll,Run 09/25 fees,-12.00,PR-2,63301 Payroll Expenses:Payroll Fees,Supplies',
+        ].join('\n')
+      ),
+    }
+
+    it('finds payroll by account, keeps fees as expenses, and waits for a line that holds its kind', async () => {
+      const { s } = service()
+      const p = await s.preview(
+        member('owner'),
+        'e-1',
+        file,
+        request({ categories: { Supplies: 'supplies', Payroll: 'supplies' } })
+      )
+      expect(p.payroll.map((r) => [r.line, r.found, r.included, r.kind, r.budgetLineName])).toEqual(
+        [[2, true, true, 'participant-pay', null]]
+      )
+      // No budget line here holds participant pay yet: the row waits, with the reason.
+      expect(p.notImported.map((r) => r.reason)).toContain(
+        'Payroll: no budget line has "Participant pay" ticked'
+      )
+      expect(p.rows.map((r) => r.vendor)).toEqual(['PayPeople Payroll'])
+      expect(p.categories.map((c) => c.value)).toEqual(['Supplies'])
+    })
+
+    it('changes a row imported before when its payroll choice is different now, and skips it when not', async () => {
+      const cats = { Supplies: 'supplies', Payroll: 'supplies' }
+      // Imported once as an expense: its fingerprint is what a second import knows it by.
+      const first = service()
+      await first.s.import(
+        member('owner'),
+        'e-1',
+        file,
+        request({ categories: cats, payroll: { '2': false } })
+      )
+      const rows = first.prisma.expense.createMany.mock.calls[0][0].data as {
+        itemNumber: string
+        reportLine: string
+        importFingerprint: string
+      }[]
+      const wex = rows.find((x) => x.itemNumber === 'PR-1')!
+      // As though the first import had kept it as payroll.
+      const again = service(
+        [AUG_SUBMITTED, SEP_DRAFT],
+        [{ ...wex, id: 'x-9', payrollKind: 'participant-pay' } as never]
+      )
+      const same = await again.s.preview(
+        member('owner'),
+        'e-1',
+        file,
+        request({ categories: cats })
+      )
+      expect(same.updates).toEqual([])
+      expect(same.notImported.map((r) => r.reason)).toContain('Already imported')
+      const changed = await again.s.preview(
+        member('owner'),
+        'e-1',
+        file,
+        request({ categories: cats, payroll: { '2': false } })
+      )
+      expect(changed.updates).toEqual([
+        expect.objectContaining({
+          line: 2,
+          itemNumber: 'PR-1',
+          change: 'Now an expense, not payroll',
+        }),
+      ])
+    })
+
+    it('imports a row the person says is not payroll as an expense, by its category', async () => {
+      const { s } = service()
+      const p = await s.preview(
+        member('owner'),
+        'e-1',
+        file,
+        request({
+          categories: { Supplies: 'supplies', Payroll: 'supplies' },
+          payroll: { '2': false },
+        })
+      )
+      expect(p.payroll[0]).toMatchObject({ line: 2, found: true, included: false })
+      expect(p.rows).toHaveLength(2)
+    })
   })
 })

@@ -1,3 +1,4 @@
+import { sheetCopy } from './payroll-details'
 import { PDFArray, PDFDict, PDFDocument, PDFName, rgb } from 'pdf-lib'
 import type { StatementMark } from '@ad/types'
 
@@ -85,7 +86,20 @@ export const markPlace = (m: StatementMark) =>
 
 /**
  * One item's own copy of a payroll proof: the file's own highlight notes removed and only this item's marks drawn, so
- * the copy stands on its own for the auditor (owner's decision, 2026-10-16). The stored original is never changed.
+ * the copy stands on its own for the auditor (owner's decision, 2026-10-16); a spreadsheet's marked rows filled yellow.
+ * The stored original is never changed.
  */
-export const itemCopy = (bytes: Uint8Array, marks: StatementMark[]) =>
-  markPdf(bytes, marks, { strip: true })
+export const itemCopy = async (bytes: Uint8Array, marks: StatementMark[]): Promise<MarkedPdf> =>
+  // Payroll details is a spreadsheet (an xlsx begins like a zip): its marks are rows and cells, filled yellow (#22).
+  isSheet(bytes)
+    ? { bytes: new Uint8Array(await sheetCopy(bytes, marks)), notDrawn: [] }
+    : markPdf(bytes, marks, { strip: true })
+
+/** The files an item's own copy is drawn for: PDFs, and payroll details' spreadsheets. */
+export const COPIED_TYPES = [
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]
+
+/** An xlsx file: it begins like a zip ("PK\x03\x04"). */
+const isSheet = (b: Uint8Array) => b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04

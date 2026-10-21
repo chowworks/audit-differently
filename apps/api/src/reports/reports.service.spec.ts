@@ -173,6 +173,8 @@ function service(status = 'draft', over: Record<string, unknown> = {}) {
     },
     wexPayment: {
       ...scoped({ id: 'wx-1', workspaceId: W, monthlyReportId: 'r-1' }),
+      // The participants' pay before this month, counted on its budget line.
+      groupBy: jest.fn().mockResolvedValue([]),
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'wx-2', ...data })),
       update: jest.fn(),
       delete: jest.fn(),
@@ -348,6 +350,7 @@ describe('ReportsService', () => {
       attachSigned: false,
       readPersonal: true,
       deleteMonth: false,
+      seeStaffPayroll: true,
     })
     log.entries.length = 0
     await expect(s.addExpense(who, 'r-1', expense)).rejects.toThrow(ForbiddenException)
@@ -383,6 +386,7 @@ describe('ReportsService', () => {
       attachSigned: false,
       readPersonal: true,
       deleteMonth: false,
+      seeStaffPayroll: true,
     })
     closed.log.entries.length = 0
     await expect(closed.service.sendBack(member('auditor'), 'r-1', 'Wrong rent')).rejects.toThrow(
@@ -404,6 +408,7 @@ describe('ReportsService', () => {
       attachSigned: true,
       readPersonal: true,
       deleteMonth: false,
+      seeStaffPayroll: true,
     })
     signedOnFile(submitted.prisma, [signedCopy('d-signed', '2026-10-07T00:00:00Z')])
     const detail = await submitted.service.get(owner, 'r-1')
@@ -427,6 +432,7 @@ describe('ReportsService', () => {
       attachSigned: true,
       readPersonal: false,
       deleteMonth: false,
+      seeStaffPayroll: true,
     })
     draft.log.entries.length = 0
     await expect(draft.service.submit(who, 'r-1')).rejects.toThrow(
@@ -452,6 +458,7 @@ describe('ReportsService', () => {
       attachSigned: true,
       readPersonal: false,
       deleteMonth: false,
+      seeStaffPayroll: true,
     })
     closed.log.entries.length = 0
     await expect(closed.service.addExpense(who, 'r-1', expense)).rejects.toThrow(
@@ -692,6 +699,48 @@ describe('ReportsService', () => {
       expect(s.log.change).toHaveBeenCalledTimes(1)
       expect(s.prisma.reportReopening.create.mock.invocationCallOrder[0]).toBeLessThan(
         s.prisma.monthlyReport.update.mock.invocationCallOrder[0]!
+      )
+    })
+
+    it('reopens on a transaction the caller holds (the workspace payroll save): checked first, written only there, the same row and line', async () => {
+      const plain = submitted()
+      await plain.service.reopen(member('owner'), 'r-1', 'Payroll proof added')
+      const s = submitted()
+      await expect(s.service.reopenWith(member('auditor'), 'r-1', 'x')).rejects.toThrow(
+        ForbiddenException
+      )
+      await expect(s.service.reopenWith(member('owner'), 'r-1', ' ')).rejects.toThrow(
+        BadRequestException
+      )
+      const write = await s.service.reopenWith(member('owner'), 'r-1', 'Payroll proof added')
+      expect(s.prisma.monthlyReport.update).not.toHaveBeenCalled()
+      expect(s.prisma.reportReopening.create).not.toHaveBeenCalled()
+      expect(s.log.entries).toEqual([])
+      await write(s.prisma as never)
+      expect(s.prisma.monthlyReport.update.mock.calls).toEqual(
+        plain.prisma.monthlyReport.update.mock.calls
+      )
+      expect(s.prisma.reportReopening.create).toHaveBeenCalledTimes(1)
+      expect(s.log.change).not.toHaveBeenCalled()
+      expect(s.log.entries).toEqual(plain.log.entries)
+    })
+
+    it('sends a closed month back on a transaction the caller holds, with the same line', async () => {
+      const plain = service('closed')
+      await plain.service.sendBack(member('owner'), 'r-1', 'Payroll proof added')
+      const s = service('closed')
+      await expect(s.service.sendBackWith(member('owner'), 'r-1', '')).rejects.toThrow(
+        BadRequestException
+      )
+      const write = await s.service.sendBackWith(member('owner'), 'r-1', 'Payroll proof added')
+      expect(s.prisma.monthlyReport.update).not.toHaveBeenCalled()
+      await write(s.prisma as never)
+      expect(s.prisma.monthlyReport.update).toHaveBeenCalledWith({
+        where: { id: 'r-1' },
+        data: expect.objectContaining({ status: 'draft', sentBackReason: 'Payroll proof added' }),
+      })
+      expect(s.log.entries.map((e) => e.description)).toEqual(
+        plain.log.entries.map((e) => e.description)
       )
     })
 
@@ -1300,5 +1349,62 @@ describe('ReportsService', () => {
     expect(storage.delete).toHaveBeenCalledWith(`${W}/e-1/2026-09/new.pdf`)
     expect(file.row).toBeNull()
     expect([...other.log.entries, ...log.entries]).toEqual([])
+  })
+})
+
+describe('ReportsService: the workspace payroll match (GitHub issue #22)', () => {
+  it('hides the payroll section from a bookkeeper when an owner turned "Bookkeepers see payroll" off', async () => {
+    const base = report('draft')
+    const off = {
+      engagement: {
+        ...base.engagement,
+        workspace: { ...base.engagement.workspace, bookkeepersSeeStaffPayroll: false },
+      },
+    }
+    const s = service('draft', off)
+    const asBookkeeper = await s.service.get(member('bookkeeper'), 'r-1')
+    expect(asBookkeeper.can.seeStaffPayroll).toBe(false)
+    expect(asBookkeeper.engagement.workspace.bookkeepersSeeStaffPayroll).toBe(false)
+    // The screen only: the month, its payroll items and their proof are answered as before.
+    expect(asBookkeeper.wexPayments).toEqual(
+      (await s.service.get(member('owner'), 'r-1')).wexPayments
+    )
+    expect((await s.service.get(member('owner'), 'r-1')).can.seeStaffPayroll).toBe(true)
+    expect((await s.service.get(member('auditor'), 'r-1')).can.seeStaffPayroll).toBe(true)
+    const on = service('draft')
+    expect((await on.service.get(member('bookkeeper'), 'r-1')).can.seeStaffPayroll).toBe(true)
+  })
+
+  it("lists a workspace payroll file that proves the month's items with the month's own payroll files", async () => {
+    const s = service('draft')
+    const shared = {
+      ...document('d-ws-reg', W, 'payroll-register'),
+      engagementId: null,
+      period: '2026-09',
+    }
+    s.prisma.document.findMany.mockImplementation(
+      async (args?: { where?: { kind?: { in?: string[] } } }) =>
+        args?.where?.kind?.in ? [shared] : [document('d-1', W)]
+    )
+    const r = await s.service.get(member('owner'), 'r-1')
+    expect(r.payrollDocuments.map((d) => d.id)).toEqual(['d-ws-reg'])
+    // Asked for the engagement's own, or a workspace file linked from this month's items: never another month's.
+    const asked = s.prisma.document.findMany.mock.calls
+      .map((c) => (c[0] as { where: Record<string, unknown> }).where)
+      .find((w) => (w.kind as { in?: string[] })?.in?.includes('payroll-register'))!
+    expect(asked).toMatchObject({
+      period: '2026-09',
+      OR: [
+        { engagementId: 'e-1' },
+        {
+          workspaceId: W,
+          engagementId: null,
+          OR: [
+            { expenses: { some: { expense: { monthlyReportId: 'r-1' } } } },
+            { wexPayments: { some: { wexPayment: { monthlyReportId: 'r-1' } } } },
+          ],
+        },
+      ],
+    })
   })
 })

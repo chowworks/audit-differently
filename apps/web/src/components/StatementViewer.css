@@ -32,3 +32,10 @@
   border-radius: 2px;
   pointer-events: none;
 }
+
+/* Download, above the page, at its right. */
+.ad-statement-download {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}

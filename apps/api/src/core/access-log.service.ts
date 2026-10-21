@@ -17,6 +17,8 @@ export interface LogEntry {
     | 'participant'
     | 'export'
     | 'member'
+    // A person on the staff list (GitHub issue #22).
+    | 'staff'
   subjectId?: string | null
   action:
     'read' | 'list' | 'download' | 'create' | 'update' | 'delete' | 'export' | 'submit' | 'review'
@@ -47,6 +49,17 @@ export class AccessLogService {
    */
   async also(tx: Prisma.TransactionClient, caller: Actor, entry: LogEntry): Promise<void> {
     await writeLine(tx, caller, entry)
+  }
+
+  /**
+   * Many more lines inside a `change`, as `also` but in batches of 500 (`createMany` reads nothing back): for a change
+   * that writes a line per file or per link, so a large save stays well inside its transaction's time.
+   */
+  async alsoMany(tx: Prisma.TransactionClient, caller: Actor, entries: LogEntry[]): Promise<void> {
+    for (let i = 0; i < entries.length; i += 500)
+      await tx.dataAccessLog.createMany({
+        data: entries.slice(i, i + 500).map((e) => row(caller, e)),
+      })
   }
 
   /**

@@ -191,6 +191,7 @@ describe('transactionsOf', () => {
       amountUnreadable: false,
       reference: '1',
       account: 'Checking',
+      accountText: 'Checking',
       category: 'Supplies',
     }
     expect(
@@ -213,6 +214,7 @@ describe('transactionsOf', () => {
       amountUnreadable: false,
       reference: null,
       account: null,
+      accountText: '',
       category: '',
     }
     const other = { ...row, vendor: 'Y' }

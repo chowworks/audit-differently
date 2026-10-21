@@ -61,11 +61,15 @@ export const PAYROLL_FOLDERS = [
   ['Payroll registers', 'payroll-register'],
   ['Pay stubs', 'paystub'],
   ['Bank statements', 'bank-statement'],
+  ['Payroll details', 'payroll-details'],
 ] as const
 export type PayrollFolderKind = (typeof PAYROLL_FOLDERS)[number][1]
+/** The folder a zip may leave out (GitHub issue #22, section 8): the payroll company's per-person export. */
+const OPTIONAL_FOLDERS = new Set<string>(['Payroll details'])
 
 /**
- * A payroll zip checked against its required layout: the four folders and nothing else (a zip of the folder itself,
+ * A payroll zip checked against its required layout: the four folders (and Payroll details, when the team has it) and
+ * nothing else (a zip of the folder itself,
  * one level up, is fine). Every problem at once, so the person fixes the zip in one go.
  */
 export function sortPayrollZip(
@@ -96,15 +100,15 @@ export function sortPayrollZip(
     files.push({ file: p.file, kind: folder[1], folder: folder[0] })
   }
   for (const [name] of PAYROLL_FOLDERS)
-    if (!files.some((f) => f.folder === name))
+    if (!OPTIONAL_FOLDERS.has(name) && !files.some((f) => f.folder === name))
       problems.push(`The zip has no "${name}" folder, or it is empty.`)
   if (unknown.size)
     problems.push(
-      `${[...unknown].map((u) => `"${u}"`).join(', ')} ${unknown.size === 1 ? 'is not one of the folders' : 'are not among the folders'}: use Timesheets, Payroll registers, Pay stubs and Bank statements.`
+      `${[...unknown].map((u) => `"${u}"`).join(', ')} ${unknown.size === 1 ? 'is not one of the folders' : 'are not among the folders'}: use Timesheets, Payroll registers, Pay stubs, Bank statements and Payroll details.`
     )
   if (outside.length)
     problems.push(
-      `${outside.length === 1 ? '1 file is' : `${outside.length} files are`} not inside one of the four folders (${outside.slice(0, 3).join(', ')}${outside.length > 3 ? ', …' : ''}).`
+      `${outside.length === 1 ? '1 file is' : `${outside.length} files are`} not inside one of the folders (${outside.slice(0, 3).join(', ')}${outside.length > 3 ? ', …' : ''}).`
     )
   if (skipped.length)
     problems.push(

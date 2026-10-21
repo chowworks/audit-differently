@@ -18,9 +18,12 @@ proposing to merge them.
 
 ## Issue titles
 
-Prefix every GitHub issue title with its area: `[Engagement]` (the eight steps, ledger, uploads, monthly
-report, participants), `[Workspace]` (people, roles, lists, settings), `[Checks]` (compliance rules and AI
-review) or `[Platform]` (auth, tenancy, storage, deploy, CI).
+Prefix every GitHub issue title with its area. An engagement's work goes by its step: `[Proposal]` (step 1),
+`[Award]` (step 2), `[Budgets]` (steps 3 and 4: budget narrative, approved budget lines), `[Participants]` (step 5:
+participants and eligibility), `[Expenses]` (step 6's expenses: imports, receipts, matching, month-end closing),
+`[Payroll]` (step 6's payroll: payroll proof, the payroll match, payroll details), `[Reports]` (step 7: the signed
+report) or `[Audit]` (step 8: the audit package and exports). Outside an engagement: `[Workspace]` (people, roles,
+lists, settings), `[Checks]` (compliance rules and AI review) or `[Platform]` (auth, tenancy, storage, deploy, CI).
 
 ## Product boundary
 
@@ -54,7 +57,10 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   Every address used is kept in `ReceiptsAddress` (migration `20261017000400`); one in use or used before and not
   released is never chosen again, and the owner is told only "That address isn't available; choose another". Mail to a
   previously used address is refused and kept with no sender or subject, so its count is worked out, never stored.
-  Owners don't see past addresses (owner's decision, 2026-10-17).
+  Owners don't see past addresses (owner's decision, 2026-10-17). Owners also set "Bookkeepers see
+  and process payroll" (`Workspace.bookkeepersSeeStaffPayroll`, on by default): off, a bookkeeper's month pages show the payroll
+  lines without their proof links or the payroll match (`ReportDetail.can.seeStaffPayroll`; owner's decision,
+  2026-10-20: hiding the links is all it does); the screen only, the API is unchanged (owner's decision, 2026-10-17).
 - **Budget lines** = `BudgetLine` rows of an engagement: its approved budget, as the contract states it (step 4, Manage
   Budget). Each has a name, the line of the funder's monthly report it is on (`reportLine`; the name defaults to it,
   since this funder budgets by report line), an approved amount and a note. **Every expense is spent against one**
@@ -64,6 +70,18 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   spending keeps its report line and is not removed. Imports map categories to budget lines, saved by line name.
   The workspace's own list of budget items is gone (migration `20261017000300`); names are suggested from the
   workspace's other engagements.
+- **Payroll on the budget** (owner's decisions, 2026-10-20): the pay the payroll match proves is the staff and
+  participant pay on the budget. Each engagement's owner picks, on the budget line dialog, which line holds staff pay,
+  staff taxes, participant pay and participant taxes (`BudgetLine.payroll`, migration `20261020000100`); Save writes
+  the staff lines from the payroll details file (`Expense.payrollKey`). Importing transactions confirms the payroll
+  rows it found ("Payroll transactions" step): they are kept marked (`Expense.payrollKind`, migration
+  `20261020000200`), count on the budget until the match covers that kind on the month, then are hidden and kept for
+  the reconciliation's "Expenses vs payroll files" (a difference means the books are off, not the report);
+  re-importing the file is how a row's choice is changed. Which tax types count is issue #29.
+- **Month End Payroll Processing** (`/workspaces/:id/payroll`, owner's choice 2026-10-20): Actions first (each with
+  Review below), Engagement Budget Tracking, then Workspace Reconciliation, whose tiles (Missing proof, To check,
+  Paid not grant-funded, Expenses differ, Staff w/o charges, Proof complete) filter its grid and the expenses table,
+  then File Management with Match again; Save returns to this page.
 - **Tags** = `Workspace.tagTypes` (owner-kept types and values, stable keys; "Funding source" is the built-in first
   type, migration `20261016000800`), applied as `tags` (`<type>:<value>`) on `Expense`, `WexPayment` and `Participant`,
   from the list only, never free text. A source in use can't be removed or renamed. Participant and payroll tags
@@ -91,7 +109,8 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   in the workspace's access log (owner's decisions, 2026-10-17). A rerun of a workspace's
   row writes its access-log line in the same transaction, and the database refuses it without one (`app_admin_reran`,
   migration `20261016000100`). The signed-in person's own list is "Workspace Manager"; Admin tools has tiles (Manage admins,
-  Manage workspaces, Email administration, Payroll proof highlighting, Matching statistics). Workspace level
+  Manage workspaces, Email administration, File Matching: the matchers' statistics, the payroll reading words and day
+  windows, proof highlighting and every change to them, on one page). Workspace level
   only: an admin reads no engagement, record, access log or deletion summary and deletes no workspace, and where they
   are also a member they have exactly that membership's rights. An admin **may seat themself** in any workspace, in
   any role (owner's decision, 2026-10-14), and then reads its records as that member; the log line says so ("…
@@ -143,7 +162,7 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   first; Claude only when `ANTHROPIC_API_KEY` is set, `apps/api/src/receipts/read-receipt.ts`); a database check
   keeps those columns empty on a personal document. A payroll item's link to its proof (timesheet, register, pay
   stub or bank statement) carries its highlights: `marks`, boxes around the exact words a platform admin chose for
-  that proof type (Admin tools → Highlights, `HighlightSetting`, append-only; defaults `DEFAULT_HIGHLIGHTS`), and
+  that proof type (Admin tools → File Matching, `HighlightSetting`, append-only; defaults `DEFAULT_HIGHLIGHTS`), and
   `mark`, the line found (migrations `20261016001100` to `..1400`). **Every payroll proof stands on its own per
   item** (owner's decision, 2026-10-16): the viewer, the month bundle and the audit package show each item its own
   copy (`itemCopy` in `mark-pdf.ts`), drawn on the fly from the untouched original with the file's own highlight
@@ -156,6 +175,37 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   text lines (`payroll-match.worker.ts`; closing the wizard stops nothing, and reopening picks the run up), the lines
   are kept on the run only, matches are worked out from them on request, nothing is a `Document` until Save, and
   Discard or 24 hours removes the run and its staged objects.
+  **The workspace payroll match** (owner's decisions, 2026-10-17): an owner also matches one zip for the whole workspace
+  and a month (`/workspaces/:id/payroll`, `workspace-payroll.service.ts`) against every engagement's payroll items for
+  that period; the per-engagement wizard stays. A workspace run has `period` and no month (`PayrollMatchRun`, migration
+  `20261017000500`; owners only, by policy, its files included). Starting again for the same month answers the open run,
+  and a file sent again (same kind and sha256) is skipped. Save files each file **once** as a workspace document
+  (`<workspaceId>/workspace/<period>/`) linked from each item it proves, and keeps every person-pay found in it
+  (`PayrollPayLine`: register rows, bank payments, pay stubs; only the not-grant-funded reason ever changes). A chosen
+  item's closed or submitted month is reopened first, after the owner confirms the list and gives one reason, inside the
+  save's own transaction (`ReportsService.reopenWith`/`sendBackWith`), so a failed save reopens nothing. The reconciliation (owners and auditors read it; one read line, counts only)
+  shows each pay as matched, guessed, unassigned or not grant-funded, and each item with no proof; owners link a pay by
+  hand or mark it not grant-funded. Each engagement's audit package files the shared original once plus its own
+  highlighted copies. A workspace payroll file with saved pays keeps its kind, month, engagement and key
+  (`Document_5_keep_pay_lines`), and a document an unsaved upload holds is not removed until that upload is saved or
+  discarded (foreign key, 409 in plain words). Deleting an engagement or a workspace first discards any unsaved upload
+  holding its documents, each with its line; the workspace payroll files only it links are re-checked inside the
+  transaction, and their objects go only after commit; one another engagement links stays. Removing a workspace
+  payroll file is owners only. **A bank statement shows a pay run as one debit** (owner's decision, 2026-10-19): the
+  bank line of every item a run paid (staff lines and work-experience payments) is the statement's line of the
+  register's stated total ("Total direct deposits", else its net column added up) near its pay date
+  (`pay-runs.ts`, read by both match screens); a line per person is read only when no such debit is found, and a pay
+  stub is compared with its register row, never a bank line. **A pay belongs to the month it was paid in**, by its pay
+  date (the period's end only when none is printed; a period starting in the month before is still this month's): a
+  run or stub paid in another month is flagged `other-month`, never filed. Matching is per run: a staff line gets the
+  register row, time report and debit of the run paid on its date (`runsOfLine`; a line dated otherwise, every run of
+  the month), and each pay stub makes one payment per pay period, with its own run's proofs. A file whose contents are already on an item, or filed on
+  its engagement month (the bookkeeper's copy), is linked as that document, never as a copy; two different files as
+  one proof are flagged for the owner in the plan and the reconciliation (both stay) only when they contradict each
+  other: two pay stubs by their pay, hours or dates (one whose words can't be read is flagged; owner's decision,
+  2026-10-20), a timesheet or register by another amount or other hours for the same person. A bank line passes
+  the month's check when it shows the item's amount, or when it was matched as the debit of the run that paid the item
+  (`payRun` on the link, migration `20261019000300`).
 - **Deleting is permanent and owner-only** (`apps/api/src/deletion/`; a bookkeeper or auditor gets 403, another
   workspace's row 404). An owner deletes an engagement, and the workspace once no engagement remains. A month with
   nothing to submit (a draft with no expense, payroll, file or reopening) is the one smaller delete: an owner removes
@@ -241,7 +291,7 @@ of two.
   `apps/api/src/inbound/inbound.service.ts`, whose filing then runs as the sending member, and which also refuses mail
   to a previously used receipts address, keeps it with no sender until the address is released, and refuses an email
   that arrived before its workspace took the address (`ReceiptsAddress`, platform-level, read only under `app.admin`
-  and `app.system`); and the job that reads a
+  and `app.system`); the payroll-match sweeper, `payroll-match.sweeper.ts`, which removes expired runs; and the job that reads a
   payroll match's files, `apps/api/src/payroll/payroll-match.worker.ts`, which the database lets change only what
   reading fills, migration `20261016001300`). It sees every workspace and marks the connection `app.system = on`; only the
   `User` and `Membership` write policies and the `User` and `Workspace` read policies admit that mark (no longer
@@ -361,9 +411,13 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
 - **The end of a flow** (an import done, a batch uploaded): Import transactions' step 5: a green check with what
   happened as a centred heading (`ad-done`), the numbers as the month page's tiles (`ad-done-tiles`), then a
   `HandCard` "What to do next". Never a `Notice`.
-- **What just happened** after a small action on a page ("Matched to expense 2105."): `Notice`, one line. A `Notice`
-  is never used for guidance, a tip, a reminder, the end of a flow, or inside a dialog's steps (there, the problem goes
-  beside its field, or as the `ErrorNote` at the top).
+- **What just happened** after a small action on a page ("Matched to expense 2105."): `Notice`, one line of coloured
+  text with no box (`ad-quiet`, owner's decision, 2026-10-18): a green ✓ for "that worked", passed `fade` so it fades
+  after a few seconds; a warning or a standing state stays and is never faded. A `Notice` is never used for guidance, a
+  tip, a reminder, the end of a flow, or inside a dialog's steps (there, the problem goes beside its field, or as the
+  `ErrorNote` at the top).
+- **How to use a screen**, when it isn't obvious: a closed "How to …?" line under its controls with the navy `info` icon (a `<details>`, `.ss-help`), opened
+  on a click, never on hover alone.
 - **What went wrong** (a refusal, a failed save): `ErrorNote` (`ad-error`: a soft red band, ⚠️ then the message in
   bold red), at the top of the form, dialog or section; a problem with one field goes beside that field. Never wrap an
   error in `Notice` or style a new error box.
@@ -373,6 +427,17 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
   problems listed at the top, and never one problem per try. The server checks everything too and answers with every
   problem in one message; its `ErrorNote` is only for what the screen could not know. A choice the screen knows cannot work
   here (a saved mapping made for other columns) is not offered.
+
+- **Buttons:** navy (`kind="navy"`) for actions, Next and Save; green (`primary`) only for a card's one creating
+  action ("+ Invite someone", "+ Add Tag Group"), placed beside the card's heading; Cancel `ghost`; a removal is a red
+  text link. A dialog saves when its form is done: no separate "Save all" button under a list.
+- **The two payroll match screens stay alike** (owner's decision, 2026-10-19): the bookkeeper's per-engagement wizard
+  (`PayrollProof.tsx`) and the owner's workspace match (`WorkspacePayrollPage.tsx`) are built from the same components
+  (`components/payroll-match/`) and read the same way: a red count only on "Remaining to match" (and a red "N to look
+  at" beside the owner's Staff and Participants, with a green "✓ N matched"), each proof found as its file, "✓ Found,
+  page N" (or a guess, or missing) and Show, one "How Auto-Match decided" panel for every reason (closed until Show), no
+  "fully proved" panel, a short "What Save will do" beside the footer, and the footer Back: upload / Discard (a red
+  text link) / "Save and continue". Change one only with the other.
 
 Keep the words short: one bold line that says the point, then steps as a list, never a paragraph that wraps three
 times. Look at it in the browser at the width it will be used before showing it to the owner.
@@ -439,6 +504,23 @@ read-only subagents, one per area of the diff, before merging:
 3. Fix in parallel by area with disjoint file lists, then run the CI gates locally (`npm run lint`,
    `npm run format:check`, `npm run typecheck`, `npm run build`, `npm run test`) before pushing. After a clean
    build confirm `apps/api/dist/main.js` exists.
+
+## Reviewing a feature with the owner
+
+Before a feature is committed, the owner sees it working, screen by screen (owner's decision, 2026-10-17):
+
+1. **Deploy it to dev.** Say which migrations it applies to the shared database and get a yes, then deploy with
+   `apps/api/scripts/deploy-dev.sh` and point the local app at it (restart the local API).
+2. **Give a guided tour.** Drive the browser pane yourself, one screen at a time, on the fictional seed. For each
+   screen, narrate in plain words: where we are, what each part does, what is new, and anything that looks wrong.
+   Go slowly, one screen per message, so the owner can take notes as you narrate. Stop at the end of each section and wait for "next", so the owner can take notes. Do the real actions (save,
+   change, release), cancel anything that should not stick, and put the demo data back as it was afterwards.
+3. **Keep one numbered list of findings** as you go: everything the owner calls out and everything you notice
+   (layout, wording, a broken rule). Repeat the list at the end of each section, one line per item, and strike what
+   the owner rules out. Don't fix mid-tour unless asked.
+4. **Fix the list, then tour the fixes** the same way, only over what changed.
+5. **A design change goes back into the issue.** If the tour shows the design is wrong, rewrite the issue in plain
+   words with the owner's decisions, and park the built code on a local branch (not on main) instead of shipping it.
 
 ## Posting screenshots to GitHub issues / PRs
 

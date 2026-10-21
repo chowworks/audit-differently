@@ -1,4 +1,4 @@
-import { REPORT_LINE_LABELS, type EngagementDetail } from '@ad/types'
+import { PAYROLL_BUDGET_KIND_LABELS, REPORT_LINE_LABELS, type EngagementDetail } from '@ad/types'
 import { money } from '@/lib/format'
 import { Button, Modal } from '@/components/ui'
 
@@ -37,6 +37,15 @@ function LinesTable({
                 <td>
                   <span className="font-semibold">{l.name}</span>
                   {l.narrative && <span className="ad-table-sub">{l.narrative}</span>}
+                  {l.payroll.length > 0 && (
+                    <span className="mt-1 flex flex-wrap gap-1">
+                      {l.payroll.map((k) => (
+                        <span key={k} className="ad-chip ad-chip-muted">
+                          {PAYROLL_BUDGET_KIND_LABELS[k]}
+                        </span>
+                      ))}
+                    </span>
+                  )}
                 </td>
                 <td className="text-sm">{REPORT_LINE_LABELS[l.reportLine]}</td>
                 <td className="ad-num">{money(l.amount)}</td>

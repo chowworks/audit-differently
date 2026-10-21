@@ -1,0 +1,160 @@
+/* "Mental model for verification": the popup of the Staff and Participants sections (VerificationModel.tsx). */
+/* The navy button the app's actions use, at the right of the heading, with the help cards' "?" circle (owner, 2026-10-19). */
+.ad-btn.vm-link {
+  margin-left: auto;
+  gap: 8px;
+  padding: 6px 12px 6px 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.vm-link-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+/* The popup's own look: a navy header like the app's header band. */
+.vm-modal .ad-modal-head {
+  background: var(--navy);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+.vm-modal .ad-modal-title,
+.vm-modal .ad-modal-close {
+  color: #fff;
+}
+/* The instructions, in their own box, with a divider under them. */
+.vm-intro {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f3f6f9;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+  position: relative;
+  margin-bottom: 29px;
+}
+.vm-intro::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -15px;
+  height: 1px;
+  background: var(--line);
+}
+.vm-num {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+}
+.vm-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.vm-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 14px;
+}
+.vm-col-asks {
+  width: 32%;
+}
+.vm-col-evidence {
+  width: 22%;
+}
+.vm-table thead th {
+  padding: 10px 12px;
+  background: var(--navy);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.vm-table tbody td,
+.vm-table tbody th {
+  padding: 10px 12px;
+  vertical-align: top;
+  text-align: left;
+  border-top: 1px solid var(--line, #dfe3e8);
+}
+.vm-table tbody td + td,
+.vm-table tbody th + td {
+  border-left: 1px solid var(--line, #dfe3e8);
+}
+.vm-asks {
+  font-weight: 700;
+  color: var(--navy);
+}
+.vm-table .vm-asks {
+  display: flex;
+  align-items: flex-start;
+}
+.vm-evidence {
+  display: block;
+  font-weight: 700;
+}
+.vm-detail {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+.vm-shows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.vm-shows span {
+  color: var(--ok);
+  font-weight: 700;
+}
+.vm-match {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #e6eef8;
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 600;
+}
+/* Each row's example: a quieter sub-row inside the table, under its question. */
+.vm-table .vm-example td {
+  border-top: 1px dashed var(--line, #dfe3e8);
+  border-left: 0;
+  background: #f6f8fa;
+  color: var(--ink);
+  font-size: 13px;
+  padding: 8px 12px;
+}
+.vm-example-label {
+  margin-right: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.vm-close {
+  margin: 12px 0 0;
+  font-size: 14px;
+}

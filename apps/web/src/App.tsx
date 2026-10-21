@@ -23,10 +23,11 @@ import { AdminWorkspacePage } from '@/pages/AdminWorkspacePage'
 import { AdminWorkspacesPage } from '@/pages/AdminWorkspacesPage'
 import { AdminAdminsPage } from '@/pages/AdminAdminsPage'
 import { AdminEmailPage } from '@/pages/AdminEmailPage'
-import { AdminHighlightsPage } from '@/pages/AdminHighlightsPage'
-import { AdminMatchStatsPage } from '@/pages/AdminMatchStatsPage'
+import { AdminMatchingPage } from '@/pages/AdminMatchingPage'
 import { useRole } from '@/hooks/useRole'
 import { Mark } from '@/components/Mark'
+import { EngagementStaffingPage } from '@/pages/staffing/EngagementStaffingPage'
+import { WorkspacePayrollPage } from '@/pages/WorkspacePayrollPage'
 import { Button, Empty, ErrorNote } from '@/components/ui'
 
 /** The app's own addresses: signed in, each renders its page; signed out, each asks for sign-in. */
@@ -34,6 +35,10 @@ const APP_ROUTES: { path: string; element: ReactNode }[] = [
   { path: '/overview', element: <OverviewPage /> },
   { path: '/workspaces', element: <WorkspacesPage /> },
   { path: '/workspaces/:id', element: <WorkspacePage /> },
+  // Engagement staffing: who works on which engagement (GitHub issue #22).
+  { path: '/workspaces/:id/staff', element: <EngagementStaffingPage /> },
+  // The workspace payroll match and its reconciliation (GitHub issue #22).
+  { path: '/workspaces/:id/payroll', element: <WorkspacePayrollPage /> },
   { path: '/engagements/new', element: <NewEngagementPage /> },
   { path: '/engagements/:id', element: <EngagementPage /> },
   { path: '/reports/:id', element: <ReportPage /> },
@@ -44,8 +49,11 @@ const APP_ROUTES: { path: string; element: ReactNode }[] = [
   { path: '/admin/workspaces', element: <AdminOnly page={<AdminWorkspacesPage />} /> },
   { path: '/admin/workspaces/:id', element: <AdminOnly page={<AdminWorkspacePage />} /> },
   { path: '/admin/email', element: <AdminOnly page={<AdminEmailPage />} /> },
-  { path: '/admin/highlights', element: <AdminOnly page={<AdminHighlightsPage />} /> },
-  { path: '/admin/match-stats', element: <AdminOnly page={<AdminMatchStatsPage />} /> },
+  { path: '/admin/matching', element: <AdminOnly page={<AdminMatchingPage />} /> },
+  // The tools File Matching took the place of (2026-10-19): their old addresses open it.
+  { path: '/admin/highlights', element: <Navigate to="/admin/matching" replace /> },
+  { path: '/admin/payroll-reading', element: <Navigate to="/admin/matching" replace /> },
+  { path: '/admin/match-stats', element: <Navigate to="/admin/matching" replace /> },
   // Older links.
   { path: '/contracts', element: <Navigate to="/workspaces" replace /> },
   { path: '/contracts/:id', element: <ToEngagement /> },
@@ -134,8 +142,13 @@ function SignedIn() {
           <Route path="/admin/workspaces" element={<AdminWorkspacesPage />} />
           <Route path="/admin/workspaces/:id" element={<AdminWorkspacePage />} />
           <Route path="/admin/email" element={<AdminEmailPage />} />
-          <Route path="/admin/highlights" element={<AdminHighlightsPage />} />
-          <Route path="/admin/match-stats" element={<AdminMatchStatsPage />} />
+          <Route path="/admin/matching" element={<AdminMatchingPage />} />
+          <Route path="/admin/highlights" element={<Navigate to="/admin/matching" replace />} />
+          <Route
+            path="/admin/payroll-reading"
+            element={<Navigate to="/admin/matching" replace />}
+          />
+          <Route path="/admin/match-stats" element={<Navigate to="/admin/matching" replace />} />
           <Route path="/contact" element={<ContactPage />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>

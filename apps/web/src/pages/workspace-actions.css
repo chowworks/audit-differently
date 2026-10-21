@@ -1,0 +1,46 @@
+/* Workspace Owner Actions on the workspace page (WorkspaceActions.tsx). */
+
+.wa-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+}
+.wa-tile-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.ad-card.wa-list {
+  margin-top: 24px;
+  padding: 16px 20px 6px;
+  border-left: 5px solid var(--danger);
+}
+.wa-list header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.wa-list ul {
+  display: grid;
+}
+.wa-list li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.wa-list small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}

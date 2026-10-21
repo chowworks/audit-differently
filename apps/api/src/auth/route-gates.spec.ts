@@ -110,6 +110,9 @@ const ADMIN = [
   // Highlights: what is highlighted on each payroll proof type, for the whole system.
   'GET /api/admin/highlights',
   'PUT /api/admin/highlights/:kind',
+  'GET /api/admin/payroll-reading',
+  'PUT /api/admin/payroll-reading',
+  'GET /api/admin/payroll-reading/history',
   // Matching statistics: counts, sizes and durations of finished match runs, across workspaces.
   'GET /api/admin/match-stats',
   // Email administration → Receipts addresses: every address used, and releasing a previously used one (never a
@@ -192,6 +195,8 @@ const GATED = [
   'GET /api/payroll-match/:runId/progress',
   'POST /api/payroll-match/:runId/files',
   'GET /api/payroll-match/:runId',
+  'POST /api/payroll-match/:runId/ai-read',
+  'GET /api/payroll-ai',
   'GET /api/payroll-match/:runId/files/:fileId',
   'POST /api/payroll-match/:runId/save',
   'DELETE /api/payroll-match/:runId',
@@ -204,6 +209,39 @@ const GATED = [
   'PATCH /api/participants/:id/tags',
   'POST /api/participants/:id/documents',
   'DELETE /api/participants/:id/documents/:documentId',
+  // The workspace payroll match and its reconciliation (GitHub issue #22): owners run it, owners and auditors read.
+  'GET /api/workspaces/:id/payroll',
+  'PATCH /api/workspaces/:id/payroll',
+  'GET /api/workspaces/:id/payroll/:period/reconciliation',
+  'POST /api/workspaces/:id/payroll/:period/match',
+  'GET /api/workspaces/:id/payroll/:period/match',
+  'POST /api/workspaces/:id/payroll/lines/:lineId/link',
+  'POST /api/workspaces/:id/payroll/lines/:lineId/not-funded',
+  'DELETE /api/workspaces/:id/payroll/lines/:lineId/not-funded',
+  'POST /api/workspace-payroll-match/:runId/files',
+  'GET /api/workspace-payroll-match/:runId/progress',
+  'GET /api/workspace-payroll-match/:runId',
+  'POST /api/workspace-payroll-match/:runId/staff',
+  'POST /api/workspace-payroll-match/:runId/ai-read',
+  'POST /api/workspace-payroll-match/:runId/participants',
+  'GET /api/workspace-payroll-match/:runId/files/:fileId',
+  'GET /api/workspace-payroll-match/:runId/files/:fileId/copy',
+  'POST /api/workspace-payroll-match/:runId/save',
+  'DELETE /api/workspace-payroll-match/:runId',
+  // The match by the staff list and the participant lists (GitHub issue #22): its engagement cards, the register's
+  // suggestions for the staff list, and matching a month again. Owners run it; owners and auditors read the cards.
+  'GET /api/workspaces/:id/payroll/:period/engagements',
+  'GET /api/workspaces/:id/payroll/:period/staff-suggestions',
+  'POST /api/workspaces/:id/payroll/:period/match-again',
+  'GET /api/workspaces/:id/payroll/:period/files',
+  'POST /api/workspaces/:id/payroll/:period/files/:documentId/remove',
+  // The staff list and engagement staffing: owners change it, owners and auditors read it.
+  'GET /api/workspaces/:id/staff',
+  'POST /api/workspaces/:id/staff',
+  'PATCH /api/staff/:staffId',
+  'DELETE /api/staff/:staffId',
+  'PUT /api/staff/:staffId/engagements/:engagementId',
+  'DELETE /api/staff/:staffId/engagements/:engagementId',
 ]
 
 describe('route gates', () => {

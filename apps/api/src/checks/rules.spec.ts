@@ -47,6 +47,24 @@ describe('runRules', () => {
     expect(found).toEqual(['missing-timesheet', 'missing-register'])
   })
 
+  it('says when a payroll line typed on the month is pay the match counts too', () => {
+    const [f] = runRules(
+      month({ expenses: [expense({ countedTwice: 'participant pay' })] })
+    ).filter((x) => x.code === 'payroll-counted-twice')
+    expect(f).toMatchObject({ severity: 'attention', expenseId: 'e1' })
+    expect(f!.message).toContain('already counts this participant pay on the month')
+  })
+
+  it('checks a line the payroll match wrote as payroll, whatever budget line it is on', () => {
+    // Staff pay on Program Costs, as a contract that budgets staff there: a timesheet and a register, never an invoice.
+    const found = codes(
+      month({
+        expenses: [expense({ fromPayroll: true, documents: ['payment'] })],
+      })
+    )
+    expect(found).toEqual(['missing-timesheet', 'missing-register'])
+  })
+
   it('wants the calculation on an allocated expense and refuses a share above the total', () => {
     const found = codes(
       month({
@@ -219,6 +237,26 @@ describe('runRules', () => {
     expect(
       codes(month({ expenses: [line], highlights: { 'bank-statement': ['date', 'amount'] } }))
     ).toContain('proof-mismatch')
+  })
+
+  it("passes a staff line's bank line only when it shows its amount or is the debit of the run that paid it", () => {
+    const line = (proof: { words: string[]; payRun?: boolean }) =>
+      expense({
+        reportLine: 'staff-salaries',
+        totalCost: 2100,
+        allocatedAmount: 2100,
+        documents: ['timesheet', 'register', 'payment'],
+        proofs: [{ purpose: 'payment', kind: 'bank-statement', ...proof }],
+      })
+    const found = (proof: { words: string[]; payRun?: boolean }) =>
+      codes(
+        month({ expenses: [line(proof)], highlights: { 'bank-statement': ['date', 'amount'] } })
+      )
+    // The pay run's one debit, matched to the run that paid it: its total is not the line's, and that is right.
+    expect(found({ words: ['09/24', '$6,339.17'], payRun: true })).not.toContain('proof-mismatch')
+    // The same larger amount, not matched as the run's debit, is no proof of this line's.
+    expect(found({ words: ['09/24', '$6,339.17'] })).toContain('proof-mismatch')
+    expect(found({ words: ['09/24', '$2,100.00'] })).not.toContain('proof-mismatch')
   })
 
   it('computes the due date and notes a late submission', () => {

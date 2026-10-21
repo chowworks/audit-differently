@@ -61,8 +61,9 @@ function service() {
     workspace: scoped({ id: W, tagTypes: DEFAULT_TAG_TYPES }),
     // The names other engagements' budget lines have, to suggest.
     budgetLine: { findMany: jest.fn().mockResolvedValue([]) },
-    // What was spent on each budget line to date.
-    expense: { groupBy: jest.fn().mockResolvedValue([]) },
+    // What was spent on each budget line to date, and the participants' pay, counted on the line that holds it.
+    expense: { findMany: jest.fn().mockResolvedValue([]) },
+    wexPayment: { groupBy: jest.fn().mockResolvedValue([]) },
     engagement: {
       ...scoped(engagement()),
       create: jest.fn().mockResolvedValue({ id: 'e-1' }),

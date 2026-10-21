@@ -1318,28 +1318,6 @@
   }
 
   /* Notices */
-  .ad-notice {
-    margin-bottom: 16px;
-    padding: 12px 16px;
-    border: 1px solid var(--line);
-    border-left: 5px solid var(--navy);
-    border-radius: var(--radius);
-    background: var(--surface);
-    font-size: 14px;
-  }
-  .ad-notice-ok {
-    border-left-color: var(--ok);
-    background: var(--ok-tint);
-  }
-  .ad-notice-danger {
-    border-left-color: var(--danger);
-    background: var(--danger-tint);
-    color: var(--danger);
-  }
-  .ad-notice-warn {
-    border-left-color: var(--warn);
-    background: var(--warn-tint);
-  }
   /* A save confirmed beside its button (SavedMark): a green check, then it fades */
   .ad-saved {
     display: inline-flex;
@@ -2722,4 +2700,62 @@
   .ad-progress > span {
     transition: none;
   }
+}
+
+/* Workspace Settings → Your role in month end reporting (WorkspacePage.tsx). */
+.ad-me-setting {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.ad-me-setting small {
+  display: block;
+  margin: 4px 0 0 24px;
+}
+.ad-me-steps {
+  display: grid;
+  gap: 12px;
+}
+.ad-me-steps li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.ad-me-steps small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.ad-me-n {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--navy);
+  color: var(--on-dark);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+/* What just happened, or a standing state (Notice): coloured text, no box. "That worked" fades (fade). */
+.ad-quiet {
+  margin: 0 0 12px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  transition: opacity 0.6s ease;
+}
+.ad-quiet-ok {
+  color: var(--ok);
+}
+.ad-quiet-warn {
+  color: var(--warn);
+}
+.ad-quiet-danger {
+  color: var(--danger);
+}
+.ad-quiet-gone {
+  opacity: 0;
 }

@@ -729,16 +729,17 @@ export class InboundService {
   }
 
   /**
-   * "Dismiss": a receipt that needs filing but should never be filed (personal, a duplicate, not a receipt) is put
-   * aside with its reason, from a fixed list. It leaves the inbox; the database lets only a receipt that needs filing
-   * become dismissed, and nothing changes it after (migration 20261017000100).
+   * "Dismiss": a receipt that needs filing but should never be filed (personal, a duplicate, not a receipt), or one
+   * that failed and the person does not want run again, is put aside with its reason, from a fixed list. It leaves the
+   * inbox; the database lets only those two become dismissed, and nothing changes one after (migrations
+   * 20261017000100 and 20261018000500).
    */
   async dismiss(caller: Caller, id: string, reason: unknown): Promise<ReceiptsInboxDto> {
     if (!DISMISS_REASONS.includes(reason as DismissReason))
       throw new BadRequestException('Say why it is dismissed')
     const row = await this.changeable(caller, id)
-    if (row.status !== 'unmatched')
-      throw new ConflictException('Only a receipt that needs filing is dismissed')
+    if (row.status !== 'unmatched' && row.status !== 'failed')
+      throw new ConflictException('Only a receipt that needs filing or failed is dismissed')
     const label = DISMISS_REASON_LABELS[reason as DismissReason]
     const data = { status: 'dismissed', rejectReason: label.toLowerCase() }
     await this.log.change(caller, (tx) => tx.inboundReceipt.update({ where: { id }, data }), {

@@ -180,6 +180,8 @@ function setup(status = 'draft', docs: Doc[] = [], expenses = SEPTEMBER) {
       }),
     },
     expense: { findMany: jest.fn().mockResolvedValue([]) },
+    // The participants' pay before this month, counted on its budget line.
+    wexPayment: { groupBy: jest.fn().mockResolvedValue([]) },
     check: { findMany: jest.fn().mockResolvedValue([]) },
     document: {
       // The month's files, for the report's "delete an empty month": never empty here.

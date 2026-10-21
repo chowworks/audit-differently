@@ -24,8 +24,11 @@ import {
   type ImportSuggestionDto,
   type ReportLine,
   type ReportStatus,
-  PAYROLL_REPORT_LINES,
+  PAYROLL_BUDGET_KIND_LABELS,
+  type ImportPayrollRowDto,
+  type PayrollBudgetKind,
 } from '@ad/types'
+import { payrollRowKind } from '../reports/report-lines'
 import { ChecksService } from '../checks/checks.service'
 import { dueDate } from '../checks/rules'
 import { AccessLogService } from '../core/access-log.service'
@@ -59,6 +62,16 @@ type Ready = Transaction & {
   reportLine: ReportLine
   budgetLineId: string
   fingerprint: string
+  /** A payroll transaction's kind: kept for payroll reconciliation, counted only until the match covers it. */
+  payrollKind?: PayrollBudgetKind | null
+}
+
+/** A line imported before whose payroll choice this import changes. */
+type Update = ImportRowDto & {
+  expenseId: string
+  payrollKind: PayrollBudgetKind | null
+  budgetLineId: string
+  change: string
 }
 
 type Engagement = NonNullable<Awaited<ReturnType<ImportsService['find']>>>
@@ -73,6 +86,33 @@ const sameHeaders = (a: string[], b: string[]) =>
  * at the mapping), preview it through the mapping the person confirmed, then import it. Each row becomes an expense
  * line in the month of its date, through the same checks as a typed one. Owners and bookkeepers only.
  */
+/**
+ * A payroll row of an accounting export: salaries, payroll taxes, employee benefits or work-experience pay, by its
+ * account or category. Payroll fees and workers' compensation are bills, not pay, and are imported.
+ */
+export const isPayrollRow = (t: Pick<Transaction, 'accountText' | 'category'>) =>
+  /\bsalar|\bwages?\b|payroll tax|employee benefit|work experience|\bwex\b/i.test(
+    `${t.accountText} ${t.category}`
+  )
+
+/** A books' payroll transaction's kind (report-lines.ts) as the budget line ticks name it. */
+const PAYROLL_KIND_OF = {
+  staffPay: 'staff-pay',
+  staffTaxes: 'staff-taxes',
+  participantPay: 'participant-pay',
+  participantTaxes: 'participant-taxes',
+} as const satisfies Record<ReturnType<typeof payrollRowKind>, PayrollBudgetKind>
+
+/** The person's answers on "Payroll transactions confirmation": yes or no, by line in the file. */
+function cleanPayroll(given: unknown): Record<string, boolean> {
+  if (!given || typeof given !== 'object' || Array.isArray(given)) return {}
+  return Object.fromEntries(
+    Object.entries(given as Record<string, unknown>).filter(
+      (e): e is [string, boolean] => /^\d+$/.test(e[0]) && typeof e[1] === 'boolean'
+    )
+  )
+}
+
 @Injectable()
 export class ImportsService {
   constructor(
@@ -112,7 +152,6 @@ export class ImportsService {
   private options(c: Engagement): BudgetOption[] {
     return [...c.budgetLines]
       .sort((a, b) => a.sortOrder - b.sortOrder)
-      .filter((b) => !PAYROLL_REPORT_LINES.has(b.reportLine as ReportLine))
       .map((b) => ({ key: b.id, label: b.name, reportLine: b.reportLine as ReportLine }))
   }
 
@@ -205,11 +244,11 @@ export class ImportsService {
   ): Promise<ImportResultDto> {
     const c = await this.writable(caller, engagementId)
     const table = await readTable(file.buffer, file.originalname)
-    const { preview, ready, columns, categories } = await this.plan(c, table, request)
+    const { preview, ready, updates, columns, categories } = await this.plan(c, table, request)
     const req = (request ?? {}) as ImportRequest
     const reportId = typeof req.reportId === 'string' ? req.reportId : null
     if (reportId && !c.monthlyReports.some((m) => m.id === reportId)) throw new NotFoundException()
-    if (ready.length === 0)
+    if (ready.length === 0 && updates.length === 0)
       throw new BadRequestException('Nothing to import: every row is listed under Not imported')
     if (req.saveAs != null) await this.save(caller, c, req.saveAs, table, columns, categories)
 
@@ -243,32 +282,43 @@ export class ImportsService {
             })
             ids.set(period, made.id)
           }
-          await tx.expense.createMany({
-            data: ready.map((r) => ({
-              engagementId: c.id,
-              monthlyReportId: ids.get(r.period)!,
-              itemNumber: r.itemNumber,
-              date: new Date(`${r.date}T00:00:00Z`),
-              vendor: r.vendor,
-              memo: r.memo || null,
-              account: r.account,
-              totalCost: r.amount.toFixed(2),
-              allocatedAmount: r.amount.toFixed(2),
-              allocationType: 'direct',
-              budgetLineId: r.budgetLineId,
-              reportLine: r.reportLine,
-              importFingerprint: r.fingerprint,
-              createdById: caller.userId,
-            })),
-          })
-          return preview.months.map((m) => ids.get(m.period)!)
+          // Lines imported before whose payroll choice changed: that line, not a second one.
+          for (const u of updates)
+            await tx.expense.update({
+              where: { id: u.expenseId },
+              data: { payrollKind: u.payrollKind, budgetLineId: u.budgetLineId },
+            })
+          if (ready.length)
+            await tx.expense.createMany({
+              data: ready.map((r) => ({
+                engagementId: c.id,
+                monthlyReportId: ids.get(r.period)!,
+                itemNumber: r.itemNumber,
+                date: new Date(`${r.date}T00:00:00Z`),
+                vendor: r.vendor,
+                memo: r.memo || null,
+                account: r.account,
+                totalCost: r.amount.toFixed(2),
+                allocatedAmount: r.amount.toFixed(2),
+                allocationType: 'direct',
+                budgetLineId: r.budgetLineId,
+                reportLine: r.reportLine,
+                importFingerprint: r.fingerprint,
+                payrollKind: r.payrollKind ?? null,
+                createdById: caller.userId,
+              })),
+            })
+          return [
+            ...preview.months.map((m) => ids.get(m.period)!),
+            ...updates.map((u) => ids.get(u.period!)).filter((id): id is string => !!id),
+          ]
         },
         {
           workspaceId: c.workspaceId,
           resource: 'expense',
           subjectId: c.id,
           action: 'create',
-          description: `Imported ${howMany(ready.length, 'transaction')} into ${c.name} from ${source}: ${howMany(preview.months.length, 'month')}${withAi}`,
+          description: `Imported ${howMany(ready.length, 'transaction')} into ${c.name} from ${source}: ${howMany(preview.months.length, 'month')}${updates.length ? `, ${howMany(updates.length, 'line')} imported before changed (payroll or expense)` : ''}${withAi}`,
           // Counts and totals, not every row: each line is on its month's page.
           changes: [
             { field: 'Transactions', after: String(ready.length) },
@@ -277,6 +327,14 @@ export class ImportsService {
               field: monthName(m.period),
               after: `${howMany(m.rows, 'transaction')}, ${dollars(m.total)}${m.isNew ? ' (month started)' : ''}`,
             })),
+            ...(ready.some((r) => r.payrollKind)
+              ? [
+                  {
+                    field: 'Payroll transactions',
+                    after: String(ready.filter((r) => r.payrollKind).length),
+                  },
+                ]
+              : []),
             { field: 'Not imported', after: String(preview.notImported.length) },
             { field: 'File size (bytes)', after: String(file.buffer.length) },
             {
@@ -293,9 +351,10 @@ export class ImportsService {
         )
       throw e
     }
-    for (const id of touched) await this.checks.refresh(id)
+    for (const id of new Set(touched)) await this.checks.refresh(id)
     return {
       imported: ready.length,
+      updated: updates.length,
       total: Math.round(total * 100) / 100,
       months: preview.months,
       notImported: preview.notImported.length,
@@ -373,15 +432,26 @@ export class ImportsService {
     const months = new Map(c.monthlyReports.map((m) => [m.period, m]))
     const existing = await this.prisma.expense.findMany({
       where: { engagementId: c.id },
-      select: { itemNumber: true, reportLine: true, importFingerprint: true },
+      select: {
+        id: true,
+        itemNumber: true,
+        reportLine: true,
+        importFingerprint: true,
+        payrollKind: true,
+      },
     })
-    const imported = new Set(existing.map((e) => e.importFingerprint).filter(Boolean))
+    const imported = new Map(
+      existing.filter((e) => e.importFingerprint).map((e) => [e.importFingerprint!, e])
+    )
     const taken = new Set(existing.map((e) => `${e.itemNumber}\u0000${e.reportLine}`))
     const numbers = new Set(existing.map((e) => e.itemNumber))
     let next = 1
 
     const ready: Ready[] = []
     const notImported: ImportRowDto[] = []
+    const payroll: ImportPayrollRowDto[] = []
+    const updates: Update[] = []
+    const payrollAnswers = cleanPayroll(req.payroll)
     const assignable: ImportPreviewDto['assignable'] = []
     const byCategory = new Map<string, { rows: number; total: number }>()
     const dto = (t: Transaction, extra: Partial<ImportRowDto>): ImportRowDto => ({
@@ -403,8 +473,27 @@ export class ImportsService {
         out('A heading or total line, not a transaction')
         continue
       }
-      const seen = byCategory.get(t.category) ?? { rows: 0, total: 0 }
-      byCategory.set(t.category, { rows: seen.rows + 1, total: seen.total + (t.amount ?? 0) })
+      // "Payroll transactions confirmation": a payroll row (by its account or category, or the person's answer) goes to
+      // the budget line ticked for its kind, marked payroll; the rest are matched to budget lines by category.
+      const found = isPayrollRow(t)
+      const asked = payrollAnswers[String(t.line)]
+      const isPayroll = asked ?? found
+      const kind =
+        PAYROLL_KIND_OF[payrollRowKind({ account: t.accountText, memo: `${t.memo} ${t.category}` })]
+      const payrollLine = c.budgetLines.find((b) => (b.payroll ?? []).includes(kind)) ?? null
+      if (found || asked !== undefined)
+        payroll.push({
+          ...dto(t, {}),
+          account: t.account,
+          found,
+          included: isPayroll,
+          kind,
+          budgetLineName: payrollLine?.name ?? null,
+        })
+      if (!isPayroll) {
+        const seen = byCategory.get(t.category) ?? { rows: 0, total: 0 }
+        byCategory.set(t.category, { rows: seen.rows + 1, total: seen.total + (t.amount ?? 0) })
+      }
       if (!t.date) {
         out('No date this import can read')
         continue
@@ -446,15 +535,24 @@ export class ImportsService {
         continue
       }
       const fingerprint = prints[i]!
-      if (imported.has(fingerprint)) {
+      // Imported before: skipped, unless its payroll choice is different now, which changes that line (the person's
+      // re-import is how a choice is corrected, owner's decision, 2026-10-20).
+      const before = imported.get(fingerprint)
+      const wanted = isPayroll ? kind : null
+      if (before && (before.payrollKind ?? null) === wanted) {
         out('Already imported')
         continue
       }
-      const target = lines[String(t.line)] ?? categories[t.category]
-      assignable.push({
-        ...dto(t, {}),
-        budgetItem: target && target !== IMPORT_SKIP ? target : null,
-      })
+      if (isPayroll && !payrollLine) {
+        out(`Payroll: no budget line has "${PAYROLL_BUDGET_KIND_LABELS[kind]}" ticked`)
+        continue
+      }
+      const target = isPayroll ? payrollLine!.id : (lines[String(t.line)] ?? categories[t.category])
+      if (!isPayroll)
+        assignable.push({
+          ...dto(t, {}),
+          budgetItem: target && target !== IMPORT_SKIP ? target : null,
+        })
       if (!target) {
         out(`Choose a budget line for ${t.category ? `"${t.category}"` : 'rows with no category'}`)
         continue
@@ -463,8 +561,22 @@ export class ImportsService {
         out('Skipped: its category is set to skip')
         continue
       }
-      const reportLine = items.get(target)!.reportLine
+      const reportLine = isPayroll
+        ? (payrollLine!.reportLine as ReportLine)
+        : items.get(target)!.reportLine
       const budgetLineId = target
+      if (before) {
+        updates.push({
+          ...dto(t, { itemNumber: before.itemNumber }),
+          expenseId: before.id,
+          payrollKind: wanted,
+          budgetLineId,
+          change: wanted
+            ? `Now payroll (${PAYROLL_BUDGET_KIND_LABELS[wanted]}), kept for payroll reconciliation`
+            : 'Now an expense, not payroll',
+        })
+        continue
+      }
       let itemNumber: string
       if (t.reference) {
         itemNumber = t.reference
@@ -485,6 +597,7 @@ export class ImportsService {
         reportLine,
         budgetLineId,
         fingerprint,
+        payrollKind: isPayroll ? kind : null,
       })
     }
 
@@ -515,8 +628,20 @@ export class ImportsService {
         dto(r, { period: r.period, itemNumber: r.itemNumber, reportLine: r.reportLine })
       ),
       notImported,
+      payroll,
+      updates: updates.map((u) => ({
+        line: u.line,
+        date: u.date,
+        vendor: u.vendor,
+        memo: u.memo,
+        amount: u.amount,
+        category: u.category,
+        period: u.period,
+        itemNumber: u.itemNumber,
+        change: u.change,
+      })),
       assignable,
     }
-    return { preview, ready, columns, categories }
+    return { preview, ready, updates, columns, categories }
   }
 }

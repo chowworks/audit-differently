@@ -35,9 +35,13 @@ export type PdfRow = string | string[] | { at: number[]; cells: string[] } | nul
  * A one-page PDF drawn with pdf-lib, for the fictional payroll proof of the demo: a title, then each row 15 points
  * below the last (`null` is a blank row). Every cell is its own text run, as a payroll or bank export writes them, so
  * the reader (`src/payroll/statement-lines.ts`) finds each value with its own box and the highlights the matcher
- * cuts from those boxes sit on the words. Ends with the fictional-data footer.
+ * cuts from those boxes sit on the words. Ends with the fictional-data footer (the demo's, unless `footer` gives another).
  */
-export async function layoutPdf(title: string, rows: PdfRow[]): Promise<Buffer> {
+export async function layoutPdf(
+  title: string,
+  rows: PdfRow[],
+  footer = 'Fictional document generated for the Audit Differently demo.'
+): Promise<Buffer> {
   const { PDFDocument, StandardFonts } = await import('pdf-lib')
   const pdf = await PDFDocument.create()
   pdf.setTitle(title)
@@ -64,7 +68,7 @@ export async function layoutPdf(title: string, rows: PdfRow[]): Promise<Buffer> 
       })
     y -= 15
   }
-  page.drawText('Fictional document generated for the Audit Differently demo.', {
+  page.drawText(footer, {
     x: 48,
     y: 30,
     size: 8,

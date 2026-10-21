@@ -89,6 +89,13 @@
   color: var(--on-dark);
   font-size: 12px;
 }
+/* Green: how many are done. Grey: a plain count, nothing to do. */
+.mx-count-ok {
+  background: var(--ok);
+}
+.mx-count-muted {
+  background: var(--muted);
+}
 /* A section that opens: a chevron that turns and a hover, so it reads as something to click. */
 .mx-chevron {
   display: inline-block;
@@ -218,9 +225,11 @@ details[open] > summary .mx-toggle-hide {
   margin-bottom: 4px;
   font-size: 14px;
 }
+/* The reason gets the room; the file name keeps a fixed column and is cut short (in full on hover). */
 .mx-why-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 13px;
 }
 .mx-why-table th,
@@ -240,8 +249,7 @@ details[open] > summary .mx-toggle-hide {
   font-weight: 700;
 }
 .mx-why-file {
-  width: 30%;
-  max-width: 280px;
+  width: 22%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -251,7 +259,8 @@ details[open] > summary .mx-toggle-hide {
 .mx-why-ok .mx-why-result {
   color: var(--ok);
 }
-.mx-why-guess .mx-why-result {
+.mx-why-guess .mx-why-result,
+.mx-why-guessed .mx-why-result {
   color: #7a5d00;
 }
 .mx-why-missing .mx-why-result {
@@ -259,4 +268,90 @@ details[open] > summary .mx-toggle-hide {
 }
 .mx-why-next .mx-why-result {
   color: var(--muted);
+}
+@media (max-width: 640px) {
+  .mx-why-table th {
+    width: 84px;
+  }
+  .mx-why-result {
+    width: 92px;
+  }
+}
+
+/* "✓ 3 matched · 1 to look at" beside a section's heading: plain coloured words, never a badge. */
+.mx-tally {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.mx-tally-ok {
+  color: var(--ok);
+}
+.mx-tally-danger {
+  color: var(--danger);
+}
+/* "12 not on an engagement": the app's warning colour, not red (owner's decision, 2026-10-19). */
+.mx-tally-warn {
+  color: var(--warn);
+}
+/* A found proof's file, on one line, cut short (in full on hover). */
+.mx-proof-file {
+  display: block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+/* Discard on the Match step's footer: a removal, so a red text link. */
+.mx-discard {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--danger);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mx-discard:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.mx-discard:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A proof found in several payroll runs: one line per run, each with its pay date. */
+.mx-runs {
+  display: grid;
+  gap: 6px;
+}
+.mx-run {
+  display: block;
+}
+.mx-run-label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* A row the owner must look at: one small link that opens its fix, beside the red reason. */
+.mx-resolve {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.mx-resolve:hover {
+  text-decoration: underline;
 }

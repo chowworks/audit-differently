@@ -21,6 +21,7 @@ const travel = () => ({
   amount: 1500,
   narrative: 'Mileage for site visits',
   sortOrder: 2,
+  payroll: [] as string[],
 })
 
 /** A month of the engagement, as its row stands. */
@@ -54,8 +55,36 @@ const mixed = () => [
   month('r-3', '2026-10', 'draft'),
 ]
 
-function service(lines = [travel()], months = drafts(), spending = 0) {
+/** A books' payroll row (imported, kept for payroll reconciliation) on a month, spent against a line. */
+const booksRow = (
+  id: string,
+  monthlyReportId: string,
+  payrollKind: string,
+  budgetLineId: string
+) => ({
+  id,
+  engagementId: 'e-1',
+  monthlyReportId,
+  payrollKind,
+  budgetLineId,
+})
+
+function service(
+  lines = [travel()],
+  months = drafts(),
+  spending = 0,
+  expenses: ReturnType<typeof booksRow>[] = []
+) {
   const rows = scoped(...lines)
+  type Where = { payrollKind: { in: string[] }; monthlyReport?: { status: string } }
+  const others = (where: Where, lineId: string) =>
+    expenses.filter(
+      (e) =>
+        where.payrollKind.in.includes(e.payrollKind) &&
+        e.budgetLineId !== lineId &&
+        (!where.monthlyReport ||
+          months.find((m) => m.id === e.monthlyReportId)?.status === where.monthlyReport.status)
+    )
   const prisma = {
     engagement: scoped(engagement()),
     budgetLine: {
@@ -74,7 +103,23 @@ function service(lines = [travel()], months = drafts(), spending = 0) {
       delete: jest.fn(async () => travel()),
     },
     // How many expenses are spent against the line.
-    expense: { count: jest.fn(async () => spending) },
+    expense: {
+      count: jest.fn(async (args?: { where: Where & { OR?: unknown } }) =>
+        args?.where.payrollKind
+          ? others(
+              args.where,
+              (args.where.OR as { budgetLineId: { not: string } }[])[1]!.budgetLineId.not
+            ).length
+          : spending
+      ),
+      updateMany: jest.fn(
+        async (args: { where: Where & { OR: unknown }; data: { budgetLineId: string } }) => {
+          const found = others(args.where, args.data.budgetLineId)
+          for (const e of found) e.budgetLineId = args.data.budgetLineId
+          return { count: found.length }
+        }
+      ),
+    },
     monthlyReport: {
       findMany: jest.fn(async (args: { where: { status?: { in: string[] } } }) =>
         months
@@ -200,6 +245,8 @@ describe('BudgetService', () => {
           reportLine: 'program-costs',
           amount: '1200.00',
           narrative: 'Classroom rent',
+          // Program Costs takes no payroll by default.
+          payroll: [],
         },
       })
       await s.update(who, 'e-1', 'b-1', { amount: 1800, narrative: 'Mileage for site visits' })
@@ -399,5 +446,94 @@ describe('BudgetService', () => {
     expect(prisma.budgetLine.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ amount: '0.00', narrative: null }),
     })
+  })
+
+  it("moves a payroll kind to the line that takes it, and logs the line's payroll in the screen's words", async () => {
+    const { service: s, prisma, log } = service([{ ...travel(), payroll: ['staff-pay'] }])
+    await s.add(member('owner'), 'e-1', {
+      name: 'Program Costs',
+      reportLine: 'program-costs',
+      amount: 5000,
+      payroll: ['staff-pay', 'staff-taxes'],
+    })
+    // The line that held staff pay gives it up; the new line holds both kinds.
+    expect(prisma.budgetLine.update).toHaveBeenCalledWith({
+      where: { id: 'b-1' },
+      data: { payroll: [] },
+    })
+    expect(prisma.budgetLine.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ payroll: ['staff-pay', 'staff-taxes'] }),
+    })
+    expect(log.entries.at(-1)!.changes).toEqual(
+      expect.arrayContaining([
+        {
+          field: 'Payroll from the match on this line',
+          after: 'Staff pay, Staff taxes and benefits',
+        },
+      ])
+    )
+    await expect(
+      s.update(member('owner'), 'e-1', 'b-1', { payroll: ['salary'] as never })
+    ).rejects.toThrow('Choose payroll this line can hold')
+  })
+
+  it("moves the books' payroll rows of a kind to the line that takes it, in the change, with the months it reopened", async () => {
+    const salaries = {
+      ...travel(),
+      id: 'b-2',
+      name: 'Salaries',
+      reportLine: 'staff-salaries',
+      payroll: [] as string[],
+    }
+    const rows = [
+      booksRow('x-1', 'r-1', 'staff-pay', 'b-1'),
+      booksRow('x-2', 'r-2', 'staff-pay', 'b-1'),
+      booksRow('x-3', 'r-3', 'staff-pay', 'b-1'),
+      booksRow('x-4', 'r-3', 'staff-taxes', 'b-1'),
+    ]
+    const {
+      service: s,
+      prisma,
+      log,
+    } = service(
+      [{ ...travel(), payroll: ['staff-pay', 'staff-taxes'] }, salaries],
+      mixed(),
+      0,
+      rows
+    )
+    await s.update(member('owner'), 'e-1', 'b-2', { payroll: ['staff-pay'] })
+    // Staff pay follows its line, on the submitted and closed months too (the change put them back to draft first);
+    // staff taxes stay with the line that still holds them.
+    expect(rows.map((r) => r.budgetLineId)).toEqual(['b-2', 'b-2', 'b-2', 'b-1'])
+    expect(prisma.expense.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ payrollKind: { in: ['staff-pay'] } }),
+      data: { budgetLineId: 'b-2' },
+    })
+    expect(log.entries.at(-1)!.description).toBe(
+      'Changed Salaries on the approved budget of Coding Pathway; moved 3 imported payroll rows to Salaries'
+    )
+  })
+
+  it("says how many books' payroll rows stayed on a month still locked, and moves nothing when no kind moves", async () => {
+    const {
+      service: s,
+      prisma,
+      log,
+    } = service([{ ...travel(), payroll: ['staff-pay'] }], drafts(), 0, [
+      booksRow('x-1', 'r-1', 'staff-pay', 'b-9'),
+    ])
+    // A closing approved meanwhile: the row's month is locked, so the database keeps it where it was.
+    prisma.expense.updateMany.mockResolvedValueOnce({ count: 0 })
+    await s.add(member('owner'), 'e-1', {
+      name: 'Salaries',
+      reportLine: 'staff-salaries',
+      payroll: ['staff-pay'],
+    })
+    expect(log.entries.at(-1)!.description).toBe(
+      'Added Salaries to the approved budget of Coding Pathway; 1 imported payroll row on a closed or submitted month stayed where it was'
+    )
+    prisma.expense.updateMany.mockClear()
+    await s.update(member('owner'), 'e-1', 'b-1', { amount: 2000 })
+    expect(prisma.expense.updateMany).not.toHaveBeenCalled()
   })
 })

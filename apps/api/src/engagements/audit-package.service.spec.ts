@@ -670,3 +670,102 @@ describe('csv', () => {
     ).toBe(`"-224","-224.00","-2240","'-2+3","'=1+1","'@x","'+5","'\tx","Ledger & Co."`)
   })
 })
+
+describe('AuditPackageService: a workspace payroll file shared by engagements (GitHub issue #22)', () => {
+  // One register filed for the whole workspace, linked from this engagement's participant pay with its highlights.
+  const shared = doc('d-reg-ws', 'September register.pdf', 'payroll-register', {
+    engagementId: null,
+    period: '2026-09',
+    storageKey: `${W}/workspace/2026-09/d-reg-ws.pdf`,
+  })
+  const marks = [{ page: 1, x: 50, y: 640, width: 200, height: 12, text: 'Jordan Sample 280.00' }]
+  const withShared = () => {
+    const e = engagement()
+    const month = e.monthlyReports[0]!
+    return {
+      ...e,
+      monthlyReports: [
+        {
+          ...month,
+          // What the full copy before a deletion also reads of a month.
+          status: 'draft',
+          dueDate: new Date('2026-10-12T00:00:00Z'),
+          submittedAt: null,
+          preparedByName: null,
+          authorizedByName: null,
+          authorizedAt: null,
+          closingNote: null,
+          sentBackReason: null,
+          comments: null,
+          isFinal: false,
+          checks: [],
+          wexPayments: month.wexPayments.map((w) => ({
+            ...w,
+            documents: [
+              ...w.documents.filter((d) => d.purpose !== 'register'),
+              { purpose: 'register', document: shared, mark: marks[0], marks },
+            ],
+          })),
+        },
+      ],
+    }
+  }
+
+  it('files the shared original once, as stored, and the item its own highlighted copy; the deletion copy too', async () => {
+    const prisma = { engagement: { findFirst: jest.fn().mockResolvedValue(withShared()) } }
+    const service = new AuditPackageService(
+      prisma as never,
+      { log: jest.fn() } as never,
+      { read: jest.fn(async (key: string) => Buffer.from(`bytes of ${key}`)) } as never
+    )
+    for (const complete of [false, true]) {
+      const plan = await service.plan(caller('owner'), 'e-1', { complete })
+      const of = plan.objects.filter((o) => o[1] === shared.storageKey).map((o) => o[0])
+      expect(of).toEqual([
+        `Coding Pathway (DEMO-1)/${MONTH}/Payroll and Timesheet Reports/September register.pdf`,
+        expect.stringMatching(
+          /\/WEX Documentation\/Jordan Sample \(900001\)\/Payroll Verification\/Payroll register - September register\.pdf$/
+        ),
+      ])
+      expect([...(plan.marks ?? new Map()).values()]).toContainEqual(marks)
+      // Never filed as an unfiled record of this engagement: it is the workspace's, reached through its link.
+      expect(plan.objects.some((o) => o[0].includes('Unfiled') && o[1] === shared.storageKey)).toBe(
+        false
+      )
+    }
+  })
+
+  it('reaches a workspace payroll file only through a link: one matched to nothing is never in the package', async () => {
+    // The same month with the register linked from nothing: the workspace's file stays out, full copy included.
+    const e = withShared()
+    const month = e.monthlyReports[0]!
+    const unlinked = {
+      ...e,
+      monthlyReports: [
+        {
+          ...month,
+          wexPayments: month.wexPayments.map((w) => ({
+            ...w,
+            documents: w.documents.filter((d) => d.document.id !== shared.id),
+          })),
+        },
+      ],
+    }
+    const prisma = { engagement: { findFirst: jest.fn().mockResolvedValue(unlinked) } }
+    const service = new AuditPackageService(
+      prisma as never,
+      { log: jest.fn() } as never,
+      { read: jest.fn(async (key: string) => Buffer.from(`bytes of ${key}`)) } as never
+    )
+    for (const complete of [false, true]) {
+      const plan = await service.plan(caller('owner'), 'e-1', { complete })
+      expect(plan.objects.some((o) => o[1] === shared.storageKey)).toBe(false)
+    }
+    // The engagement's own documents are asked by the engagement alone (a workspace file has none); a workspace file
+    // comes in only as an item's link.
+    const asked = prisma.engagement.findFirst.mock.calls[0][0] as {
+      include: { documents: unknown }
+    }
+    expect(asked.include.documents).toEqual({ orderBy: { uploadedAt: 'asc' } })
+  })
+})

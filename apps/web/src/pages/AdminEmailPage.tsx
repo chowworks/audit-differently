@@ -347,7 +347,11 @@ function ReceiptsAddresses() {
           )}
         </Card>
         <Card title="Previously used addresses">
-          {done && <Notice tone="info">{done}</Notice>}
+          {done && (
+            <Notice tone="ok" fade>
+              {done}
+            </Notice>
+          )}
           {loadError}
           {!data && !error && <Empty>Loading…</Empty>}
           {data && previous.length === 0 && <Empty>No address has been changed yet.</Empty>}

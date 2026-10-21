@@ -24,6 +24,7 @@ import type {
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
 import { MAX_UPLOAD_BYTES } from '../documents/documents.service'
+import { payrollAiAvailable, payrollAiBeta } from './ai-read-payroll'
 import { PayrollMatchService } from './payroll-match.service'
 import { MAX_PAYROLL_FILES } from './payroll.service'
 
@@ -35,6 +36,15 @@ export class PayrollMatchController {
     private readonly match: PayrollMatchService,
     private readonly callers: CallerService
   ) {}
+
+  /**
+   * Whether payroll files can be read with AI here, and whether it is the beta (#22): the Upload step shows its tick-box
+   * from this, before there is an upload. No workspace data: nothing to log.
+   */
+  @Get('payroll-ai')
+  payrollAi(): { available: boolean; beta: boolean } {
+    return { available: payrollAiAvailable(), beta: payrollAiBeta() }
+  }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('reports/:id/payroll-match')
@@ -85,6 +95,17 @@ export class PayrollMatchController {
   @Get('payroll-match/:runId')
   async get(@UserId() userId: string, @Param('runId') runId: string): Promise<PayrollMatchRunDto> {
     return this.match.get(await this.callers.load(userId), runId)
+  }
+
+  /** Reads up to three files of the match with AI, when the person ticked it; the run as it now matches. */
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
+  @Post('payroll-match/:runId/ai-read')
+  async aiRead(
+    @UserId() userId: string,
+    @Param('runId') runId: string,
+    @Body() body: unknown
+  ): Promise<PayrollMatchRunDto> {
+    return this.match.aiRead(await this.callers.load(userId), runId, body)
   }
 
   /** A file of the run, for the viewer: every payroll file, a pay stub included (owner's decision, 2026-10-16). */

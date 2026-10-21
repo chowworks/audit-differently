@@ -83,7 +83,7 @@ export function OverviewPage() {
         </div>
         <div className="ad-actions">
           <Link to="/engagements/new" className="ad-btn">
-            + Set up an award
+            + Add Engagement
           </Link>
         </div>
       </div>

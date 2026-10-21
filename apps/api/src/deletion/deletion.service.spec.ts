@@ -32,8 +32,18 @@ const record = (extra: Record<string, unknown> = {}) => ({
 
 function setup(opts: { records?: unknown[]; engagements?: number; documents?: number } = {}) {
   const calls: string[] = []
+  const runs: unknown[] = []
+  const unlinked: { id: string }[] = []
   const tx = {
-    document: { deleteMany: jest.fn(async () => void calls.push('tx documents')) },
+    $queryRaw: jest.fn(async () => void calls.push('tx lock files')),
+    payrollMatchRun: {
+      findMany: jest.fn(async () => runs),
+      deleteMany: jest.fn(async () => void calls.push('tx uploads')),
+    },
+    document: {
+      deleteMany: jest.fn(async () => void calls.push('tx documents')),
+      findMany: jest.fn(async () => unlinked),
+    },
     monthlyReport: { deleteMany: jest.fn(async () => void calls.push('tx months')) },
     engagement: { delete: jest.fn(async () => void calls.push('tx engagement')) },
     deletionRecord: { update: jest.fn(async () => void calls.push('tx record')) },
@@ -47,7 +57,10 @@ function setup(opts: { records?: unknown[]; engagements?: number; documents?: nu
     workspace: { ...scoped(workspace), delete: jest.fn(async () => void calls.push('workspace')) },
     monthlyReport: { count: jest.fn().mockResolvedValue(12) },
     participant: { count: jest.fn().mockResolvedValue(30) },
-    document: { count: jest.fn().mockResolvedValue(opts.documents ?? 0), findMany: jest.fn() },
+    document: {
+      count: jest.fn().mockResolvedValue(opts.documents ?? 0),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     deletionRecord: {
       findFirst: records.findFirst,
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -58,10 +71,17 @@ function setup(opts: { records?: unknown[]; engagements?: number; documents?: nu
     },
     $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
   }
-  const log = { log: jest.fn(async () => void calls.push('log')) }
+  const log = {
+    log: jest.fn(async () => void calls.push('log')),
+    also: jest.fn(
+      async (_t: unknown, _c: unknown, e: { description: string }) =>
+        void calls.push(`tx line ${e.description}`)
+    ),
+  }
   const audit = { plan: jest.fn(), stream: jest.fn() }
   const storage = {
     deleteByPrefix: jest.fn(async (p: string) => void calls.push(`files ${p}`)),
+    delete: jest.fn(async (k: string) => void calls.push(`file ${k}`)),
     putFile: jest.fn().mockResolvedValue(undefined),
     read: jest.fn(),
   }
@@ -71,7 +91,7 @@ function setup(opts: { records?: unknown[]; engagements?: number; documents?: nu
     audit as never,
     storage as never
   )
-  return { service, prisma, tx, log, audit, storage, calls }
+  return { service, prisma, tx, log, audit, storage, calls, runs, unlinked }
 }
 
 const noWrites = (s: ReturnType<typeof setup>) => {
@@ -287,7 +307,15 @@ describe('DeletionService: deleting a workspace', () => {
   it('deletes an empty workspace without an export, as trusted work after the files', async () => {
     const s = setup({ documents: 0 })
     await s.service.deleteWorkspace(owner, W, body)
-    expect(s.calls).toEqual(['log', `files ${W}/`, 'tx documents', 'workspace', `files ${W}/`])
+    expect(s.calls).toEqual([
+      'log',
+      `files ${W}/`,
+      'tx uploads',
+      'tx documents',
+      'workspace',
+      `files ${W}/`,
+    ])
+    expect(s.tx.payrollMatchRun.deleteMany).toHaveBeenCalledWith({ where: { workspaceId: W } })
     expect(s.log.log).toHaveBeenCalledWith(
       owner,
       expect.objectContaining({
@@ -306,6 +334,7 @@ describe('DeletionService: deleting a workspace', () => {
     expect(s.calls).toEqual([
       'log',
       `files ${W}/`,
+      'tx uploads',
       'tx documents',
       'tx record',
       'workspace',
@@ -581,5 +610,209 @@ describe('DeletionService: the export', () => {
           'Started downloading the full export of the workspace Riverbend Youth Services before deleting it: 1 file',
       })
     )
+  })
+})
+
+describe('DeletionService: a workspace payroll file shared by engagements (GitHub issue #22)', () => {
+  const owner = member('owner')
+  const shared = (id: string, engagements: string[]) => ({
+    id,
+    workspaceId: W,
+    engagementId: null,
+    storageKey: `${W}/workspace/2026-09/${id}.pdf`,
+    expenses: [],
+    wexPayments: engagements.map((engagementId) => ({
+      wexPayment: { monthlyReport: { engagementId } },
+    })),
+  })
+
+  it('removes a file only this engagement links, before the rows, and keeps one another engagement still links', async () => {
+    const s = setup()
+    s.prisma.document.findMany.mockResolvedValueOnce([
+      shared('d-only-here', [E]),
+      shared('d-also-there', [E, 'e-2']),
+    ])
+    s.unlinked.push({ id: 'd-only-here' })
+    await s.service.deleteEngagement(owner, E, { ...good, deletionId: 'del-1' })
+    // Asked of this engagement's links only, in its workspace.
+    expect(s.prisma.document.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ workspaceId: W, engagementId: null }),
+      })
+    )
+    // The candidate file is locked, the rows go in one transaction, and its object goes only after the commit.
+    expect(s.calls).toEqual([
+      'log',
+      `files ${W}/${E}/`,
+      'tx lock files',
+      'tx documents',
+      'tx months',
+      'tx documents',
+      'tx engagement',
+      'tx record',
+      `file ${W}/workspace/2026-09/d-only-here.pdf`,
+      `files ${W}/${E}/`,
+    ])
+    // The shared file goes only once nothing links it, after the months (and their links) went, read inside the
+    // transaction: only the ids found unlinked there are deleted, rows and objects.
+    expect(s.tx.document.findMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: ['d-only-here'] },
+        engagementId: null,
+        expenses: { none: {} },
+        wexPayments: { none: {} },
+        staffPayProofs: { none: {} },
+        payLines: { none: { notFundedReason: { not: null } } },
+      },
+      select: { id: true },
+    })
+    expect(s.tx.document.deleteMany).toHaveBeenLastCalledWith({
+      where: { id: { in: ['d-only-here'] } },
+    })
+    expect(s.log.log).toHaveBeenCalledWith(
+      owner,
+      expect.objectContaining({
+        description:
+          'Deleted the engagement Coding Pathway permanently, after its full export, with 1 workspace payroll file no other engagement uses',
+      })
+    )
+  })
+
+  it('keeps the file, row and object, when another engagement linked it before the delete took its lock', async () => {
+    const s = setup()
+    s.prisma.document.findMany.mockResolvedValueOnce([shared('d-only-here', [E])])
+    // Nothing unlinked inside the transaction: a link was made meanwhile.
+    await s.service.deleteEngagement(owner, E, { ...good, deletionId: 'del-1' })
+    expect(s.tx.document.deleteMany).toHaveBeenCalledTimes(1)
+    expect(s.calls.filter((c) => c.startsWith('file '))).toEqual([])
+  })
+
+  it('removes no object when the transaction fails', async () => {
+    const s = setup()
+    s.prisma.document.findMany.mockResolvedValueOnce([shared('d-only-here', [E])])
+    s.unlinked.push({ id: 'd-only-here' })
+    s.tx.engagement.delete.mockRejectedValueOnce(new Error('db down'))
+    await expect(
+      s.service.deleteEngagement(owner, E, { ...good, deletionId: 'del-1' })
+    ).rejects.toThrow('db down')
+    expect(s.storage.delete).not.toHaveBeenCalled()
+  })
+
+  it('discards an unsaved upload holding its documents or a file that goes, before the documents, with a line each', async () => {
+    const s = setup()
+    s.prisma.document.findMany.mockResolvedValueOnce([shared('d-only-here', [E])])
+    s.unlinked.push({ id: 'd-only-here' })
+    s.runs.push(
+      {
+        id: 'run-month',
+        monthlyReportId: 'r-9',
+        period: null,
+        monthlyReport: { period: '2026-09' },
+        files: [{ documentId: null, storageKey: `${W}/${E}/2026-09/staged.pdf` }],
+      },
+      {
+        id: 'run-ws',
+        monthlyReportId: null,
+        period: '2026-09',
+        monthlyReport: null,
+        files: [
+          { documentId: 'd-only-here', storageKey: `${W}/workspace/2026-09/d-only-here.pdf` },
+          { documentId: null, storageKey: `${W}/workspace/2026-09/staged.pdf` },
+        ],
+      }
+    )
+    await s.service.deleteEngagement(owner, E, { ...good, deletionId: 'del-1' })
+    expect(s.tx.payrollMatchRun.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          workspaceId: W,
+          OR: [
+            { monthlyReport: { engagementId: E } },
+            { files: { some: { documentId: { in: ['d-only-here'] } } } },
+          ],
+        },
+      })
+    )
+    expect(s.tx.payrollMatchRun.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['run-month', 'run-ws'] } },
+    })
+    expect(s.calls).toEqual([
+      'log',
+      `files ${W}/${E}/`,
+      'tx lock files',
+      'tx uploads',
+      'tx line Removed an unsaved payroll match for September 2026 (1 staged file) with the engagement Coding Pathway',
+      'tx line Removed an unsaved workspace payroll match for September 2026 (1 staged file) with the engagement Coding Pathway',
+      'tx documents',
+      'tx months',
+      'tx documents',
+      'tx engagement',
+      'tx record',
+      `file ${W}/workspace/2026-09/d-only-here.pdf`,
+      // The workspace run's staged object; the month run's is in the engagement's folder, swept below.
+      `file ${W}/workspace/2026-09/staged.pdf`,
+      `files ${W}/${E}/`,
+    ])
+  })
+
+  it('keeps a file only this engagement links while staff payroll proof still uses it, and says so (B10)', async () => {
+    const s = setup()
+    s.prisma.document.findMany.mockResolvedValueOnce([
+      { ...shared('d-staff', [E]), _count: { staffPayProofs: 2 } },
+    ])
+    await s.service.deleteEngagement(owner, E, { ...good, deletionId: 'del-1' })
+    expect(s.tx.document.deleteMany).toHaveBeenCalledTimes(1)
+    expect(s.calls.filter((c) => c.startsWith('file '))).toEqual([])
+    expect(s.log.log).toHaveBeenCalledWith(
+      owner,
+      expect.objectContaining({
+        description:
+          'Deleted the engagement Coding Pathway permanently, after its full export; 1 workspace payroll file it alone linked kept, as staff payroll proof still uses it',
+      })
+    )
+  })
+
+  it('keeps a file only this engagement links while a pay on it is marked not grant-funded, and says so', async () => {
+    const s = setup()
+    s.prisma.document.findMany.mockResolvedValueOnce([
+      { ...shared('d-decided', [E]), _count: { staffPayProofs: 0, payLines: 1 } },
+      { ...shared('d-plain', [E]), _count: { staffPayProofs: 0, payLines: 0 } },
+    ])
+    s.unlinked.push({ id: 'd-plain' })
+    await s.service.deleteEngagement(owner, E, { ...good, deletionId: 'del-1' })
+    // Only decisions count: the pay lines asked for are those marked not grant-funded.
+    expect(s.prisma.document.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          _count: {
+            select: {
+              staffPayProofs: true,
+              payLines: { where: { notFundedReason: { not: null } } },
+            },
+          },
+        }),
+      })
+    )
+    // The file with no decision goes; the decided one is never a candidate.
+    expect(s.tx.document.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: { in: ['d-plain'] } }) })
+    )
+    expect(s.calls.filter((c) => c.startsWith('file '))).toEqual([
+      `file ${W}/workspace/2026-09/d-plain.pdf`,
+    ])
+    expect(s.log.log).toHaveBeenCalledWith(
+      owner,
+      expect.objectContaining({
+        description:
+          'Deleted the engagement Coding Pathway permanently, after its full export, with 1 workspace payroll file no other engagement uses; 1 workspace payroll file it alone linked kept, as an owner marked pays on it not grant-funded',
+      })
+    )
+  })
+
+  it('leaves every workspace file alone when this engagement links none', async () => {
+    const s = setup()
+    await s.service.deleteEngagement(owner, E, { ...good, deletionId: 'del-1' })
+    expect(s.calls.filter((c) => c.startsWith('file '))).toEqual([])
+    expect(s.tx.document.deleteMany).toHaveBeenCalledTimes(1)
   })
 })

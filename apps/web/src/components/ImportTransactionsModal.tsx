@@ -3,11 +3,13 @@ import {
   IMPORT_FIELD_LABELS,
   IMPORT_FIELDS,
   IMPORT_SKIP,
+  PAYROLL_BUDGET_KIND_LABELS,
   REPORT_LINE_LABELS,
   type ImportCategories,
   type ImportColumns,
   type ImportField,
   type ImportFileDto,
+  type ImportPayrollRowDto,
   type ImportPreviewDto,
   type ImportRequest,
   type ImportResultDto,
@@ -19,7 +21,14 @@ import { HandCard } from '@/components/HandCard'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Chip, ErrorNote, Field, Modal, Stepper, inputClass } from '@/components/ui'
 
-const STEPS = ['File', 'Columns', 'Budget lines', 'Preview', 'Done'] as const
+const STEPS = [
+  'File',
+  'Columns',
+  'Payroll transactions',
+  'Budget lines',
+  'Preview',
+  'Done',
+] as const
 type Step = (typeof STEPS)[number]
 
 // What each column is often called in an export, so the person finds it in their own file.
@@ -112,6 +121,9 @@ export function ImportTransactionsModal({
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [bulk, setBulk] = useState('')
   const [rowSearch, setRowSearch] = useState('')
+  /** "Payroll transactions confirmation": the person's answers, by line in the file (true: payroll). */
+  const [payroll, setPayroll] = useState<Record<string, boolean>>({})
+  const [payrollSearch, setPayrollSearch] = useState('')
   const base = `/engagements/${engagementId}/imports`
 
   const run = async (fn: () => Promise<void>) => {
@@ -253,6 +265,9 @@ export function ImportTransactionsModal({
       const got = await api.upload<ImportFileDto>(`${base}/read`, form())
       setInfo(got)
       setAiSuggested(null)
+      // The payroll answers are by line of the file read: a new file starts with none.
+      setPayroll({})
+      setPayrollSearch('')
       setColumns(outOnly(got.guess))
       const saved = got.mappings.find((m) => m.id === got.mappingId)
       setCategories(saved?.categories ?? {})
@@ -269,7 +284,7 @@ export function ImportTransactionsModal({
     run(async () => {
       const got = await api.upload<ImportPreviewDto>(
         `${base}/preview`,
-        form({ columns, categories, lines: columns.category ? undefined : rowLines })
+        form({ columns, categories, lines: columns.category ? undefined : rowLines, payroll })
       )
       // Values that name a budget line are pre-filled; the person confirms them and maps the rest.
       setCategories((c) => {
@@ -278,6 +293,16 @@ export function ImportTransactionsModal({
         return next
       })
       setPreview(got)
+      setStep(got.payroll.length ? 'Payroll transactions' : 'Budget lines')
+    })
+  const toBudgetLines = () =>
+    run(async () => {
+      setPreview(
+        await api.upload<ImportPreviewDto>(
+          `${base}/preview`,
+          form({ columns, categories, lines: columns.category ? undefined : rowLines, payroll })
+        )
+      )
       setStep('Budget lines')
     })
   const toPreview = () =>
@@ -285,7 +310,7 @@ export function ImportTransactionsModal({
       setPreview(
         await api.upload<ImportPreviewDto>(
           `${base}/preview`,
-          form({ columns, categories, lines: columns.category ? undefined : rowLines })
+          form({ columns, categories, lines: columns.category ? undefined : rowLines, payroll })
         )
       )
       setStep('Preview')
@@ -298,6 +323,7 @@ export function ImportTransactionsModal({
           columns,
           categories,
           lines: columns.category ? undefined : rowLines,
+          payroll,
           reportId,
           aiSuggested: aiSuggested === 'yes',
           ...(save ? { saveAs } : {}),
@@ -465,10 +491,44 @@ export function ImportTransactionsModal({
             }}
           >
             <Button kind="primary" onClick={toCategories} disabled={busy || problemCount > 0}>
-              Next: budget lines
+              Next
             </Button>
           </Actions>
         </div>
+      )}
+
+      {step === 'Payroll transactions' && preview && (
+        <PayrollConfirmation
+          rows={preview.payroll}
+          others={preview.assignable}
+          answers={payroll}
+          search={payrollSearch}
+          onSearch={setPayrollSearch}
+          onAnswer={(line, yes) => setPayroll((a) => ({ ...a, [line]: yes }))}
+          onMark={(line) =>
+            run(async () => {
+              const next = { ...payroll, [line]: true }
+              setPayroll(next)
+              setPreview(
+                await api.upload<ImportPreviewDto>(
+                  `${base}/preview`,
+                  form({
+                    columns,
+                    categories,
+                    lines: columns.category ? undefined : rowLines,
+                    payroll: next,
+                  })
+                )
+              )
+            })
+          }
+        >
+          <Actions onClose={onClose} busy={busy} onBack={() => setStep('Columns')}>
+            <Button kind="primary" onClick={toBudgetLines} disabled={busy}>
+              Next: budget lines
+            </Button>
+          </Actions>
+        </PayrollConfirmation>
       )}
 
       {step === 'Budget lines' && info && preview && (
@@ -646,7 +706,11 @@ export function ImportTransactionsModal({
               </div>
             </>
           )}
-          <Actions onClose={onClose} busy={busy} onBack={() => setStep('Columns')}>
+          <Actions
+            onClose={onClose}
+            busy={busy}
+            onBack={() => setStep(preview.payroll.length ? 'Payroll transactions' : 'Columns')}
+          >
             <Button kind="primary" onClick={toPreview} disabled={busy || linesLeft > 0}>
               Next: preview
             </Button>
@@ -656,11 +720,11 @@ export function ImportTransactionsModal({
 
       {step === 'Preview' && preview && (
         <div className="grid gap-4">
-          {preview.months.length === 0 ? (
+          {preview.months.length === 0 && preview.updates.length === 0 ? (
             <p className="ad-field-error-sum" role="status">
               No row is ready to import. Each one is listed below with why.
             </p>
-          ) : (
+          ) : preview.months.length === 0 ? null : (
             <div className="ad-tablewrap">
               <table className="ad-table">
                 <thead>
@@ -685,6 +749,12 @@ export function ImportTransactionsModal({
             </div>
           )}
           {preview.rows.length > 0 && <RowsTable title="To import" rows={preview.rows} />}
+          {preview.updates.length > 0 && (
+            <RowsTable
+              title="Imported before: payroll choice changed"
+              rows={preview.updates.map((u) => ({ ...u, reason: u.change }))}
+            />
+          )}
           {preview.notImported.length > 0 && (
             <RowsTable title="Not imported" rows={preview.notImported} />
           )}
@@ -708,10 +778,15 @@ export function ImportTransactionsModal({
             <Button
               kind="primary"
               onClick={doImport}
-              disabled={busy || preview.rows.length === 0 || (save && !saveAs.trim())}
+              disabled={
+                busy ||
+                (preview.rows.length === 0 && preview.updates.length === 0) ||
+                (save && !saveAs.trim())
+              }
             >
-              Import {preview.rows.length}{' '}
-              {preview.rows.length === 1 ? 'transaction' : 'transactions'}
+              {preview.rows.length === 0
+                ? `Change ${preview.updates.length} ${preview.updates.length === 1 ? 'line' : 'lines'}`
+                : `Import ${preview.rows.length} ${preview.rows.length === 1 ? 'transaction' : 'transactions'}${preview.updates.length ? `, change ${preview.updates.length}` : ''}`}
             </Button>
           </Actions>
         </div>
@@ -737,6 +812,12 @@ export function ImportTransactionsModal({
               <span className="ad-tile-label">Total</span>
               <span className="ad-tile-value">{money(result.total)}</span>
             </div>
+            {result.updated > 0 && (
+              <div className="ad-tile ad-tile-ok">
+                <span className="ad-tile-label">Payroll choice changed</span>
+                <span className="ad-tile-value">{result.updated}</span>
+              </div>
+            )}
             <div className={`ad-tile ${result.notImported ? 'ad-tile-warn' : ''}`}>
               <span className="ad-tile-label">Not imported</span>
               <span className="ad-tile-value">{result.notImported}</span>
@@ -829,6 +910,133 @@ function RowsTable({ title, rows }: { title: string; rows: ImportRowDto[] }) {
       {rows.length > shown.length && (
         <p className="mt-1 text-sm text-soft">And {rows.length - shown.length} more.</p>
       )}
+    </div>
+  )
+}
+
+/**
+ * "Payroll transactions confirmation" (owner's decisions, 2026-10-20): the rows that look like payroll (salaries,
+ * payroll taxes, benefits, work-experience pay, by their account or category). They are kept out of expenses and
+ * tracked for payroll reconciliation, so the pay is not counted twice: each goes to the budget line ticked for its kind
+ * and counts there only until the payroll match covers the month. The person unticks any that are not payroll, and can
+ * mark more.
+ */
+function PayrollConfirmation({
+  rows,
+  others,
+  answers,
+  search,
+  onSearch,
+  onAnswer,
+  onMark,
+  children,
+}: {
+  rows: ImportPayrollRowDto[]
+  others: ImportRowDto[]
+  answers: Record<string, boolean>
+  search: string
+  onSearch: (q: string) => void
+  onAnswer: (line: number, yes: boolean) => void
+  /** Another row marked as payroll: it joins the list. */
+  onMark: (line: number) => void
+  children: React.ReactNode
+}) {
+  const on = (r: ImportPayrollRowDto) => answers[String(r.line)] ?? r.included
+  const counted = rows.filter(on)
+  const q = search.trim().toLowerCase()
+  const more = q
+    ? others
+        .filter((r) =>
+          [r.vendor, r.memo, r.category, r.date ?? '', r.amount == null ? '' : r.amount.toFixed(2)]
+            .join(' ')
+            .toLowerCase()
+            .includes(q)
+        )
+        .slice(0, 20)
+    : []
+  return (
+    <div className="grid gap-4">
+      <p className="text-sm">
+        <b>
+          These look like payroll, so they are not imported as expenses: they are tracked for
+          payroll reconciliation, and the pay is never counted twice.
+        </b>{' '}
+        Until the month&apos;s payroll is matched, each counts on the budget line that holds its
+        kind of payroll. Untick any that are not payroll.
+      </p>
+      <p className="text-sm text-soft">
+        {counted.length} of {rows.length} counted as payroll ·{' '}
+        {money(counted.reduce((t, r) => t + (r.amount ?? 0), 0))}
+      </p>
+      <div className="ad-tablewrap ad-import-rows">
+        <table className="ad-table">
+          <thead>
+            <tr>
+              <th>Payroll</th>
+              <th>Date</th>
+              <th>Payee</th>
+              <th>Account</th>
+              <th className="ad-num">Amount</th>
+              <th>Counts on</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.line}>
+                <td>
+                  <input
+                    type="checkbox"
+                    aria-label={`Line ${r.line} is payroll`}
+                    checked={on(r)}
+                    onChange={(e) => onAnswer(r.line, e.target.checked)}
+                  />
+                </td>
+                <td className="whitespace-nowrap">{r.date ? shortDate(r.date) : ''}</td>
+                <td>{r.vendor}</td>
+                <td className="text-sm">
+                  {r.account ?? r.category}
+                  <span className="ad-table-sub">{PAYROLL_BUDGET_KIND_LABELS[r.kind]}</span>
+                </td>
+                <td className="ad-num">{r.amount == null ? '' : money(r.amount)}</td>
+                <td className="text-sm">
+                  {r.budgetLineName ?? (
+                    <span className="text-danger">
+                      No budget line holds {PAYROLL_BUDGET_KIND_LABELS[r.kind].toLowerCase()}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <details className="ss-help">
+        <summary>Mark another row as payroll</summary>
+        <div className="mt-2 grid gap-2">
+          <input
+            className={inputClass}
+            placeholder="Search payee, description, category or amount"
+            value={search}
+            onChange={(e) => onSearch(e.target.value)}
+          />
+          {more.length > 0 && (
+            <ul className="grid gap-1 text-sm">
+              {more.map((r) => (
+                <li key={r.line} className="flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    {r.date ? shortDate(r.date) : ''} · {r.vendor} ·{' '}
+                    {r.amount == null ? '' : money(r.amount)}
+                  </span>
+                  <Button size="sm" kind="navy" onClick={() => onMark(r.line)}>
+                    Payroll
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </details>
+      {children}
     </div>
   )
 }

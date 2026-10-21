@@ -5,6 +5,7 @@ import 'reflect-metadata'
 import {
   DOCUMENT_SENSITIVITY,
   REPORT_LINE_LABELS,
+  payrollDefaults,
   type ReportLine,
   type DocumentKind,
   type EligibilityItem,
@@ -27,12 +28,28 @@ import {
   type BankRow,
   type PayRun,
 } from './demo-payroll'
+import { RUNS as SAMPLE_RUNS, stubPdf as sampleStubPdf } from './payroll-workspace-sample'
+
+/** The workspace payroll sample's first September run (paid 09/11): the seed's staff charges for it are dated so. */
+const SAMPLE_RUN_1 = SAMPLE_RUNS[0]!
+
+/**
+ * A participant's pay stub for a run: the workspace payroll sample's own file when the sample pays them for the same
+ * pay period, so the match finds the bookkeeper's copy as the same document rather than a second stub.
+ */
+const stubOf = (run: PayRun, line: PayRun['lines'][number]) => {
+  const sample = SAMPLE_RUNS.find((r) => r.start === run.start && r.end === run.end)
+  const p = sample?.people.find((x) => x.name === line.name)
+  return sample && p ? sampleStubPdf(sample, p) : stubPdf(run, line)
+}
 
 /**
  * The fictional demo. `seedDemoWorkspace` makes one workspace, Riverbend Youth Services, with its engagement
  * DEMO-26IS-RYS: three months (July and August submitted, August reopened once and corrected; September a draft with
  * real problems to fix), payroll proof highlighted the way "Match payroll & timecards" saves it, receipts matched,
- * a saved import mapping, tags, participants with eligibility files, and the demo personas. It is the only part
+ * a saved import mapping, tags, participants with eligibility files, and the demo personas; and a second engagement,
+ * DEMO-26AT-RYS Adult IT Training, with a September draft whose staff charge shares staff with In-School Youth (the
+ * workspace payroll tour, with apps/web/public/samples/payroll-workspace-sample.zip). It is the only part
  * that may run in production (`scripts/demo-seed.ts`), and it refuses a workspace that is not the demo.
  * `main` (the dev seed, `db:seed` and `demo:reset`) adds a second workspace, Harbor Tech, and the emailed-receipts
  * queue, and never runs in production. Nothing here comes from a real document (CLAUDE.md, "Data rules").
@@ -134,11 +151,15 @@ async function engagement(
     update: data,
     create: { workspaceId: ws.id, number, ...data },
   })
+  // Which line holds each kind of the match's payroll, as a new engagement's lines would.
+  const payroll = payrollDefaults(
+    budget.map(([reportLine]) => ({ reportLine: String(reportLine) }))
+  )
   for (const [i, [reportLine, amount, narrative]] of budget.entries()) {
     // One line per line of the monthly report, named as the report names it.
     const name = REPORT_LINE_LABELS[reportLine as ReportLine]
     const line = await prisma.budgetLine.findFirst({ where: { engagementId: c.id, name } })
-    const data = { name, reportLine, amount, narrative, sortOrder: i }
+    const data = { name, reportLine, amount, narrative, sortOrder: i, payroll: payroll[i]! }
     if (line) await prisma.budgetLine.update({ where: { id: line.id }, data })
     else await prisma.budgetLine.create({ data: { engagementId: c.id, ...data } })
   }
@@ -253,6 +274,11 @@ type Line = {
   /** How the bank statement words it, when the line is on it but not (yet) linked to it, or worded its own way. */
   bank?: string
   tags?: string[]
+  /**
+   * A books' payroll transaction (owner's decisions, 2026-10-20): the payroll provider's run as the accounting export has
+   * it, imported as payroll. It counts on the budget until the payroll match covers that kind of payroll on the month.
+   */
+  payrollKind?: 'staff-pay' | 'staff-taxes' | 'participant-pay' | 'participant-taxes'
 }
 /** The budget line a demo expense is spent against: its engagement's line for the same line of the monthly report. */
 function budgetLineOf(
@@ -361,6 +387,7 @@ async function month(
       allocationType: l.type,
       allocationNote: l.note ?? null,
       tags: l.tags ?? [],
+      payrollKind: l.payrollKind ?? null,
     }
     const e = await prisma.expense.upsert({
       where: {
@@ -516,7 +543,7 @@ async function month(
       'paystub',
       `stub-${w.p.participantId}`,
       `${w.p.displayName} pay stub ${period}.pdf`,
-      await stubPdf(run, line)
+      await stubOf(run, line)
     )
     const item: ProofItem = {
       target: 'wex',
@@ -640,7 +667,11 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
       authorizerOrganization: DEMO_WORKSPACE_NAME,
     },
     [
-      ['staff-salaries', 18000, 'Program coordinator, half time.'],
+      [
+        'staff-salaries',
+        18000,
+        'Program coordinator, half time, and a share of the lead instructor and case manager.',
+      ],
       [
         'program-costs',
         92000,
@@ -781,12 +812,13 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
     date,
     vendor: 'PayPeople Payroll',
     memo: 'Work experience wages',
-    account: '63103 Salaries - WEX',
+    account: '63103 Payroll Expenses:Salaries - Work Experience (WEX)',
     total,
     allocated: total,
     type: 'direct',
     line: 'wex',
     docs,
+    payrollKind: 'participant-pay',
     ...(run ? { bank: `ACH DEBIT PAYPEOPLE WEX WAGES ${run.runId}` } : {}),
     tags: [youth],
   })
@@ -795,14 +827,40 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
     date: run.payDate,
     vendor: 'PayPeople Payroll',
     memo: `Program coordinator wages, pay period ${run.start} to ${run.end}`,
-    account: '60100 Salaries - Staff',
+    account: '63102 Payroll Expenses:Salaries - Employees',
     total: 1500,
     allocated: 1500,
     type: 'direct',
     line: 'staff-salaries',
     docs,
+    payrollKind: 'staff-pay',
     bank: `ACH DEBIT PAYPEOPLE STAFF WAGES ${run.runId}`,
     tags: [youth],
+  })
+  /** A run's employer taxes and benefits as the books have them: one line per run and kind of payroll (7.65%). */
+  const taxes = (
+    item: string,
+    date: string,
+    of: number,
+    kind: 'staff-taxes' | 'participant-taxes',
+    docs: Proof[],
+    tags: string[]
+  ): Line => ({
+    item,
+    date,
+    vendor: 'PayPeople Payroll',
+    memo: `Employer payroll taxes, run paid ${date}`,
+    account:
+      kind === 'staff-taxes'
+        ? '63202 Payroll Expenses:Payroll Taxes:Employees - Taxes'
+        : '63203 Payroll Expenses:Payroll Taxes:Work Experience (WEX) - Taxes',
+    total: Math.round(of * 0.0765 * 100) / 100,
+    allocated: Math.round(of * 0.0765 * 100) / 100,
+    type: 'direct',
+    line: kind === 'staff-taxes' ? 'staff-salaries' : 'wex',
+    docs,
+    payrollKind: kind,
+    tags,
   })
   const payrollRows = (run: PayRun): BankRow[] => [
     {
@@ -1026,6 +1084,60 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
           tags: [youth],
         },
         staff('RYS-18', sepRun, ['timesheet', 'register']),
+        // Each run's employer taxes, as the books have them (owner's decisions, 2026-10-20): staff and work experience.
+        // They add up to the workspace payroll sample's runs, except the coordinator's (RYS-18): on the books, not in the
+        // sample's files, the one difference the reconciliation shows.
+        taxes(
+          'RYS-22',
+          sepRun.payDate,
+          1500 + 1545,
+          'staff-taxes',
+          ['timesheet', 'register'],
+          [youth]
+        ),
+        taxes('RYS-23', SAMPLE_RUN_1.payDate, 1455, 'staff-taxes', [], [youth]),
+        // The sample's first run's work-experience pay (Jordan, Riley and Casey, $392.00) and its taxes.
+        wex('RYS-25', SAMPLE_RUN_1.payDate, 392, []),
+        taxes('RYS-26', SAMPLE_RUN_1.payDate, 392, 'participant-taxes', [], [youth]),
+        taxes(
+          'RYS-24',
+          sepRun.payDate,
+          784,
+          'participant-taxes',
+          ['timesheet', 'register'],
+          [youth]
+        ),
+        // The lead instructor's and case manager's share, proved by the workspace payroll sample
+        // (apps/web/public/samples/payroll-workspace-sample.zip) once the owner tags them in the tour: one charge per
+        // pay run of the sample, each dated its run's pay date (RYS-21 the run paid 09/11, RYS-20 the one paid 09/25).
+        {
+          item: 'RYS-20',
+          date: sepRun.payDate,
+          vendor: 'PayPeople Payroll',
+          memo: `Lead instructor and case manager wages, pay period ${sepRun.start} to ${sepRun.end}`,
+          account: '63102 Payroll Expenses:Salaries - Employees',
+          total: 1545,
+          allocated: 1545,
+          type: 'direct',
+          line: 'staff-salaries',
+          payrollKind: 'staff-pay',
+          docs: [],
+          tags: [youth],
+        },
+        {
+          item: 'RYS-21',
+          date: SAMPLE_RUN_1.payDate,
+          vendor: 'PayPeople Payroll',
+          memo: `Lead instructor and case manager wages, pay period ${SAMPLE_RUN_1.start} to ${SAMPLE_RUN_1.end}`,
+          account: '63102 Payroll Expenses:Salaries - Employees',
+          total: 1455,
+          allocated: 1455,
+          type: 'direct',
+          line: 'staff-salaries',
+          payrollKind: 'staff-pay',
+          docs: [],
+          tags: [youth],
+        },
         {
           item: 'RYS-19',
           date: '2026-09-04',
@@ -1161,6 +1273,91 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
     },
   })
 
+  // ── A second engagement ── Adult IT Training shares Riverbend's staff with In-School Youth, for the workspace payroll
+  // tour (GitHub issue #22): its September staff charge is covered by its own tagged staff's pay, but the two
+  // engagements together charge more than the three staff were paid. Its staff budget runs over in September. No staff
+  // or tags are seeded: the owner adds them in the tour, from the workspace payroll sample.
+  const ait = await engagement(
+    ws,
+    'DEMO-26AT-RYS',
+    'contract',
+    'Adult IT Training',
+    ['funding-source:adult-training-fund'],
+    27500,
+    {
+      preparerName: 'Dana Okafor',
+      preparerOrganization: DEMO_WORKSPACE_NAME,
+      authorizerName: 'Sam Whitfield',
+      authorizerOrganization: DEMO_WORKSPACE_NAME,
+    },
+    [
+      [
+        'staff-salaries',
+        3500,
+        'Instructor time for the first cohort; more staff time waits on a budget amendment.',
+      ],
+      ['program-costs', 24000, 'Course licenses, lab equipment and certification vouchers.'],
+      ['indirect', 0, 'Not claimed.'],
+    ]
+  )
+  const adult = 'funding-source:adult-training-fund'
+  await month(
+    ws,
+    ait.id,
+    '2026-09',
+    {
+      status: 'draft',
+      lines: [
+        // The lead instructor's and bootcamp leader's wages, one charge per pay run of the workspace payroll sample.
+        {
+          item: 'AIT-1',
+          date: sepRun.payDate,
+          vendor: 'PayPeople Payroll',
+          memo: `Lead instructor and bootcamp leader wages, pay period ${sepRun.start} to ${sepRun.end}`,
+          account: '63102 Payroll Expenses:Salaries - Employees',
+          total: 1600,
+          allocated: 1600,
+          type: 'direct',
+          line: 'staff-salaries',
+          payrollKind: 'staff-pay',
+          docs: [],
+          tags: [adult],
+        },
+        {
+          item: 'AIT-3',
+          date: SAMPLE_RUN_1.payDate,
+          vendor: 'PayPeople Payroll',
+          memo: `Lead instructor and bootcamp leader wages, pay period ${SAMPLE_RUN_1.start} to ${SAMPLE_RUN_1.end}`,
+          account: '63102 Payroll Expenses:Salaries - Employees',
+          total: 1600,
+          allocated: 1600,
+          type: 'direct',
+          line: 'staff-salaries',
+          payrollKind: 'staff-pay',
+          docs: [],
+          tags: [adult],
+        },
+        // Each run's employer taxes on the lead instructor's and bootcamp leader's wages, as the books have them.
+        taxes('AIT-4', sepRun.payDate, 1600, 'staff-taxes', [], [adult]),
+        taxes('AIT-5', SAMPLE_RUN_1.payDate, 1600, 'staff-taxes', [], [adult]),
+        {
+          item: 'AIT-2',
+          date: '2026-09-10',
+          vendor: 'Coursely Business',
+          memo: 'Course licenses, 12 seats',
+          account: '63500 Training Materials',
+          total: 216,
+          allocated: 216,
+          type: 'direct',
+          line: 'program-costs',
+          docs: ['invoice', 'payment'],
+          tags: [adult],
+        },
+      ],
+    },
+    reader
+  )
+
   // ── Emailed receipts ── Riverbend's receipts address and the engagement's subject-line code.
   if (!riverbend.receiptsAddress || riverbend.receiptsAddress !== DEMO_RECEIPTS_ADDRESS) {
     // demo:reset deleted the last demo workspace, which left its address in the history as previously used
@@ -1184,6 +1381,7 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
     })
   }
   await prisma.engagement.update({ where: { id: rys.id }, data: { code: 'RYS26' } })
+  await prisma.engagement.update({ where: { id: ait.id }, data: { code: 'AIT26' } })
 
   // Checks for the demo's months only, and a little access history (people named by email, as the API writes them).
   for (const r of await prisma.monthlyReport.findMany({
@@ -1448,7 +1646,7 @@ async function main() {
     })
 
   console.log(
-    'Seeded Riverbend (3 months, 3 participants, payroll proof highlighted) and Harbor Tech (1 month). Personas: pending-demo-dana, pending-demo-sam, pending-demo-jules, pending-demo-lee'
+    'Seeded Riverbend (In-School Youth: 3 months, 3 participants, payroll proof highlighted; Adult IT Training: September) and Harbor Tech (1 month). Personas: pending-demo-dana, pending-demo-sam, pending-demo-jules, pending-demo-lee'
   )
 }
 

@@ -130,6 +130,7 @@ export class WorkspacesService {
       readEmailedReceiptsWithAi: boolean
       termsAcceptedAt?: Date | null
       _count: { memberships: number; engagements: number }
+      bookkeepersSeeStaffPayroll?: boolean
     }
   ): WorkspaceDto {
     return {
@@ -146,6 +147,7 @@ export class WorkspacesService {
       readEmailedReceiptsWithAi: w.readEmailedReceiptsWithAi,
       aiAvailable: aiConfigured(),
       termsAcceptedAt: w.termsAcceptedAt?.toISOString() ?? null,
+      bookkeepersSeeStaffPayroll: w.bookkeepersSeeStaffPayroll ?? true,
     }
   }
 

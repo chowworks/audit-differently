@@ -17,6 +17,7 @@ import {
   type EngagementSummary,
   type LoggedChange,
   type ParticipantDto,
+  type PayrollBudgetKind,
   type ReportLine,
   type ReportStatus,
   type ReportSummary,
@@ -29,6 +30,12 @@ import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { changesOf, howMany, monthName, type Fields } from '../core/changes'
 import { documentDto } from '../documents/document.dto'
 import { PrismaService } from '../prisma/prisma.service'
+import {
+  countsOnBudget,
+  holdsPayroll,
+  participantPaySpend,
+  payrollCovers,
+} from '../reports/report-lines'
 import { allTagTypes, cleanTags, tagWords } from '../workspaces/tags'
 import { cleanEligibilityItems, eligibilityItemsOf } from './eligibility'
 
@@ -244,15 +251,46 @@ export class EngagementsService {
     })
     if (!c) throw new NotFoundException()
     // What was charged to each budget line to date, every month together.
-    const spentByLine = new Map(
-      (
-        await this.prisma.expense.groupBy({
-          by: ['budgetLineId'],
-          where: { engagementId: c.id, ...tenantWhere(caller) },
-          _sum: { allocatedAmount: true },
-        })
-      ).map((g) => [g.budgetLineId, Number(g._sum.allocatedAmount ?? 0)])
+    const [spent, paid] = await Promise.all([
+      this.prisma.expense.findMany({
+        where: { engagementId: c.id, ...tenantWhere(caller) },
+        select: {
+          reportLine: true,
+          budgetLineId: true,
+          allocatedAmount: true,
+          monthlyReportId: true,
+          payrollKey: true,
+          payrollKind: true,
+          account: true,
+          memo: true,
+        },
+      }),
+      this.prisma.wexPayment.groupBy({
+        by: ['monthlyReportId'],
+        where: { monthlyReport: { engagementId: c.id }, ...tenantWhere(caller) },
+        _sum: { grossAmount: true },
+        _count: { _all: true },
+      }),
+    ])
+    // A books' payroll transaction stops counting once the match covers its kind of payroll on its month; the
+    // participants' pay counts on the line that holds it.
+    const covers = payrollCovers(
+      spent,
+      new Map(paid.map((g) => [g.monthlyReportId, g._count._all] as const)),
+      () => holdsPayroll(c.budgetLines, 'participant-pay')
     )
+    const spentByLine = new Map<string | null, number>()
+    for (const e of [
+      ...spent.filter((x) => countsOnBudget(x, covers.get(x.monthlyReportId))),
+      ...participantPaySpend(
+        c.budgetLines,
+        paid.reduce((t, g) => t + Number(g._sum.grossAmount ?? 0), 0)
+      ),
+    ])
+      spentByLine.set(
+        e.budgetLineId,
+        (spentByLine.get(e.budgetLineId) ?? 0) + Number(e.allocatedAmount)
+      )
     // The names budget lines have in this workspace's other engagements, to suggest.
     const used = await this.prisma.budgetLine.findMany({
       where: { engagement: { workspaceId: c.workspaceId }, ...tenantWhere(caller) },
@@ -284,6 +322,7 @@ export class EngagementsService {
         reportLine: b.reportLine as ReportLine,
         amount: Number(b.amount),
         narrative: b.narrative,
+        payroll: b.payroll as PayrollBudgetKind[],
         hasSpending: b._count.expenses > 0,
         spent: spentByLine.get(b.id) ?? 0,
       })),

@@ -797,13 +797,23 @@ suite('tenant isolation', () => {
       })
     })
 
-    it('dismisses only a receipt that needs filing, and keeps it dismissed (migration 20261017000100)', async () => {
+    it('dismisses only a receipt that needs filing or failed, and keeps it dismissed (migrations 20261017000100, 20261018000500)', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        await db.query(`UPDATE "InboundReceipt" SET status = 'rejected' WHERE id = 'IR-W1'`)
+        expect(
+          (await attempt(`UPDATE "InboundReceipt" SET status = 'dismissed' WHERE id = 'IR-W1'`))
+            .error
+        ).toMatch(/needs filing or failed/)
+      })
+      // A failed one may be dismissed too.
       await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
         await db.query(`UPDATE "InboundReceipt" SET status = 'failed' WHERE id = 'IR-W1'`)
         expect(
           (await attempt(`UPDATE "InboundReceipt" SET status = 'dismissed' WHERE id = 'IR-W1'`))
-            .error
-        ).toMatch(/needs filing/)
+            .rows
+        ).toBe(1)
+      })
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
         await db.query(`UPDATE "InboundReceipt" SET status = 'unmatched' WHERE id = 'IR-W1'`)
         expect(
           (await attempt(`UPDATE "InboundReceipt" SET status = 'dismissed' WHERE id = 'IR-W1'`))
@@ -1061,6 +1071,13 @@ suite('tenant isolation', () => {
         sensitivity: 'personal',
         storageKey: 'W1/workspace/elig',
       })
+      await insert(db, 'Document', {
+        id: 'D-details-W1',
+        workspaceId: 'W1',
+        kind: 'payroll-details',
+        sensitivity: 'personal',
+        storageKey: 'W1/workspace/details',
+      })
       const mark = (m: object) => `'${JSON.stringify(m)}'::jsonb`
       const box = { page: 2, x: 48, y: 677, width: 520, height: 14.4, text: 'PAYPEOPLE' }
       try {
@@ -1096,11 +1113,15 @@ suite('tenant isolation', () => {
               `INSERT INTO "ExpenseDocument" ("expenseId","documentId","purpose","mark") VALUES ('X-W1','${doc}','payment',${mark(box)})`
             )
           expect((await markOn('D-stub-W1')).rows).toBe(1)
+          // Migration 20261019000900: payroll details' rows are highlighted too.
+          expect((await markOn('D-details-W1')).rows).toBe(1)
           expect((await markOn('D-elig-W1')).error).toMatch(/payroll file only/)
         })
       } finally {
         // The marks were written in a transaction `as` rolls back; the documents are put back as they were.
-        await db.exec(`DELETE FROM "Document" WHERE id IN ('D-stub-W1', 'D-elig-W1')`)
+        await db.exec(
+          `DELETE FROM "Document" WHERE id IN ('D-stub-W1', 'D-elig-W1', 'D-details-W1')`
+        )
         await db.query(`UPDATE "Document" SET kind = $1, sensitivity = $2 WHERE id = 'D-W1'`, [
           was!.kind,
           was!.sensitivity,
@@ -1348,7 +1369,22 @@ suite('tenant isolation', () => {
             key,
             expect.stringMatching(/in its month's folder/),
           ])
-        // A pay stub is personal and every other payroll file financial, as its document will be.
+        // A pay stub and payroll details are personal and every other payroll file financial, as its document will be
+        // (migration 20261019000800).
+        expect(
+          (
+            await attempt(
+              file('PF-d1', 'PR-1', 'W1/E-W1/2026-07/f.xlsx', 'payroll-details', 'financial')
+            )
+          ).error
+        ).toMatch(/sensitivity_check/)
+        expect(
+          (
+            await attempt(
+              file('PF-d2', 'PR-1', 'W1/E-W1/2026-07/g.xlsx', 'payroll-details', 'personal')
+            )
+          ).rows
+        ).toBe(1)
         expect(
           (await attempt(file('PF-s1', 'PR-1', 'W1/E-W1/2026-07/b.pdf', 'paystub', 'financial')))
             .error
@@ -2724,6 +2760,955 @@ suite('tenant isolation', () => {
       `SELECT DISTINCT tablename FROM pg_policies WHERE policyname = 'tenant_read' ORDER BY 1`
     )
     expect(r.rows.map((x) => x.tablename)).toEqual([...TENANT_TABLES].sort())
+  })
+
+  describe('the workspace payroll match (migration 20261017000500)', () => {
+    const wsRun = (id: string, ws: string, by: string, period = '2026-07') =>
+      `INSERT INTO "PayrollMatchRun" ("id","workspaceId","period","createdById") VALUES ('${id}','${ws}','${period}','${by}')`
+    const file = (id: string, runId: string, key: string) =>
+      `INSERT INTO "PayrollMatchFile" ("id","runId","kind","sensitivity","fileName","contentType","size","sha256","storageKey")
+       VALUES ('${id}','${runId}','payroll-register','financial','r.pdf','application/pdf',1,'h','${key}')`
+    const payLine = (id: string, doc: string, kind = 'payroll-register', period = '2026-07') =>
+      `INSERT INTO "PayrollPayLine" ("id","documentId","period","kind","mark")
+       VALUES ('${id}','${doc}','${period}','${kind}','{"page":1,"x":10,"y":20,"width":30,"height":12,"text":"Jordan Sample 280.00"}')`
+
+    beforeAll(async () => {
+      // A workspace payroll file of July (filed to no engagement), and an engagement's own register.
+      await insert(db, 'Document', {
+        id: 'D-WPAY',
+        workspaceId: 'W1',
+        kind: 'payroll-register',
+        period: '2026-07',
+        storageKey: 'W1/workspace/2026-07/register.pdf',
+      })
+      await insert(db, 'Document', {
+        id: 'D-EPAY',
+        workspaceId: 'W1',
+        engagementId: 'E-W1',
+        kind: 'payroll-register',
+        period: '2026-07',
+        storageKey: 'W1/E-W1/2026-07/register.pdf',
+      })
+      // The other workspace's own July register, to show its documents read like none at all.
+      await insert(db, 'Document', {
+        id: 'D-W2PAY',
+        workspaceId: 'W2',
+        kind: 'payroll-register',
+        period: '2026-07',
+        storageKey: 'W2/workspace/2026-07/register.pdf',
+      })
+    })
+    afterAll(async () => {
+      await db.exec(`DELETE FROM "Document" WHERE id IN ('D-WPAY', 'D-EPAY', 'D-W2PAY')`)
+    })
+
+    it('lets an owner alone start a run for the whole workspace, which names its workspace and period', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(wsRun('WR-1', 'W1', 'owner-W1'))).rows).toBe(1)
+        expect(
+          await one(
+            `SELECT "workspaceId", "period", "monthlyReportId" FROM "PayrollMatchRun" WHERE id = 'WR-1'`
+          )
+        ).toEqual({ workspaceId: 'W1', period: '2026-07', monthlyReportId: null })
+        // In someone else's name, or in another workspace: refused.
+        expect((await attempt(wsRun('WR-x', 'W1', 'book-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(wsRun('WR-y', 'W2', 'owner-W1'))).error).toMatch(/row-level security/)
+        // A run is of a month or of the workspace and a period, never both or neither.
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "PayrollMatchRun" ("id","monthlyReportId","period","createdById") VALUES ('WR-b','R-W1','2026-07','owner-W1')`
+            )
+          ).error
+        ).toMatch(/scope_check/)
+        expect((await attempt(wsRun('WR-p', 'W1', 'owner-W1', '2026-13'))).error).toMatch(
+          /scope_check/
+        )
+        // Its files are staged in the workspace's own folder for the period, nowhere else.
+        expect((await attempt(file('WF-1', 'WR-1', 'W1/workspace/2026-07/a.pdf'))).rows).toBe(1)
+        for (const key of [
+          'W1/E-W1/2026-07/a.pdf',
+          'W1/workspace/2026-08/a.pdf',
+          'W1/workspace/2026-07/x/a.pdf',
+        ])
+          expect([key, (await attempt(file('WF-k', 'WR-1', key))).error]).toEqual([
+            key,
+            expect.stringMatching(/in its month's folder/),
+          ])
+        // Members update no run (the trigger that keeps its period is tested as the tables' owner, below).
+        expect((await attempt(`UPDATE "PayrollMatchRun" SET period = '2026-08'`)).rows).toBe(0)
+      })
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        // A bookkeeper starts no workspace run; a month's run is still theirs to start.
+        expect((await attempt(wsRun('WR-2', 'W1', 'book-W1'))).error).toMatch(/row-level security/)
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "PayrollMatchRun" ("id","monthlyReportId","createdById") VALUES ('WR-m','R-W1','book-W1')`
+            )
+          ).rows
+        ).toBe(1)
+      })
+    })
+
+    it('keeps a workspace run to its workspace, and removes it with the workspace', async () => {
+      await insert(db, 'Workspace', { id: 'W-gone', name: 'gone' })
+      await insert(db, 'PayrollMatchRun', {
+        id: 'WR-gone',
+        workspaceId: 'W-gone',
+        period: '2026-07',
+        createdById: 'owner-W1',
+      })
+      await insert(db, 'PayrollMatchRun', {
+        id: 'WR-W1',
+        workspaceId: 'W1',
+        period: '2026-07',
+        createdById: 'owner-W1',
+      })
+      try {
+        await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+          expect(await ids('PayrollMatchRun')).toEqual([])
+        })
+        await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+          expect(await ids('PayrollMatchRun')).toEqual(['WR-W1'])
+        })
+        await db.exec(`DELETE FROM "Workspace" WHERE id = 'W-gone'`)
+        expect(await count('PayrollMatchRun')).toBe(1)
+      } finally {
+        await db.exec(`DELETE FROM "PayrollMatchRun"`)
+        await db.exec(`DELETE FROM "Workspace" WHERE id = 'W-gone'`)
+      }
+    })
+
+    it('keeps the person-pays of a workspace payroll file: owners add them, members read them', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(payLine('PL-1', 'D-WPAY'))).rows).toBe(1)
+        expect(await one(`SELECT "workspaceId" FROM "PayrollPayLine" WHERE id = 'PL-1'`)).toEqual({
+          workspaceId: 'W1',
+        })
+        // Only of a workspace payroll file, of its own kind and month.
+        expect((await attempt(payLine('PL-e', 'D-EPAY'))).error).toMatch(/workspace payroll file/)
+        expect((await attempt(payLine('PL-k', 'D-WPAY', 'paystub'))).error).toMatch(
+          /workspace payroll file/
+        )
+        expect(
+          (await attempt(payLine('PL-p', 'D-WPAY', 'payroll-register', '2026-08'))).error
+        ).toMatch(/workspace payroll file/)
+        expect((await attempt(payLine('PL-t', 'D-WPAY', 'timesheet'))).error).toMatch(
+          /kind_check|workspace payroll file/
+        )
+        // Another workspace's file is out of sight: its payroll file of the same kind and month, any other file of it,
+        // and no file at all are refused in the same words, so the wording says nothing about another workspace.
+        for (const doc of ['D-W2PAY', 'D-W2', 'no-such-document'])
+          expect([doc, (await attempt(payLine('PL-w', doc))).error]).toEqual([
+            doc,
+            'A pay line is of a workspace payroll file of its kind and month',
+          ])
+        // A line stays as it was read; only the not-grant-funded word changes, all of it at once.
+        expect(
+          (await attempt(`UPDATE "PayrollPayLine" SET mark = NULL WHERE id = 'PL-1'`)).error
+        ).toMatch(/only by being marked not grant-funded/)
+        expect(
+          (
+            await attempt(
+              `UPDATE "PayrollPayLine" SET "notFundedReason" = 'Paid from general funds' WHERE id = 'PL-1'`
+            )
+          ).error
+        ).toMatch(/not_funded_check/)
+        expect(
+          (
+            await attempt(
+              `UPDATE "PayrollPayLine" SET "notFundedReason" = 'Paid from general funds', "notFundedById" = 'owner-W1',
+                 "notFundedByEmail" = 'owner@example.org', "notFundedAt" = now() WHERE id = 'PL-1'`
+            )
+          ).rows
+        ).toBe(1)
+      })
+      await insert(db, 'PayrollPayLine', {
+        id: 'PL-2',
+        documentId: 'D-WPAY',
+        period: '2026-07',
+        kind: 'payroll-register',
+      })
+      try {
+        await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+          expect(await ids('PayrollPayLine')).toEqual(['PL-2'])
+          expect((await attempt(payLine('PL-b', 'D-WPAY'))).error).toMatch(/row-level security/)
+          expect(
+            (
+              await attempt(
+                `UPDATE "PayrollPayLine" SET "notFundedReason" = 'x', "notFundedById" = 'book-W1', "notFundedByEmail" = 'b@example.org', "notFundedAt" = now()`
+              )
+            ).rows
+          ).toBe(0)
+          expect((await attempt(`DELETE FROM "PayrollPayLine"`)).rows).toBe(0)
+        })
+        await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+          expect(await ids('PayrollPayLine')).toEqual(['PL-2'])
+        })
+        await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+          expect(await ids('PayrollPayLine')).toEqual([])
+          expect((await attempt(`DELETE FROM "PayrollPayLine"`)).rows).toBe(0)
+        })
+        await as({ user: 'admin', workspaces: [], admin: true }, async () => {
+          expect(await ids('PayrollPayLine')).toEqual([])
+        })
+        // They go with their document.
+        await insert(db, 'Document', {
+          id: 'D-WPAY2',
+          workspaceId: 'W1',
+          kind: 'bank-statement',
+          period: '2026-07',
+          storageKey: 'W1/workspace/2026-07/bank.pdf',
+        })
+        await insert(db, 'PayrollPayLine', {
+          id: 'PL-3',
+          documentId: 'D-WPAY2',
+          period: '2026-07',
+          kind: 'bank-statement',
+        })
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          expect((await attempt(`DELETE FROM "Document" WHERE id = 'D-WPAY2'`)).rows).toBe(1)
+          expect(await ids('PayrollPayLine')).toEqual(['PL-2'])
+        })
+      } finally {
+        await db.exec(`DELETE FROM "PayrollPayLine"`)
+        await db.exec(`DELETE FROM "Document" WHERE id = 'D-WPAY2'`)
+      }
+    })
+
+    it('links one workspace payroll file from two engagements of the workspace, never from another', async () => {
+      await insert(db, 'Engagement', {
+        id: 'E-W1b',
+        workspaceId: 'W1',
+        name: 'second',
+        number: 'N-2',
+      })
+      await insert(db, 'MonthlyReport', { id: 'R-W1b', engagementId: 'E-W1b', period: '2026-07' })
+      await insert(db, 'Expense', {
+        id: 'X-W1b',
+        engagementId: 'E-W1b',
+        monthlyReportId: 'R-W1b',
+        itemNumber: '2',
+        reportLine: 'program-costs',
+      })
+      try {
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          for (const x of ['X-W1', 'X-W1b'])
+            expect(
+              (
+                await attempt(
+                  `INSERT INTO "ExpenseDocument" ("expenseId","documentId","purpose") VALUES ('${x}','D-WPAY','register')`
+                )
+              ).rows
+            ).toBe(1)
+        })
+        await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+          expect(
+            (
+              await attempt(
+                `INSERT INTO "ExpenseDocument" ("expenseId","documentId","purpose") VALUES ('X-W2','D-WPAY','register')`
+              )
+            ).error
+          ).toMatch(/does not belong to this workspace/)
+        })
+      } finally {
+        await db.exec(`DELETE FROM "ExpenseDocument" WHERE "documentId" = 'D-WPAY'`)
+        await db.exec(`DELETE FROM "MonthlyReport" WHERE id = 'R-W1b'`)
+        await db.exec(`DELETE FROM "Engagement" WHERE id = 'E-W1b'`)
+      }
+    })
+
+    it('keeps "Bookkeepers see staff payroll" on by default, for the owners to change and never the platform admin', async () => {
+      expect(
+        await one(`SELECT "bookkeepersSeeStaffPayroll" FROM "Workspace" WHERE id = 'W1'`)
+      ).toEqual({
+        bookkeepersSeeStaffPayroll: true,
+      })
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect(
+          (
+            await attempt(
+              `UPDATE "Workspace" SET "bookkeepersSeeStaffPayroll" = false WHERE id = 'W1'`
+            )
+          ).rows
+        ).toBe(0)
+      })
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect(
+          (
+            await attempt(
+              `UPDATE "Workspace" SET "bookkeepersSeeStaffPayroll" = false WHERE id = 'W1'`
+            )
+          ).rows
+        ).toBe(1)
+      })
+      await as({ user: 'admin', workspaces: [], admin: true }, async () => {
+        expect(
+          (
+            await attempt(
+              `UPDATE "Workspace" SET "bookkeepersSeeStaffPayroll" = false WHERE id = 'W2'`
+            )
+          ).error
+        ).toMatch(/only the name and lists/)
+      })
+    })
+
+    it('keeps a workspace run to its period, by the trigger itself', async () => {
+      await insert(db, 'PayrollMatchRun', {
+        id: 'WR-P',
+        workspaceId: 'W1',
+        period: '2026-07',
+        createdById: 'owner-W1',
+      })
+      try {
+        // As the tables' owner, whom no policy stops, so only the trigger can refuse it.
+        await expect(
+          db.query(`UPDATE "PayrollMatchRun" SET period = '2026-08' WHERE id = 'WR-P'`)
+        ).rejects.toThrow(/PayrollMatchRun.period cannot be changed/)
+      } finally {
+        await db.exec(`DELETE FROM "PayrollMatchRun" WHERE id = 'WR-P'`)
+      }
+    })
+
+    it("lets owners alone add to or remove a workspace run; a month's run stays any member's", async () => {
+      const wsFile = (id: string) => file(id, 'WR-O', `W1/workspace/2026-07/${id}.pdf`)
+      await insert(db, 'PayrollMatchRun', {
+        id: 'WR-O',
+        workspaceId: 'W1',
+        period: '2026-07',
+        createdById: 'owner-W1',
+      })
+      await insert(db, 'PayrollMatchFile', {
+        id: 'WF-O',
+        runId: 'WR-O',
+        kind: 'payroll-register',
+        sensitivity: 'financial',
+        storageKey: 'W1/workspace/2026-07/WF-O.pdf',
+      })
+      await insert(db, 'PayrollMatchRun', {
+        id: 'MR-O',
+        monthlyReportId: 'R-W1',
+        createdById: 'book-W1',
+      })
+      try {
+        for (const user of ['book-W1', 'aud-W1'])
+          await as({ workspaces: ['W1'], user }, async () => {
+            expect([user, (await attempt(wsFile('WF-b'))).error]).toEqual([
+              user,
+              expect.stringMatching(/row-level security/),
+            ])
+            expect((await attempt(`DELETE FROM "PayrollMatchFile" WHERE id = 'WF-O'`)).rows).toBe(0)
+            expect((await attempt(`DELETE FROM "PayrollMatchRun" WHERE id = 'WR-O'`)).rows).toBe(0)
+          })
+        await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+          // A month's run is the bookkeeper's as before.
+          expect((await attempt(file('MF-b', 'MR-O', 'W1/E-W1/2026-07/MF-b.pdf'))).rows).toBe(1)
+          expect((await attempt(`DELETE FROM "PayrollMatchFile" WHERE id = 'MF-b'`)).rows).toBe(1)
+          expect((await attempt(`DELETE FROM "PayrollMatchRun" WHERE id = 'MR-O'`)).rows).toBe(1)
+        })
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          expect((await attempt(wsFile('WF-n'))).rows).toBe(1)
+          expect((await attempt(`DELETE FROM "PayrollMatchFile" WHERE id = 'WF-n'`)).rows).toBe(1)
+          expect((await attempt(`DELETE FROM "PayrollMatchRun" WHERE id = 'WR-O'`)).rows).toBe(1)
+          expect(await ids('PayrollMatchFile')).toEqual([])
+        })
+        // Trusted work still reads a workspace run's file, and removes the run once it is past 24 hours.
+        await as({ system: true, workspaces: ['W1', 'W2'] }, async () => {
+          expect(
+            (
+              await attempt(
+                `UPDATE "PayrollMatchFile" SET status = 'read', attempts = 1, pages = 1 WHERE id = 'WF-O'`
+              )
+            ).rows
+          ).toBe(1)
+          expect((await attempt(`DELETE FROM "PayrollMatchRun" WHERE id = 'WR-O'`)).rows).toBe(1)
+        })
+      } finally {
+        await db.exec(`DELETE FROM "PayrollMatchRun" WHERE id IN ('WR-O', 'MR-O')`)
+      }
+    })
+
+    it("checks a file's folder even when its run is out of sight", async () => {
+      await insert(db, 'PayrollMatchRun', {
+        id: 'WR-S',
+        workspaceId: 'W1',
+        period: '2026-07',
+        createdById: 'owner-W1',
+      })
+      try {
+        await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+          for (const key of ['W1/workspace/2026-07/a.pdf', 'W2/workspace/2026-07/a.pdf'])
+            expect([key, (await attempt(file('WF-s', 'WR-S', key))).error]).toEqual([
+              key,
+              expect.stringMatching(/PayrollMatchFile refers to no PayrollMatchRun/),
+            ])
+          expect(
+            (await attempt(file('WF-s', 'no-run', 'W2/workspace/2026-07/a.pdf'))).error
+          ).toMatch(/PayrollMatchFile refers to no PayrollMatchRun/)
+        })
+      } finally {
+        await db.exec(`DELETE FROM "PayrollMatchRun" WHERE id = 'WR-S'`)
+      }
+    })
+
+    it('keeps a document an open run holds, and holds only documents of its own workspace', async () => {
+      const held = (id: string, doc: string) =>
+        `INSERT INTO "PayrollMatchFile" ("id","runId","documentId","kind","sensitivity","fileName","contentType","size","sha256","storageKey")
+         VALUES ('${id}','WR-H','${doc}','payroll-register','financial','r.pdf','application/pdf',1,'h','W1/workspace/2026-07/${id}.pdf')`
+      await insert(db, 'Document', {
+        id: 'D-HELD',
+        workspaceId: 'W1',
+        kind: 'payroll-register',
+        period: '2026-07',
+        storageKey: 'W1/workspace/2026-07/held.pdf',
+      })
+      await insert(db, 'PayrollMatchRun', {
+        id: 'WR-H',
+        workspaceId: 'W1',
+        period: '2026-07',
+        createdById: 'owner-W1',
+      })
+      try {
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          expect((await attempt(held('WF-h', 'D-HELD'))).rows).toBe(1)
+          // Another workspace's document and no document at all read alike.
+          for (const doc of ['D-W2PAY', 'no-such-document'])
+            expect([doc, (await attempt(held('WF-x', doc))).error]).toEqual([
+              doc,
+              'PayrollMatchFile refers to no document of its workspace',
+            ])
+          // The document stays while the run holds it; discarding the run lets it go.
+          expect((await attempt(`DELETE FROM "Document" WHERE id = 'D-HELD'`)).error).toMatch(
+            /violates RESTRICT setting of foreign key constraint "PayrollMatchFile_documentId_fkey"/
+          )
+          expect((await attempt(`DELETE FROM "PayrollMatchRun" WHERE id = 'WR-H'`)).rows).toBe(1)
+          expect((await attempt(`DELETE FROM "Document" WHERE id = 'D-HELD'`)).rows).toBe(1)
+        })
+      } finally {
+        await db.exec(`DELETE FROM "PayrollMatchRun" WHERE id = 'WR-H'`)
+        await db.exec(`DELETE FROM "Document" WHERE id = 'D-HELD'`)
+      }
+    })
+
+    it('keeps a payroll file with saved pays in its kind, month and place', async () => {
+      await insert(db, 'Document', {
+        id: 'D-KEEP',
+        workspaceId: 'W1',
+        kind: 'bank-statement',
+        period: '2026-03',
+        storageKey: 'W1/workspace/2026-03/bank.pdf',
+      })
+      await insert(db, 'Document', {
+        id: 'D-FREE',
+        workspaceId: 'W1',
+        kind: 'bank-statement',
+        period: '2026-03',
+        storageKey: 'W1/workspace/2026-03/free.pdf',
+      })
+      await insert(db, 'PayrollPayLine', {
+        id: 'PL-K',
+        documentId: 'D-KEEP',
+        period: '2026-03',
+        kind: 'bank-statement',
+      })
+      try {
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          for (const set of [
+            `period = '2026-04'`,
+            `kind = 'payroll-register'`,
+            `"engagementId" = 'E-W1', "storageKey" = 'W1/E-W1/2026-03/bank.pdf'`,
+            `"storageKey" = 'W1/workspace/2026-03/moved.pdf'`,
+          ])
+            expect([
+              set,
+              (await attempt(`UPDATE "Document" SET ${set} WHERE id = 'D-KEEP'`)).error,
+            ]).toEqual([set, expect.stringMatching(/keeps its kind, month and place/)])
+          // Anything else of it may change, and a file with no saved pays moves as before.
+          expect(
+            (await attempt(`UPDATE "Document" SET "fileName" = 'March.pdf' WHERE id = 'D-KEEP'`))
+              .rows
+          ).toBe(1)
+          expect(
+            (await attempt(`UPDATE "Document" SET period = '2026-04' WHERE id = 'D-FREE'`)).rows
+          ).toBe(1)
+        })
+      } finally {
+        await db.exec(`DELETE FROM "Document" WHERE id IN ('D-KEEP', 'D-FREE')`)
+      }
+    })
+  })
+
+  describe('the staff list and engagement staffing (migration 20261018000100)', () => {
+    const staff = (id: string, ws: string, name = 'Morgan Lee') =>
+      `INSERT INTO "StaffMember" ("id","workspaceId","name","role") VALUES ('${id}','${ws}','${name}','Instructor')`
+    const assign = (id: string, staffId: string, engagementId: string) =>
+      `INSERT INTO "StaffAssignment" ("id","staffMemberId","engagementId") VALUES ('${id}','${staffId}','${engagementId}')`
+    const proof = (id: string, staffId: string, doc: string, kind = 'payroll-register') =>
+      `INSERT INTO "StaffPayProof" ("id","staffMemberId","documentId","period","kind","amount","mark")
+       VALUES ('${id}','${staffId}','${doc}','2026-07','${kind}',2000.00,'{"page":1,"x":10,"y":20,"width":30,"height":12,"text":"1042 Morgan Lee 2,000.00"}')`
+
+    beforeAll(async () => {
+      await insert(db, 'Document', {
+        id: 'D-SREG',
+        workspaceId: 'W1',
+        kind: 'payroll-register',
+        period: '2026-07',
+        storageKey: 'W1/workspace/2026-07/staff-register.pdf',
+      })
+      await insert(db, 'Document', {
+        id: 'D-SREG-E',
+        workspaceId: 'W1',
+        engagementId: 'E-W1',
+        kind: 'payroll-register',
+        period: '2026-07',
+        storageKey: 'W1/E-W1/2026-07/staff-register.pdf',
+      })
+      await insert(db, 'Document', {
+        id: 'D-SREG-W2',
+        workspaceId: 'W2',
+        kind: 'payroll-register',
+        period: '2026-07',
+        storageKey: 'W2/workspace/2026-07/staff-register.pdf',
+      })
+    })
+    afterAll(async () => {
+      await db.exec(`DELETE FROM "StaffPayProof"`)
+      await db.exec(`DELETE FROM "StaffMember"`)
+      await db.exec(`DELETE FROM "Document" WHERE id IN ('D-SREG', 'D-SREG-E', 'D-SREG-W2')`)
+    })
+
+    it('lets an owner alone keep the staff list, in their own workspace', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(staff('SM-1', 'W1'))).rows).toBe(1)
+        expect(
+          (await attempt(`UPDATE "StaffMember" SET "role" = 'Lead' WHERE id = 'SM-1'`)).rows
+        ).toBe(1)
+        // One person of a name in a workspace, whatever its case (migration 20261018000600).
+        expect((await attempt(staff('SM-dup', 'W1', 'MORGAN LEE'))).error).toMatch(
+          /StaffMember_workspaceId_name_key/
+        )
+        expect((await attempt(staff('SM-2', 'W1', 'Casey Demo'))).rows).toBe(1)
+        expect((await attempt(staff('SM-3', 'W1', 'Riley Example'))).rows).toBe(1)
+        // Its fields are checked: a blank name.
+        expect((await attempt(staff('SM-x', 'W1', ' '))).error).toMatch(/name_check/)
+        // Never in another workspace, and never moved to one.
+        expect((await attempt(staff('SM-w', 'W2', 'Sam Other'))).error).toMatch(
+          /row-level security/
+        )
+        expect(
+          (await attempt(`UPDATE "StaffMember" SET "workspaceId" = 'W2' WHERE id = 'SM-1'`)).error
+        ).toMatch(/cannot be changed|row-level security/)
+        expect(await ids('StaffMember')).toEqual(['SM-1', 'SM-2', 'SM-3'])
+      })
+      // Kept for the cases below.
+      await db.exec(staff('SM-1', 'W1'))
+      await db.exec(staff('SM-2', 'W1', 'Casey Demo'))
+      // Another workspace's person of the same name is no clash.
+      await db.exec(staff('SM-W2', 'W2', 'Morgan Lee'))
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        // A bookkeeper reads none of it and writes none of it.
+        expect(await ids('StaffMember')).toEqual([])
+        expect((await attempt(staff('SM-b', 'W1', 'Pat Doe'))).error).toMatch(/row-level security/)
+        expect((await attempt(`UPDATE "StaffMember" SET "role" = 'x'`)).rows).toBe(0)
+        expect((await attempt(`DELETE FROM "StaffMember"`)).rows).toBe(0)
+      })
+      await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+        // An auditor reads it and changes nothing.
+        expect(await ids('StaffMember')).toEqual(['SM-1', 'SM-2'])
+        expect((await attempt(staff('SM-a', 'W1', 'Pat Doe'))).error).toMatch(/row-level security/)
+        expect((await attempt(`UPDATE "StaffMember" SET "role" = 'x'`)).rows).toBe(0)
+        expect((await attempt(`DELETE FROM "StaffMember"`)).rows).toBe(0)
+      })
+      await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+        expect(await ids('StaffMember')).toEqual(['SM-W2'])
+        expect((await attempt(`DELETE FROM "StaffMember" WHERE id = 'SM-1'`)).rows).toBe(0)
+      })
+      await as({ user: 'admin', workspaces: [], admin: true }, async () => {
+        // The platform admin's mark is admitted nowhere here.
+        expect(await ids('StaffMember')).toEqual([])
+        expect((await attempt(staff('SM-ad', 'W1', 'Pat Doe'))).error).toMatch(/row-level security/)
+      })
+    })
+
+    it("tags a person to their own workspace's engagements only, for owners to change", async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(assign('SA-1', 'SM-1', 'E-W1'))).rows).toBe(1)
+        expect(await one(`SELECT "workspaceId" FROM "StaffAssignment" WHERE id = 'SA-1'`)).toEqual({
+          workspaceId: 'W1',
+        })
+        expect((await attempt(assign('SA-dup', 'SM-1', 'E-W1'))).error).toMatch(/engagementId_key/)
+        // Another workspace's engagement reads like none at all.
+        expect((await attempt(assign('SA-x', 'SM-1', 'E-W2'))).error).toMatch(
+          /engagement of another workspace/
+        )
+        expect((await attempt(assign('SA-y', 'SM-1', 'nope'))).error).toMatch(
+          /engagement of another workspace/
+        )
+        expect(
+          (await attempt(`UPDATE "StaffAssignment" SET "staffMemberId" = 'SM-2' WHERE id = 'SA-1'`))
+            .error
+        ).toMatch(/cannot be changed/)
+      })
+      await db.exec(assign('SA-1', 'SM-1', 'E-W1'))
+      try {
+        await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+          expect(await ids('StaffAssignment')).toEqual([])
+          // A person a bookkeeper cannot see reads like none at all.
+          expect((await attempt(assign('SA-b', 'SM-2', 'E-W1'))).error).toMatch(
+            /names a person on the staff list of its workspace|row-level security/
+          )
+          expect((await attempt(`DELETE FROM "StaffAssignment"`)).rows).toBe(0)
+        })
+        await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+          expect(await ids('StaffAssignment')).toEqual(['SA-1'])
+          expect((await attempt(`DELETE FROM "StaffAssignment"`)).rows).toBe(0)
+        })
+        await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+          expect(await ids('StaffAssignment')).toEqual([])
+          expect((await attempt(assign('SA-w', 'SM-W2', 'E-W1'))).error).toMatch(
+            /engagement of another workspace/
+          )
+          // Another workspace's person and no person at all: one message (review fix, 2026-10-18).
+          for (const who of ['SM-1', 'nobody'])
+            expect([who, (await attempt(assign('SA-v', who, 'E-W2'))).error]).toEqual([
+              who,
+              'StaffAssignment names a person on the staff list of its workspace',
+            ])
+        })
+        await as({ user: 'admin', workspaces: [], admin: true }, async () => {
+          expect(await ids('StaffAssignment')).toEqual([])
+        })
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          expect((await attempt(`DELETE FROM "StaffAssignment" WHERE id = 'SA-1'`)).rows).toBe(1)
+        })
+      } finally {
+        await db.exec(`DELETE FROM "StaffAssignment"`)
+      }
+    })
+
+    it('keeps what the match found of a person, on a workspace payroll file of its kind and month, and keeps them on the list', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(proof('SP-1', 'SM-1', 'D-SREG'))).rows).toBe(1)
+        expect(await one(`SELECT "workspaceId" FROM "StaffPayProof" WHERE id = 'SP-1'`)).toEqual({
+          workspaceId: 'W1',
+        })
+        // An engagement's own file, another kind, another workspace's file, or none at all: refused alike.
+        for (const [doc, kind] of [
+          ['D-SREG-E', 'payroll-register'],
+          ['D-SREG', 'bank-statement'],
+          ['D-SREG-W2', 'payroll-register'],
+          ['nope', 'payroll-register'],
+        ])
+          expect([doc, kind, (await attempt(proof('SP-x', 'SM-1', doc, kind))).error]).toEqual([
+            doc,
+            kind,
+            expect.stringMatching(/workspace payroll file of its kind and month/),
+          ])
+        // Found once, it stays as it was found.
+        expect(
+          (await attempt(`UPDATE "StaffPayProof" SET "staffMemberId" = 'SM-2' WHERE id = 'SP-1'`))
+            .error
+        ).toMatch(/cannot be changed/)
+        // Another workspace's person and no person at all: one message.
+        for (const who of ['SM-W2', 'nobody'])
+          expect([who, (await attempt(proof('SP-p', who, 'D-SREG'))).error]).toEqual([
+            who,
+            'StaffPayProof names a person on the staff list of its workspace',
+          ])
+        // A bad box is a check violation, never a cast error.
+        for (const mark of [
+          '{"page":"one","x":1,"y":1,"width":1,"height":1}',
+          '{"page":1,"x":1,"y":1,"width":"wide","height":1}',
+          '{"page":0.5,"x":1,"y":1,"width":1,"height":1}',
+          '[1,2]',
+        ])
+          expect([
+            mark,
+            (
+              await attempt(
+                `INSERT INTO "StaffPayProof" ("id","staffMemberId","documentId","period","kind","mark")
+                 VALUES ('SP-m','SM-1','D-SREG','2026-07','payroll-register','${mark}')`
+              )
+            ).error,
+          ]).toEqual([mark, expect.stringMatching(/StaffPayProof_mark_check/)])
+        // Only a bank line is ever a guess.
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "StaffPayProof" ("id","staffMemberId","documentId","period","kind","guessed")
+               VALUES ('SP-g','SM-1','D-SREG','2026-07','payroll-register',true)`
+            )
+          ).error
+        ).toMatch(/StaffPayProof_guessed_check/)
+      })
+      await db.exec(proof('SP-1', 'SM-1', 'D-SREG'))
+      try {
+        await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+          expect(await ids('StaffPayProof')).toEqual([])
+          expect((await attempt(proof('SP-b', 'SM-1', 'D-SREG'))).error).toMatch(
+            /names a person on the staff list of its workspace|row-level security/
+          )
+          expect((await attempt(`DELETE FROM "StaffPayProof"`)).rows).toBe(0)
+        })
+        await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+          expect(await ids('StaffPayProof')).toEqual(['SP-1'])
+          expect((await attempt(`DELETE FROM "StaffPayProof"`)).rows).toBe(0)
+        })
+        await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+          expect(await ids('StaffPayProof')).toEqual([])
+        })
+        await as({ user: 'admin', workspaces: [], admin: true }, async () => {
+          expect(await ids('StaffPayProof')).toEqual([])
+        })
+        await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+          // A person named in saved proof stays on the list; their file stays where it was found.
+          expect((await attempt(`DELETE FROM "StaffMember" WHERE id = 'SM-1'`)).error).toMatch(
+            /StaffPayProof_staffMemberId_fkey/
+          )
+          expect(
+            (await attempt(`UPDATE "Document" SET period = '2026-08' WHERE id = 'D-SREG'`)).error
+          ).toMatch(/keeps its kind, month and place/)
+          // The proof goes with its document, and then the person may go.
+          expect((await attempt(`DELETE FROM "Document" WHERE id = 'D-SREG'`)).rows).toBe(1)
+          expect(await ids('StaffPayProof')).toEqual([])
+          expect((await attempt(`DELETE FROM "StaffMember" WHERE id = 'SM-1'`)).rows).toBe(1)
+        })
+      } finally {
+        await db.exec(`DELETE FROM "StaffPayProof"`)
+      }
+    })
+  })
+
+  describe("participants' pay from their stubs (migration 20261018000200)", () => {
+    beforeAll(async () => {
+      await insert(db, 'Document', {
+        id: 'D-STUB',
+        workspaceId: 'W1',
+        kind: 'paystub',
+        sensitivity: 'personal',
+        period: '2026-07',
+        storageKey: 'W1/workspace/2026-07/stub.pdf',
+      })
+      await insert(db, 'Document', {
+        id: 'D-STUB-W2',
+        workspaceId: 'W2',
+        kind: 'paystub',
+        sensitivity: 'personal',
+        period: '2026-07',
+        storageKey: 'W2/workspace/2026-07/stub.pdf',
+      })
+    })
+    afterAll(async () => {
+      await db.exec(`DELETE FROM "WexPayment" WHERE id LIKE 'WS-%'`)
+      await db.exec(`DELETE FROM "PayrollPayLine" WHERE id LIKE 'PS-%'`)
+      await db.exec(`DELETE FROM "Document" WHERE id IN ('D-STUB', 'D-STUB-W2')`)
+    })
+
+    it('makes one payment per pay stub, of a stub of its own workspace', async () => {
+      const wex = (id: string, stub: string) =>
+        `INSERT INTO "WexPayment" ("id","monthlyReportId","participantId","payPeriodStart","payPeriodEnd","grossAmount","updatedAt","stubDocumentId")
+         VALUES ('${id}','R-W1','P-W1','2026-07-01','2026-07-14',280.00,now(),'${stub}')`
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(wex('WS-1', 'D-STUB'))).rows).toBe(1)
+        expect((await attempt(wex('WS-2', 'D-STUB'))).error).toMatch(/stubDocumentId_key/)
+        // Taken over from a payment typed by hand: only while it is tied to its stub.
+        expect(
+          (await attempt(`UPDATE "WexPayment" SET "stubTookOver" = true WHERE id = 'WS-1'`)).rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "WexPayment" SET "stubDocumentId" = NULL WHERE id = 'WS-1'`)).error
+        ).toMatch(/stubTookOver_check/)
+        // Another workspace's stub, an engagement's register, or none at all: refused alike.
+        for (const doc of ['D-STUB-W2', 'D-W1', 'nope'])
+          expect([doc, (await attempt(wex('WS-x', doc))).error]).toEqual([
+            doc,
+            expect.stringMatching(/names a pay stub of its workspace/),
+          ])
+      })
+    })
+
+    it("keeps a stub's flags on its pay line, which matching again may rewrite and nothing else may change", async () => {
+      await insert(db, 'PayrollPayLine', {
+        id: 'PS-1',
+        documentId: 'D-STUB',
+        period: '2026-07',
+        kind: 'paystub',
+      })
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect(
+          (
+            await attempt(
+              `UPDATE "PayrollPayLine" SET "flags" = '{no-participant}' WHERE id = 'PS-1'`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "PayrollPayLine" SET "flags" = '{made-up}' WHERE id = 'PS-1'`))
+            .error
+        ).toMatch(/flags_check/)
+        expect(
+          (
+            await attempt(
+              `UPDATE "PayrollPayLine" SET "flags" = '{duplicate,pay-unclear}' WHERE id = 'PS-1'`
+            )
+          ).rows
+        ).toBe(1)
+        // A stub compared with its register row (migration 20261019000100); the retired bank flag is still allowed.
+        expect(
+          (
+            await attempt(
+              `UPDATE "PayrollPayLine" SET "flags" = '{register-disagrees,bank-disagrees}' WHERE id = 'PS-1'`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (await attempt(`UPDATE "PayrollPayLine" SET "period" = '2026-08' WHERE id = 'PS-1'`))
+            .error
+        ).toMatch(/marked not grant-funded or matched again|workspace payroll file/)
+      })
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(`UPDATE "PayrollPayLine" SET "flags" = '{}'`)).rows).toBe(0)
+      })
+    })
+  })
+
+  describe("a month's one set of payroll files (migration 20261018000400)", () => {
+    const dropped = (id: string, ws: string, by: string, extra = '') =>
+      `INSERT INTO "PayrollDroppedDecision" ("id","workspaceId","period","fileName","kind","decision","why","droppedById","droppedByEmail"${extra ? ',"itemTitle"' : ''})
+       VALUES ('${id}','${ws}','2026-07','register.pdf','payroll-register','${extra ? 'linked' : 'not-funded'}','changed','${by}','${by}@example.org'${extra ? `,'${extra}'` : ''})`
+    afterAll(async () => {
+      await db.exec(`DELETE FROM "PayrollDroppedDecision"`)
+    })
+
+    it('keeps a dropped decision for owners and auditors to read, written by an owner in their own name, never changed', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(dropped('DD-1', 'W1', 'owner-W1'))).rows).toBe(1)
+        expect((await attempt(dropped('DD-2', 'W1', 'owner-W1', 'Expense 1'))).rows).toBe(1)
+        // Never in another's name, nor in another workspace.
+        expect((await attempt(dropped('DD-x', 'W1', 'aud-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(dropped('DD-y', 'W2', 'owner-W1'))).error).toMatch(
+          /row-level security/
+        )
+        // Its words are checked: a reason it does not know, a not-funded one naming an item.
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "PayrollDroppedDecision" ("id","workspaceId","period","fileName","kind","decision","why","droppedById","droppedByEmail")
+               VALUES ('DD-z','W1','2026-07','r.pdf','payroll-register','linked','renamed','owner-W1','o@example.org')`
+            )
+          ).error
+        ).toMatch(/why_check/)
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "PayrollDroppedDecision" ("id","workspaceId","period","fileName","kind","decision","why","droppedById","droppedByEmail","itemTitle")
+               VALUES ('DD-t','W1','2026-07','r.pdf','payroll-register','not-funded','left','owner-W1','o@example.org','Expense 1')`
+            )
+          ).error
+        ).toMatch(/text_check/)
+      })
+      await db.exec(dropped('DD-1', 'W1', 'owner-W1'))
+      await db.exec(dropped('DD-W2', 'W2', 'owner-W2'))
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect(await ids('PayrollDroppedDecision')).toEqual(['DD-1'])
+        expect(
+          (await attempt(`UPDATE "PayrollDroppedDecision" SET "why" = 'left' WHERE id = 'DD-1'`))
+            .rows
+        ).toBe(0)
+        expect((await attempt(`DELETE FROM "PayrollDroppedDecision"`)).rows).toBe(0)
+      })
+      await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+        expect(await ids('PayrollDroppedDecision')).toEqual(['DD-1'])
+      })
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect(await ids('PayrollDroppedDecision')).toEqual([])
+      })
+      await as({ user: 'admin', workspaces: [], admin: true }, async () => {
+        expect(await ids('PayrollDroppedDecision')).toEqual([])
+      })
+      // Kept as it was recorded, even by the database owner's own update.
+      await expect(
+        db.query(`UPDATE "PayrollDroppedDecision" SET "why" = 'left' WHERE id = 'DD-1'`)
+      ).rejects.toThrow(/kept as it was recorded/)
+    })
+
+    it("marks a link the match made, and keeps a workspace run's change within its rules", async () => {
+      expect(
+        await one(`SELECT "byMatch" FROM "ExpenseDocument" WHERE "expenseId" = 'X-W1'`)
+      ).toEqual({ byMatch: false })
+      // A link is a pay run's debit only as a payment with its line marked (migration 20261019000300).
+      expect(
+        await one(`SELECT "payRun" FROM "ExpenseDocument" WHERE "expenseId" = 'X-W1'`)
+      ).toEqual({ payRun: false })
+      await expect(
+        db.query(
+          `UPDATE "ExpenseDocument" SET "payRun" = true, "mark" = NULL WHERE "expenseId" = 'X-W1'`
+        )
+      ).rejects.toThrow(/pay_run_check/)
+      const run = (id: string, cols: string, vals: string) =>
+        `INSERT INTO "PayrollMatchRun" ("id","workspaceId","period","createdById"${cols}) VALUES ('${id}','W1','2026-07','owner-W1'${vals})`
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(run('RUN-r', ',"mode","expectedFiles"', ",'replace',12"))).rows).toBe(
+          1
+        )
+        expect((await attempt(run('RUN-m', ',"mode"', ",'match'"))).rows).toBe(1)
+        // A count only for Replace all, and never over 1,000; no change it does not know.
+        expect((await attempt(run('RUN-x', ',"mode","expectedFiles"', ",'add',3"))).error).toMatch(
+          /mode_check/
+        )
+        expect(
+          (await attempt(run('RUN-y', ',"mode","expectedFiles"', ",'replace',1001"))).error
+        ).toMatch(/mode_check/)
+        expect((await attempt(run('RUN-z', ',"mode"', ",'merge'"))).error).toMatch(/mode_check/)
+      })
+      // One change of a month's set at a time: the save's lock is open to the restricted role.
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect(
+          await one(
+            `SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext('payroll-set:W1:2026-07'))`
+          )
+        ).toEqual({ locked: 1 })
+      })
+    })
+  })
+
+  describe('payroll reading words (migration 20261019000400)', () => {
+    it('lets only a platform admin add reading words, in their own name, and nobody change them', async () => {
+      const add = (by: string, reading = `'{"payDateLabels":["pay date"]}'`) =>
+        attempt(
+          `INSERT INTO "PayrollReadingSetting" ("id","reading","changedById") VALUES (gen_random_uuid()::text,${reading},'${by}')`
+        )
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await add('owner-W1')).error).toMatch(/row-level security/)
+      })
+      await as({ user: 'admin-1', admin: true }, async () => {
+        expect((await add('admin-1')).rows).toBe(1)
+        expect((await add('owner-W1')).error).toMatch(/row-level security/)
+        expect((await add('admin-1', `'["pay date"]'`)).error).toMatch(/reading_check/)
+        expect((await attempt(`UPDATE "PayrollReadingSetting" SET "reading" = '{}'`)).rows).toBe(0)
+        expect((await attempt(`DELETE FROM "PayrollReadingSetting"`)).rows).toBe(0)
+      })
+    })
+  })
+
+  describe('what AI read (migration 20261019000500)', () => {
+    const ai = (id: string, ws: string, by: string) =>
+      `INSERT INTO "PayrollFileAiReading" ("id","workspaceId","sha256","kind","facts","model","readById")
+       VALUES ('${id}','${ws}','${'d'.repeat(64)}','paystub','{"people":[]}','m','${by}')`
+
+    it('lets a member keep what AI read, in their own name, never removed', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(ai('AI-1', 'W1', 'book-W1'))).rows).toBe(1)
+        expect((await attempt(ai('AI-x', 'W1', 'owner-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(ai('AI-w', 'W2', 'book-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(`DELETE FROM "PayrollFileAiReading"`)).rows).toBe(0)
+        expect(await ids('PayrollFileAiReading')).toEqual(['AI-1'])
+      })
+      await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+        expect(await ids('PayrollFileAiReading')).toEqual([])
+      })
+    })
   })
 })
 

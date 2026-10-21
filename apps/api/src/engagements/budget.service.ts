@@ -5,11 +5,15 @@ import {
   NotFoundException,
 } from '@nestjs/common'
 import {
+  PAYROLL_BUDGET_KINDS,
+  PAYROLL_BUDGET_KIND_LABELS,
+  payrollDefaults,
   REPORT_LINES,
   REPORT_LINE_LABELS,
   WRITE_ROLES,
   type BudgetChange,
   type BudgetLineInput,
+  type PayrollBudgetKind,
   type ReportLine,
 } from '@ad/types'
 import type { Prisma } from '@prisma/client'
@@ -27,6 +31,7 @@ export const BUDGET_LINE_FIELDS: Fields = {
   reportLine: { label: 'Rolls up to', show: 'text', labels: REPORT_LINE_LABELS },
   amount: { label: 'Amount', show: 'money' },
   narrative: { label: 'Note' },
+  payroll: { label: 'Payroll from the match on this line', show: 'text' },
 }
 
 type Sent = BudgetChange['backToDraft']
@@ -44,6 +49,29 @@ function narrativeOf(given: unknown): string | null {
   const text = typeof given === 'string' ? given.trim() : ''
   if (text.length > 2000) throw new BadRequestException('Keep the note under 2,000 characters')
   return text || null
+}
+
+/** The payroll kinds ticked on a line: known kinds only, each once, in their own order. */
+function payrollOf(given: unknown): PayrollBudgetKind[] {
+  if (!Array.isArray(given)) throw new BadRequestException('Say which payroll this line holds')
+  const bad = given.filter((k) => !(PAYROLL_BUDGET_KINDS as readonly unknown[]).includes(k))
+  if (bad.length) throw new BadRequestException('Choose payroll this line can hold')
+  return PAYROLL_BUDGET_KINDS.filter((k) => given.includes(k))
+}
+
+/** The payroll kinds as the access log shows them: their screen words. */
+const payrollWords = (kinds: PayrollBudgetKind[]) =>
+  kinds.length ? kinds.map((k) => PAYROLL_BUDGET_KIND_LABELS[k]).join(', ') : 'None'
+
+/** The books' payroll rows a change moved to the line, in the log line's words; those left on a locked month too. */
+function movedWords(rows: { moved: number; stayed: number }, line: string): string {
+  const n = (k: number) => `${k} imported payroll ${k === 1 ? 'row' : 'rows'}`
+  return [
+    rows.moved ? `; moved ${n(rows.moved)} to ${line}` : '',
+    rows.stayed
+      ? `; ${n(rows.stayed)} on a closed or submitted month stayed where ${rows.stayed === 1 ? 'it was' : 'they were'}`
+      : '',
+  ].join('')
 }
 
 function nameOf(given: unknown): string {
@@ -81,26 +109,46 @@ export class BudgetService {
       amount: amountOf(input?.amount),
       narrative: narrativeOf(input?.narrative),
     }
+    // Unticked by the caller: the kinds its report line takes by default that no other line holds yet.
+    const held = new Set(
+      (
+        await this.prisma.budgetLine.findMany({
+          where: { engagementId },
+          select: { payroll: true },
+        })
+      ).flatMap((l) => l.payroll)
+    )
+    const payroll =
+      input && 'payroll' in input
+        ? payrollOf(input.payroll)
+        : payrollDefaults([{ reportLine: values.reportLine }])[0]!.filter((k) => !held.has(k))
     await this.refuseTaken(engagementId, values.name)
     const sortOrder = await this.prisma.budgetLine.count({ where: { engagementId } })
     let backed: Sent = []
+    let rows = { moved: 0, stayed: 0 }
     await this.log.change(
       caller,
       async (tx) => {
+        await this.takePayroll(tx, engagementId, null, payroll)
         const row = await tx.budgetLine.create({
-          data: { engagementId, sortOrder, ...values },
+          data: { engagementId, sortOrder, ...values, payroll },
         })
         backed = await this.backToDraft(tx, caller, c)
+        rows = await this.moveBooksPayroll(tx, engagementId, row.id, payroll)
         return row
       },
-      {
+      () => ({
         workspaceId: c.workspaceId,
         resource: 'engagement',
         subjectId: c.id,
         action: 'create',
-        description: `Added ${values.name} to the approved budget of ${c.name}`,
-        changes: changesOf(null, values, BUDGET_LINE_FIELDS),
-      }
+        description: `Added ${values.name} to the approved budget of ${c.name}${movedWords(rows, values.name)}`,
+        changes: changesOf(
+          null,
+          { ...values, ...(payroll.length ? { payroll: payrollWords(payroll) } : {}) },
+          BUDGET_LINE_FIELDS
+        ),
+      })
     )
     return this.done(caller, c.id, backed)
   }
@@ -132,25 +180,48 @@ export class BudgetService {
     }
     if (input && 'amount' in input) values.amount = amountOf(input.amount)
     if (input && 'narrative' in input) values.narrative = narrativeOf(input.narrative)
-    const changes = changesOf(line, values, BUDGET_LINE_FIELDS)
+    const payroll = input && 'payroll' in input ? payrollOf(input.payroll) : null
+    const had = line.payroll as PayrollBudgetKind[]
+    const changes = [
+      ...changesOf(line, values, BUDGET_LINE_FIELDS),
+      ...(payroll && payrollWords(payroll) !== payrollWords(had)
+        ? changesOf(
+            { payroll: payrollWords(had) },
+            { payroll: payrollWords(payroll) },
+            BUDGET_LINE_FIELDS
+          )
+        : []),
+    ]
     if (changes.length === 0)
       return { ...(await this.engagements.detail(caller, c.id)), backToDraft: [] }
     let backed: Sent = []
+    let rows = { moved: 0, stayed: 0 }
     await this.log.change(
       caller,
       async (tx) => {
-        const row = await tx.budgetLine.update({ where: { id: line.id }, data: values })
+        if (payroll) await this.takePayroll(tx, engagementId, line.id, payroll)
+        const row = await tx.budgetLine.update({
+          where: { id: line.id },
+          data: { ...values, ...(payroll ? { payroll } : {}) },
+        })
         backed = await this.backToDraft(tx, caller, c)
+        if (payroll)
+          rows = await this.moveBooksPayroll(
+            tx,
+            engagementId,
+            line.id,
+            payroll.filter((k) => !had.includes(k))
+          )
         return row
       },
-      {
+      () => ({
         workspaceId: c.workspaceId,
         resource: 'engagement',
         subjectId: c.id,
         action: 'update',
-        description: `Changed ${label} on the approved budget of ${c.name}`,
+        description: `Changed ${label} on the approved budget of ${c.name}${movedWords(rows, values.name ?? label)}`,
         changes,
-      }
+      })
     )
     return this.done(caller, c.id, backed)
   }
@@ -179,6 +250,55 @@ export class BudgetService {
       }
     )
     return this.done(caller, c.id, backed)
+  }
+
+  /** Each payroll kind on one line of the engagement: the kinds this line takes leave the line that held them. */
+  private async takePayroll(
+    tx: Prisma.TransactionClient,
+    engagementId: string,
+    lineId: string | null,
+    kinds: PayrollBudgetKind[]
+  ) {
+    if (!kinds.length) return
+    const others = await tx.budgetLine.findMany({
+      where: {
+        engagementId,
+        ...(lineId ? { id: { not: lineId } } : {}),
+        payroll: { hasSome: kinds },
+      },
+      select: { id: true, payroll: true },
+    })
+    for (const o of others)
+      await tx.budgetLine.update({
+        where: { id: o.id },
+        data: { payroll: (o.payroll ?? []).filter((k) => !(kinds as string[]).includes(k)) },
+      })
+  }
+
+  /**
+   * The books' payroll rows (imported, kept for payroll reconciliation) of the kinds a line now takes follow it, so the
+   * old line shows no spending that is no longer its own and a re-import finds them where they belong. Runs after the
+   * change put every closed and submitted month back to draft, so a month still locked (a closing approved meanwhile)
+   * keeps its rows, which are counted for the log line.
+   */
+  private async moveBooksPayroll(
+    tx: Prisma.TransactionClient,
+    engagementId: string,
+    lineId: string,
+    kinds: PayrollBudgetKind[]
+  ) {
+    if (!kinds.length) return { moved: 0, stayed: 0 }
+    const where = {
+      engagementId,
+      payrollKind: { in: kinds },
+      OR: [{ budgetLineId: null }, { budgetLineId: { not: lineId } }],
+    }
+    const { count: moved } = await tx.expense.updateMany({
+      where: { ...where, monthlyReport: { status: 'draft' } },
+      data: { budgetLineId: lineId },
+    })
+    const stayed = await tx.expense.count({ where })
+    return { moved, stayed }
   }
 
   /** The engagement, if the caller may change its budget: another workspace's is a 404, an auditor's a 403. */

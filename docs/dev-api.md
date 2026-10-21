@@ -106,6 +106,43 @@ What else the months show, all fictional and drawn by `apps/api/prisma/demo-payr
 The payroll sample zip (`apps/web/public/samples/payroll-sample.zip`) is its own fictional September pay run for
 the same three participants and pay period, for trying "Match payroll & timecards" from the start.
 
+- **A second engagement, Adult IT Training** (DEMO-26AT-RYS, code AIT26), has a September draft whose payroll is
+  imported as the books have it, one line per pay run of the workspace payroll sample and kind of payroll: staff pay
+  AIT-3 $1,600.00 (09/11) and AIT-1 $1,600.00 (09/25), their taxes AIT-5 and AIT-4 $122.40 each, against a staff budget
+  of $3,500.00 (98% used). In-School Youth's September books add up to the sample's runs too (staff pay RYS-21
+  $1,455.00 on 09/11 and RYS-20 $1,545.00 on 09/25, their taxes, and the work-experience pay and taxes of both runs),
+  except the coordinator, RYS-18 $1,500.00 on 09/25 and its share of RYS-22's taxes: on the books, not in the sample's
+  files, the one difference the reconciliation shows. No staff list or tags are seeded.
+
+The workspace payroll sample zip (`apps/web/public/samples/payroll-workspace-sample.zip`, the workspace payroll page's
+"Download a sample (zip)"; the PDFs are in `docs/samples/payroll-2026-09-workspace/`, made by
+`npm run sample:payroll -w @ad/api`) is September 2026 as a real month holds it: two pay runs through PayPeople
+Payroll, each with its own time report, register, a pay stub per participant, and its own two bank debits.
+
+- **Run 1:** pay period 08/24/2026 to 09/06/2026, paid 09/11/2026 (its period starts in August, but a pay belongs to
+  the month it was paid in, so it is September's). Morgan Lee $1,200.00, Priya Shah $855.00, Sam Ortiz $1,000.00,
+  Taylor Brooks $400.00, Jordan Sample $140.00, Riley Example $112.00, Casey Demo $140.00. Totals: $3,847.00 gross,
+  $790.09 withheld, $3,056.91 net. Bank, 09/10/2026: one $3,056.91 net pay debit and one $1,084.39 tax debit.
+- **Run 2:** pay period 09/07/2026 to 09/20/2026, paid 09/25/2026. Morgan $1,200.00, Priya $945.00, Sam $1,000.00,
+  Taylor $400.00, Jordan $280.00, Riley $224.00, Casey $280.00, Alex Rivera $168.00. Totals: $4,497.00 gross, $852.73
+  withheld, $3,644.27 net. Bank, 09/24/2026: one $3,644.27 net pay debit and one $1,196.75 tax debit.
+- The statement also has a $9,800.00 deposit in and a $412.60 vendor payment; no line names anyone. Taylor Brooks
+  (program assistant) is on no staff list in the tour, and Alex Rivera on no participant list.
+
+The tour: on Engagement staffing, add the three staff, then tag Morgan to both engagements, Priya to In-School Youth and
+Sam to Adult IT; upload the sample on Workspace payroll for September 2026. Before Save, Staff shows the three matched
+and Taylor Brooks in red ("On the register, not on your staff list"); Participants shows each participant twice (one
+pay stub per run) and Alex Rivera in red ("Pay stub names someone on no participant list"). Save writes each staff
+member's pay and taxes per run from the payroll details file, each line with its own run's register, time report and
+debit (run 1's $3,056.91 on 09/10, run 2's $3,644.27 on 09/24). The run 1 pay stubs make three new work-experience payments, each with run 1's proofs
+and the $3,056.91 debit; the run 2 stubs take over the payments the seed typed (Casey's $300.00 becomes $280.00).
+The seed's pay stubs are the sample's own files, so the match links them as the same documents (no two-stub flag).
+Every imported payroll line is of a kind the match covers on its month, so none is an item to prove: What Save will do
+lists them all under "Kept for reconciliation only". Save, and the page returns to September's summary: Actions lists
+the four pays on no engagement and "2 payroll lines in expenses differ"; the reconciliation's Expenses differ tile
+shows the coordinator's run of 09/25 (staff pay −$1,500.00, its taxes −$114.75), and the other 10 lines agree. The
+pays on no engagement are Taylor's two register rows, Alex's register row and Alex's stub.
+
 Reset the demo to its starting state (the dev database is shared, so say so first):
 
 ```bash

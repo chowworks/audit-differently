@@ -47,7 +47,7 @@ export class HighlightSettingsService {
   async set(admin: Caller, kind: string, fields: unknown): Promise<HighlightSettingDto[]> {
     if (!(PAYROLL_DOCUMENT_KINDS as readonly string[]).includes(kind))
       throw new BadRequestException(
-        'Choose a timesheet, payroll register, pay stub or bank statement'
+        'Choose a timesheet, payroll register, pay stub, bank statement or payroll details'
       )
     const list = Array.isArray(fields) ? [...new Set(fields)] : []
     if (!list.length || !list.every((f) => (HIGHLIGHT_FIELDS as readonly unknown[]).includes(f)))

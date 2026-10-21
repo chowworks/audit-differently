@@ -62,8 +62,8 @@ describe('filesFromZip', () => {
       'The zip has no "Payroll registers" folder, or it is empty.',
       'The zip has no "Pay stubs" folder, or it is empty.',
       'The zip has no "Bank statements" folder, or it is empty.',
-      '"Stubs" is not one of the folders: use Timesheets, Payroll registers, Pay stubs and Bank statements.',
-      '2 files are not inside one of the four folders (loose.pdf, Pay stubs/a/deep.pdf).',
+      '"Stubs" is not one of the folders: use Timesheets, Payroll registers, Pay stubs, Bank statements and Payroll details.',
+      '2 files are not inside one of the folders (loose.pdf, Pay stubs/a/deep.pdf).',
       '1 file is not a PDF, PNG, JPG, XLSX or DOCX (Timesheets/notes.txt).',
     ])
   })

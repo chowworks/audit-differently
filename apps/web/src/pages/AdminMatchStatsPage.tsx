@@ -12,7 +12,7 @@ import {
 import { useLoad } from '@/hooks/useApi'
 import { shortDate } from '@/lib/format'
 import { Card, Chip, Empty, ErrorNote, Tile, type Tone } from '@/components/ui'
-import { AdminHow, AdminToolHead } from '@/pages/AdminPage'
+import { AdminHow } from '@/pages/AdminPage'
 
 // Each feature keeps its colour whatever the filter shows (categorical slots 1 to 3, checked for colour blindness).
 const COLOR: Record<MatchFeature, string> = {
@@ -36,11 +36,14 @@ const SIGN: Record<MatchOutcome, string> = {
   failed: '⚠️',
 }
 
+const STATS_HOW =
+  "A row is kept each time a match ends: a payroll match when it is saved, discarded or left for a day, a receipt upload when it finishes or fails, and an emailed receipt each time it is filed or a try fails (a retry is a run of its own). It keeps who started it, the workspace, how many files were uploaded and how big, how long it took (and how much of that was reading), and how many were matched, guessed or missing. It never keeps a file's name, a person's or vendor's name, an amount or which record it was. Match rate is what was found sure out of everything that needed a match. Days are UTC."
+
 /**
- * Admin tools → Matching statistics: how often the payroll and receipt matchers run, how big the uploads are, how long
+ * Admin tools → File Matching, its statistics: how often the payroll and receipt matchers run, how big the uploads are, how long
  * they take and how well they match, across workspaces. Counts only: no file, name or amount is ever shown here.
  */
-export function AdminMatchStatsPage() {
+export function MatchStatsSection() {
   const [days, setDays] = useState<number>(30)
   const [feature, setFeature] = useState<MatchFeature | ''>('')
   const { data, error, status } = useLoad<AdminMatchStatsDto>(
@@ -83,7 +86,6 @@ export function AdminMatchStatsPage() {
   const t = data?.totals
   return (
     <>
-      <AdminToolHead to="/admin/match-stats" />
       <Card title="Match runs" aside={filters}>
         <ErrorNote
           message={status === 403 ? 'You are no longer a platform admin. Reload the page.' : error}
@@ -131,7 +133,7 @@ export function AdminMatchStatsPage() {
             <RunsTable rows={data.rows} total={t.runs} />
           </>
         )}
-        <AdminHow to="/admin/match-stats" />
+        <AdminHow to="/admin/matching" text={STATS_HOW} />
       </Card>
     </>
   )

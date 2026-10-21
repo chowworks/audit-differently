@@ -5,6 +5,7 @@ import {
   PAYROLL_DOCUMENT_KINDS,
   PAYROLL_REPORT_LINES,
   PAYROLL_SLOT_KIND,
+  type AiFileFacts,
   type PayrollDocumentKind,
   type PayrollMatchFileDto,
   type PayrollMatchProgress,
@@ -26,25 +27,33 @@ import { PrismaService } from '../prisma/prisma.service'
 import { ReportsService } from '../reports/reports.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
 import { matchSlot, slotsOf, type ProofFile, type ProofItem } from './match-proof'
+import { payRunsOf, suggestedRuns } from './pay-runs'
 import { cleanMark, MAX_PAYROLL_FILES } from './payroll.service'
 import { HighlightSettingsService } from './highlight-settings.service'
+import { PayrollAiService } from './payroll-ai.service'
+import { PayrollReadingService } from './payroll-reading.service'
 import { PayrollMatchWorker, storageName } from './payroll-match.worker'
 import type { PageItem } from './statement-lines'
-import { itemCopy } from './mark-pdf'
+import { COPIED_TYPES, itemCopy } from './mark-pdf'
+import { overPayLineCap } from './pay-lines'
+import { workspaceItems } from './workspace-items'
+import { countsOnBudget, holdsPayroll, payrollCovers } from '../reports/report-lines'
 
 /** A file of the run as the matcher reads it: its lines and its text runs. */
-const proofFile = (f: {
+export const proofFile = (f: {
   id: string
   kind: string
   fileName: string
   lines: unknown
   items: unknown
+  ai?: AiFileFacts | null
 }): ProofFile => ({
   id: f.id,
   kind: f.kind as PayrollDocumentKind,
   fileName: f.fileName,
   lines: f.lines as StatementLine[],
   items: f.items as PageItem[],
+  ai: f.ai ?? null,
 })
 
 /** A run not saved within this long is removed, its staged files with it. */
@@ -52,24 +61,32 @@ export const RUN_HOURS = 24
 /** Files one run holds at most: the zip's limit in the wizard. */
 export const MAX_RUN_FILES = 200
 
-const PURPOSE: Record<PayrollSlot, string> = {
+export const PURPOSE: Record<PayrollSlot, string> = {
   timesheet: 'timesheet',
   register: 'register',
   stub: 'payment',
   bank: 'payment',
 }
-const SLOT_WORDS: Record<PayrollSlot, string> = {
+export const SLOT_WORDS: Record<PayrollSlot, string> = {
   timesheet: 'timesheet',
   register: 'payroll register',
   stub: 'evidence of payment',
   bank: 'evidence of payment',
 }
 
-const isKind = (k: unknown): k is PayrollDocumentKind =>
+export const isKind = (k: unknown): k is PayrollDocumentKind =>
   typeof k === 'string' && (PAYROLL_DOCUMENT_KINDS as readonly string[]).includes(k)
 const day = (d: Date) => d.toISOString().slice(0, 10)
 
-type RunRow = Prisma.PayrollMatchRunGetPayload<{ include: { files: true } }>
+type RunRowDb = Prisma.PayrollMatchRunGetPayload<{ include: { files: true } }>
+/** A file of a run, with what AI read of its contents, if anything (`PayrollAiService.attach`). */
+export type RunFileRow = RunRowDb['files'][number] & {
+  ai?: AiFileFacts | null
+}
+/** A run, with what AI read of each file. */
+export type RunRow = Omit<RunRowDb, 'files'> & {
+  files: RunFileRow[]
+}
 
 /**
  * "Match payroll & timecards" on the server. The zip's files are staged into a run as they arrive (20 at a time), and
@@ -92,7 +109,9 @@ export class PayrollMatchService {
     private readonly worker: PayrollMatchWorker,
     private readonly highlights: HighlightSettingsService,
     @Inject(DOCUMENT_STORAGE) private readonly storage: DocumentStorage,
-    private readonly stats: MatchStatsService
+    private readonly stats: MatchStatsService,
+    private readonly reading: PayrollReadingService,
+    private readonly ai: PayrollAiService
   ) {}
 
   /**
@@ -186,7 +205,8 @@ export class PayrollMatchService {
   /** The run, its starter's own, on a month still open for changes. */
   private async open(caller: Caller, runId: string) {
     const run = await this.load(caller, runId)
-    if (run.createdById !== caller.userId) throw new NotFoundException()
+    // A workspace run (no month) is opened through its own routes (workspace-payroll.service.ts).
+    if (run.createdById !== caller.userId || !run.monthlyReportId) throw new NotFoundException()
     const r = await this.reports.editable(caller, run.monthlyReportId)
     if (run.createdAt.getTime() < Date.now() - RUN_HOURS * 3_600_000)
       throw new BadRequestException('This match was left for over a day. Upload the zip again.')
@@ -199,6 +219,9 @@ export class PayrollMatchService {
       include: { files: { orderBy: [{ kind: 'asc' }, { fileName: 'asc' }] } },
     })
     if (!run) throw new NotFoundException()
+    // The admin's reading words in force, and each file's payroll period a person gave, before anything is matched.
+    await this.reading.current()
+    await this.ai.attach(run.workspaceId!, run.files)
     return run
   }
 
@@ -319,13 +342,16 @@ export class PayrollMatchService {
           items: f.items as unknown as PageItem[],
         },
       ],
-      highlight[PAYROLL_SLOT_KIND[slot as PayrollSlot]]
+      highlight[PAYROLL_SLOT_KIND[slot as PayrollSlot]],
+      // A staff line's bank line may be its pay run's debit, read from the upload's registers.
+      run.files.map(proofFile)
     )
     const c = match.candidates[0]
     const marks = c?.marks.length ? c.marks : c?.mark ? [c.mark] : []
     const original = new Uint8Array(await this.storage.read(f.storageKey))
-    const bytes =
-      f.contentType === 'application/pdf' ? (await itemCopy(original, marks)).bytes : original
+    const bytes = COPIED_TYPES.includes(f.contentType)
+      ? (await itemCopy(original, marks)).bytes
+      : original
     await this.log.log(caller, {
       workspaceId: r.workspaceId!,
       resource: 'document',
@@ -350,6 +376,7 @@ export class PayrollMatchService {
     const highlight = await this.highlights.current()
     if (links.length > 2000) throw new BadRequestException('Too many links at once')
     const files = new Map(run.files.map((f) => [f.id, f]))
+    const runFiles = run.files.map(proofFile)
     const chosen = links.map((l) => {
       const item = items.get(`${l?.target}-${l?.id}`)
       if (!item) throw new BadRequestException('A payroll item is not of this month')
@@ -363,7 +390,8 @@ export class PayrollMatchService {
         item.proof,
         l.slot,
         [proofFile(f)],
-        highlight[PAYROLL_SLOT_KIND[l.slot]]
+        highlight[PAYROLL_SLOT_KIND[l.slot]],
+        runFiles
       ).candidates[0]
       const mark = found?.mark ? cleanMark(found.mark) : null
       // A bank statement proves a payment by its line alone: with no line found on it, it is not this payment's proof
@@ -373,7 +401,8 @@ export class PayrollMatchService {
           `No line for this payment was found on ${f.fileName}: find it under Unmatched payments after saving`
         )
       const marks = (found?.marks ?? []).slice(0, 20).map(cleanMark)
-      return { item, slot: l.slot, file: f, mark, marks }
+      // A pay run's debit, matched to the run that paid the item: the month's check reads it so.
+      return { item, slot: l.slot, file: f, mark, marks, payRun: found?.payRun === true && !!mark }
     })
     const earlier = run.replace
       ? await this.prisma.document.findMany({
@@ -422,13 +451,19 @@ export class PayrollMatchService {
           if (c.item.target === 'expense')
             await tx.expenseDocument.upsert({
               where: { expenseId_documentId: { expenseId: c.item.id, documentId } },
-              update: { purpose, mark: mark ?? undefined, marks: c.marks as object[] },
+              update: {
+                purpose,
+                mark: mark ?? undefined,
+                marks: c.marks as object[],
+                payRun: c.payRun,
+              },
               create: {
                 expenseId: c.item.id,
                 documentId,
                 purpose,
                 mark,
                 marks: c.marks as object[],
+                payRun: c.payRun,
               },
             })
           else
@@ -472,7 +507,7 @@ export class PayrollMatchService {
   /** Discard: the run, its rows and its staged objects go; the month is as it was. */
   async discard(caller: Caller, runId: string): Promise<void> {
     const run = await this.load(caller, runId)
-    if (run.createdById !== caller.userId) throw new NotFoundException()
+    if (run.createdById !== caller.userId || !run.monthlyReportId) throw new NotFoundException()
     await this.remove(caller, run, 'Discarded', 'discarded')
   }
 
@@ -498,21 +533,15 @@ export class PayrollMatchService {
       )
   }
 
-  private async remove(
-    caller: Caller,
-    run: RunRow,
-    verb: string,
-    outcome: 'discarded' | 'expired'
-  ) {
-    const r = await this.prisma.monthlyReport.findFirst({
-      where: { id: run.monthlyReportId, ...tenantWhere(caller) },
-    })
+  /** Removes a run (a month's, or a workspace run: `workspace-payroll.service.ts` discards with it too). */
+  async remove(caller: Caller, run: RunRow, verb: string, outcome: 'discarded' | 'expired') {
+    const period = await this.periodOf(run, caller)
     await this.log.change(caller, (tx) => tx.payrollMatchRun.delete({ where: { id: run.id } }), {
       workspaceId: run.workspaceId!,
-      resource: 'report',
-      subjectId: run.monthlyReportId,
+      resource: run.monthlyReportId ? 'report' : 'workspace',
+      subjectId: run.monthlyReportId ?? run.workspaceId,
       action: 'delete',
-      description: `${verb} payroll match${r ? ` for ${monthName(r.period)}` : ''} (${howMany(run.files.filter((f) => !f.documentId).length, 'staged file')})`,
+      description: `${verb} ${run.monthlyReportId ? '' : 'workspace '}payroll match${period ? ` for ${monthName(period)}` : ''} (${howMany(run.files.filter((f) => !f.documentId).length, 'staged file')})`,
     })
     await this.stats.recordWith('payroll', () => this.statOf(caller, run, outcome))
     await this.dropStaged(run)
@@ -543,13 +572,20 @@ export class PayrollMatchService {
     return removed
   }
 
+  /** The month a run is for: a workspace run's own period, or its month's. */
+  private async periodOf(run: RunRow, caller: Caller | null): Promise<string | null> {
+    if (!run.monthlyReportId) return run.period
+    const r = await this.prisma.monthlyReport.findFirst({
+      where: { id: run.monthlyReportId, ...(caller ? tenantWhere(caller) : {}) },
+      select: { period: true },
+    })
+    return r?.period ?? null
+  }
+
   private async expire(run: RunRow): Promise<boolean> {
-    const [starter, r] = await Promise.all([
+    const [starter, period] = await Promise.all([
       this.prisma.user.findFirst({ where: { id: run.createdById }, select: { email: true } }),
-      this.prisma.monthlyReport.findFirst({
-        where: { id: run.monthlyReportId },
-        select: { period: true },
-      }),
+      this.periodOf(run, null),
     ])
     const actor = { userId: run.createdById, email: starter?.email ?? null }
     const staged = run.files.filter((f) => !f.documentId).length
@@ -561,10 +597,10 @@ export class PayrollMatchService {
           ? [
               {
                 workspaceId: run.workspaceId!,
-                resource: 'report',
-                subjectId: run.monthlyReportId,
-                action: 'delete',
-                description: `Removed an unsaved payroll match${r ? ` for ${monthName(r.period)}` : ''} left for over ${RUN_HOURS} hours (${howMany(staged, 'staged file')})`,
+                resource: run.monthlyReportId ? ('report' as const) : ('workspace' as const),
+                subjectId: run.monthlyReportId ?? run.workspaceId,
+                action: 'delete' as const,
+                description: `Removed an unsaved ${run.monthlyReportId ? '' : 'workspace '}payroll match${period ? ` for ${monthName(period)}` : ''} left for over ${RUN_HOURS} hours (${howMany(staged, 'staged file')})`,
               },
             ]
           : []
@@ -577,7 +613,7 @@ export class PayrollMatchService {
   }
 
   /** After the run's rows went: the objects it staged, never a document's (a file with `documentId`). */
-  private async dropStaged(run: RunRow) {
+  async dropStaged(run: RunRow) {
     for (const f of run.files)
       if (!f.documentId && f.storageKey.startsWith(`${run.workspaceId}/`))
         await this.storage
@@ -593,13 +629,15 @@ export class PayrollMatchService {
    * The run as Matching statistics counts it, when it ends: its files and their size, the time the job spent reading
    * them, and what the matcher found for each proof the month's items need (sure, guessed, nothing). Counts only.
    */
-  private async statOf(
+  async statOf(
     caller: Actor,
     run: RunRow,
     outcome: 'saved' | 'discarded' | 'expired'
   ): Promise<MatchRun> {
     const [items, highlight] = await Promise.all([
-      this.items(run.monthlyReportId),
+      run.monthlyReportId
+        ? this.items(run.monthlyReportId)
+        : workspaceItems(this.prisma, null, run.workspaceId!, run.period!).then((w) => w.items),
       this.highlights.current(),
     ])
     const files = run.files.map(proofFile)
@@ -645,16 +683,34 @@ export class PayrollMatchService {
 
   /** The month's payroll items: its payroll expense lines and its work-experience payments. */
   private async items(reportId: string) {
-    const [expenses, wex] = await Promise.all([
+    const [expenses, wex, report] = await Promise.all([
       this.prisma.expense.findMany({ where: { monthlyReportId: reportId } }),
       this.prisma.wexPayment.findMany({
         where: { monthlyReportId: reportId },
         include: { participant: true },
       }),
+      // The month: a pay belongs to the month it was paid in (owner's decision, 2026-10-19).
+      this.prisma.monthlyReport.findFirst({
+        where: { id: reportId },
+        select: { period: true, engagementId: true },
+      }),
     ])
+    const month = report?.period ?? undefined
+    // A books' payroll transaction the match covers on the month is the same pay, kept for the reconciliation alone: not
+    // an item to prove (owner's decision, 2026-10-20), as on the workspace match and the month page.
+    const lines = report
+      ? await this.prisma.budgetLine.findMany({
+          where: { engagementId: report.engagementId },
+          select: { payroll: true },
+        })
+      : []
+    const cover = payrollCovers(expenses, new Map([[reportId, wex.length]]), () =>
+      holdsPayroll(lines, 'participant-pay')
+    ).get(reportId)
     return [
       ...expenses
         .filter((e) => PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine))
+        .filter((e) => !e.payrollKind || countsOnBudget(e, cover))
         .map((e) => ({
           target: 'expense' as const,
           id: e.id,
@@ -667,6 +723,7 @@ export class PayrollMatchService {
             amount: Number(e.totalCost),
             start: day(e.date),
             end: day(e.date),
+            month,
           } satisfies ProofItem,
         })),
       ...wex.map((w) => ({
@@ -681,21 +738,16 @@ export class PayrollMatchService {
           amount: Number(w.grossAmount),
           start: day(w.payPeriodStart),
           end: day(w.payPeriodEnd),
+          month,
         } satisfies ProofItem,
       })),
     ]
   }
 
   private async dto(run: RunRow): Promise<PayrollMatchRunDto> {
-    const files: ProofFile[] = run.files.map((f) => ({
-      id: f.id,
-      kind: f.kind as PayrollDocumentKind,
-      fileName: f.fileName,
-      lines: f.lines as unknown as StatementLine[],
-      items: f.items as unknown as PageItem[],
-    }))
+    const files: ProofFile[] = run.files.map(proofFile)
     const [items, highlight] = await Promise.all([
-      this.items(run.monthlyReportId),
+      this.items(run.monthlyReportId!),
       this.highlights.current(),
     ])
     return {
@@ -712,12 +764,40 @@ export class PayrollMatchService {
         error: f.error,
         staged: !f.documentId,
         personal: f.sensitivity === 'personal',
+        overLineCap: overPayLineCap(f),
       })),
       slots: items.flatMap((i) =>
         slotsOf(i.proof).map((slot) =>
-          matchSlot(i.proof, slot, files, highlight[PAYROLL_SLOT_KIND[slot]])
+          matchSlot(i.proof, slot, files, highlight[PAYROLL_SLOT_KIND[slot]], files)
         )
       ),
+      runs: suggestedRuns(payRunsOf(files)),
+      ai: PayrollAiService.summary(run.files),
     }
+  }
+
+  /**
+   * The person reads some files of their match with AI, when they ticked it (owner's decision, 2026-10-19): each file
+   * with the names of the month's participants; what AI found, checked against the file, is kept with its contents.
+   * The run as it now matches.
+   */
+  async aiRead(caller: Caller, runId: string, input: unknown): Promise<PayrollMatchRunDto> {
+    const { run, r } = await this.open(caller, runId)
+    const ids = (input as { fileIds?: unknown } | null)?.fileIds
+    const want = new Set(
+      Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : []
+    )
+    const files = run.files.filter((f) => want.has(f.id) && f.status === 'read')
+    const names = [
+      ...new Set((await this.items(r.id)).map((i) => i.proof.name).filter((n): n is string => !!n)),
+    ]
+    await this.ai.read(
+      caller,
+      r.workspaceId!,
+      files.map((f) => ({ ...f, bytes: () => this.storage.read(f.storageKey) })),
+      names,
+      'Match payroll & timecards'
+    )
+    return this.dto(await this.load(caller, run.id))
   }
 }

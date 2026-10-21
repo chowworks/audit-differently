@@ -45,6 +45,46 @@ export const PAYROLL_REPORT_LINES: ReadonlySet<ReportLine> = new Set([
 // An engagement's approved budget is its own list of budget lines (BudgetLine), each on one line of the funder's
 // monthly report above.
 
+/**
+ * The payroll the match proves, as it lands on the budget (owner's decision, 2026-10-20, #22): each kind on the one
+ * budget line of the engagement that holds it, ticked on that line.
+ */
+export const PAYROLL_BUDGET_KINDS = [
+  'staff-pay',
+  'staff-taxes',
+  'participant-pay',
+  'participant-taxes',
+] as const
+export type PayrollBudgetKind = (typeof PAYROLL_BUDGET_KINDS)[number]
+export const PAYROLL_BUDGET_KIND_LABELS: Record<PayrollBudgetKind, string> = {
+  'staff-pay': 'Staff pay',
+  'staff-taxes': 'Staff taxes and benefits',
+  'participant-pay': 'Participant pay',
+  'participant-taxes': 'Participant taxes',
+}
+
+/** Which report lines take each payroll kind when nothing was ticked yet, first choice first (migration 20261020000100). */
+export const PAYROLL_BUDGET_DEFAULTS: Record<PayrollBudgetKind, ReportLine[]> = {
+  'staff-pay': ['staff-salaries'],
+  'staff-taxes': ['staff-fringe', 'staff-salaries'],
+  'participant-pay': ['wex', 'participant-wages'],
+  'participant-taxes': ['participant-fringes', 'wex', 'participant-wages'],
+}
+
+/** The payroll each of an engagement's lines holds by default: each kind on its first-choice line, in the lines' order. */
+export function payrollDefaults(lines: { reportLine: string }[]): PayrollBudgetKind[][] {
+  const out = lines.map((): PayrollBudgetKind[] => [])
+  for (const kind of PAYROLL_BUDGET_KINDS)
+    for (const want of PAYROLL_BUDGET_DEFAULTS[kind]) {
+      const at = lines.findIndex((l) => l.reportLine === want)
+      if (at >= 0) {
+        out[at]!.push(kind)
+        break
+      }
+    }
+  return out
+}
+
 /** A budget line as a choice (the import's mapping): `key` is the line's id. */
 export interface BudgetOption {
   key: string
@@ -61,6 +101,8 @@ export interface BudgetLineInput {
   reportLine?: ReportLine
   amount?: number | null
   narrative?: string | null
+  /** The payroll from the match this line holds; ticking a kind here moves it off the line that held it. */
+  payroll?: PayrollBudgetKind[]
 }
 
 /**
@@ -94,6 +136,7 @@ export const DOCUMENT_KINDS = [
   'payroll-register',
   'timesheet',
   'paystub',
+  'payroll-details',
   'enrollment-form',
   'eligibility-record',
   'proposal',
@@ -120,6 +163,7 @@ export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
   'payroll-register': 'payroll register',
   timesheet: 'timesheet',
   paystub: 'pay stub',
+  'payroll-details': 'payroll details',
   'enrollment-form': 'enrollment form',
   'eligibility-record': 'eligibility record',
   proposal: 'proposal',
@@ -151,6 +195,7 @@ export const DOCUMENT_SENSITIVITY: Record<DocumentKind, DocumentSensitivity> = {
   'payroll-register': 'financial',
   timesheet: 'financial',
   paystub: 'personal',
+  'payroll-details': 'personal',
   'enrollment-form': 'personal',
   'eligibility-record': 'personal',
   proposal: 'financial',
@@ -180,6 +225,7 @@ export const MONTH_PROOF_KINDS = [
   'payroll-register',
   'timesheet',
   'paystub',
+  'payroll-details',
 ] as const satisfies readonly DocumentKind[]
 
 /** Why a document is attached to an expense or a work-experience payment. */
@@ -308,6 +354,7 @@ export const CHECK_CODES = [
   'unallowable-category',
   'proof-mismatch',
   'no-budget-line',
+  'payroll-counted-twice',
 ] as const
 export type CheckCode = (typeof CHECK_CODES)[number]
 
@@ -412,8 +459,13 @@ export const PERSONAL_DOCUMENT_ROLES: ReadonlySet<Role> = new Set(['owner', 'aud
  * too, since they keep payroll and already see the stubs in the payroll system (owner's decision, 2026-10-16).
  * Eligibility records and enrollment forms stay with owners and auditors.
  */
+/** The personal payroll files every member opens (pay stubs, owner's decision 2026-10-16; payroll details, #22). */
+export const PAYROLL_PERSONAL_KINDS: readonly string[] = ['paystub', 'payroll-details']
+
 export const personalRolesFor = (kind: string): ReadonlySet<Role> =>
-  kind === 'paystub' ? new Set<Role>(['owner', 'bookkeeper', 'auditor']) : PERSONAL_DOCUMENT_ROLES
+  PAYROLL_PERSONAL_KINDS.includes(kind)
+    ? new Set<Role>(['owner', 'bookkeeper', 'auditor'])
+    : PERSONAL_DOCUMENT_ROLES
 
 /** What a contact-form message is about. The contact page's `?topic=` picks one; anything else is 'question'. */
 export const CONTACT_TOPICS = [
@@ -511,7 +563,24 @@ export interface ExpenseDto extends ExpenseInput {
   allocationNote: string | null
   tags: string[]
   documents: AttachedDocument<DocumentPurpose>[]
+  /** Written by the payroll match from payroll details: payroll, proved like a payroll line whatever its budget line. */
+  fromPayroll: boolean
+  /**
+   * A books' payroll transaction and its kind (imported as payroll, or marked on the month): it counts on the budget
+   * only until the payroll match covers that kind of payroll on the month. Null: an ordinary line.
+   */
+  payrollKind: PayrollBudgetKind | null
+  /** Whether it counts on the budget now: false for a books' payroll transaction the match has covered. */
+  counts: boolean
 }
+
+/** A payroll line: on a payroll line of the funder's form, or written by the payroll match (on Program Costs, say). */
+export const isPayrollLine = (e: {
+  reportLine: string
+  fromPayroll?: boolean
+  payrollKind?: string | null
+}) =>
+  PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine) || e.fromPayroll === true || !!e.payrollKind
 
 export interface CheckDto {
   id: string
@@ -653,6 +722,8 @@ export interface EngagementDetail extends EngagementSummary {
     reportLine: ReportLine
     amount: number
     narrative: string | null
+    /** The payroll from the match it holds. */
+    payroll: PayrollBudgetKind[]
     /** Whether any expense is spent against it: then it keeps its form line and is not removed. */
     hasSpending: boolean
     /** Charged to it to date, every month together. */
@@ -723,6 +794,11 @@ export interface WorkspaceDto {
   aiAvailable: boolean
   /** When the owner accepted the terms creating it; null for a workspace made before terms were recorded. */
   termsAcceptedAt?: string | null
+  /**
+   * The owners' setting "Bookkeepers see staff payroll" (on by default). Off, a bookkeeper's month page shows the payroll
+   * section with its proofs as labels, not links to the files. The screen only: the API answers the same data.
+   */
+  bookkeepersSeeStaffPayroll?: boolean
 }
 
 /** Body of POST /me/terms: the version being accepted, which must be the current one. */
@@ -957,7 +1033,13 @@ export interface ReportDetail {
     tags: string[]
     reportDueDay: number
     awardAmount: number | null
-    workspace: { id: string; name: string; featuredDemo?: boolean }
+    workspace: {
+      id: string
+      name: string
+      featuredDemo?: boolean
+      /** The owners' setting "Bookkeepers see staff payroll"; `can.seeStaffPayroll` says what it means for the caller. */
+      bookkeepersSeeStaffPayroll?: boolean
+    }
     eligibilityItems: EligibilityItemDef[]
     reportTo: string | null
     preparerName: string | null
@@ -999,6 +1081,11 @@ export interface ReportDetail {
     readPersonal: boolean
     /** An owner may delete this month: a draft with no expenses, payroll or files, so nothing to submit. */
     deleteMonth: boolean
+    /**
+     * The page links the payroll proofs to their files: false for a bookkeeper when an owner turned off "Bookkeepers see
+     * staff payroll" (the proofs then show as labels). The screen only; the API answers the same data.
+     */
+    seeStaffPayroll?: boolean
   }
 }
 
@@ -1082,6 +1169,24 @@ export interface ImportRequest {
    * column is charged, row by row. A row named here takes this over its category's.
    */
   lines?: Record<string, string>
+  /**
+   * The person's answers on "Payroll transactions confirmation", by line in the file: true counts the row as a payroll
+   * transaction (kept for payroll reconciliation), false as an expense. A row not named here keeps what the import
+   * found.
+   */
+  payroll?: Record<string, boolean>
+}
+
+/** A row on "Payroll transactions confirmation": found as payroll (or not), and the budget line it goes to if it is. */
+export type ImportPayrollRowDto = ImportRowDto & {
+  account: string | null
+  /** Found by its account or category; the person's answer may differ. */
+  found: boolean
+  /** Counted as a payroll transaction now. */
+  included: boolean
+  kind: PayrollBudgetKind
+  /** The budget line ticked for its kind; null when none is (the row then waits). */
+  budgetLineName: string | null
 }
 
 /** What AI suggested for the columns when the person asked (POST .../imports/suggest): null when it had nothing. */
@@ -1115,10 +1220,19 @@ export interface ImportPreviewDto {
   notImported: ImportRowDto[]
   /** Every row that can be imported once it has a budget line, with the one it has now (null: none yet). */
   assignable: (ImportRowDto & { budgetItem: string | null })[]
+  /** "Payroll transactions confirmation": the rows found as payroll, and any the person changed. */
+  payroll: ImportPayrollRowDto[]
+  /**
+   * Rows imported before whose payroll choice is different now: importing changes those lines (payroll or an expense,
+   * and the budget line that follows) instead of skipping them. `change` says how, in the screen's words.
+   */
+  updates: (ImportRowDto & { change: string })[]
 }
 
 export interface ImportResultDto {
   imported: number
+  /** Lines imported before whose payroll choice this import changed. */
+  updated: number
   total: number
   months: ImportPreviewDto['months']
   notImported: number
@@ -1226,7 +1340,7 @@ export const INBOUND_RECEIPT_STATUS_LABELS: Record<InboundReceiptStatus, string>
 export const DISMISS_REASONS = ['personal', 'duplicate', 'not-a-receipt', 'other'] as const
 export type DismissReason = (typeof DISMISS_REASONS)[number]
 export const DISMISS_REASON_LABELS: Record<DismissReason, string> = {
-  personal: 'Personal, not for this grant',
+  personal: 'Not applicable to this workspace',
   duplicate: 'Already on file',
   'not-a-receipt': 'Not a receipt',
   other: 'Something else',
@@ -1381,6 +1495,7 @@ export const PAYROLL_DOCUMENT_KINDS = [
   'payroll-register',
   'paystub',
   'bank-statement',
+  'payroll-details',
 ] as const
 export type PayrollDocumentKind = (typeof PAYROLL_DOCUMENT_KINDS)[number]
 
@@ -1435,6 +1550,8 @@ export const DEFAULT_HIGHLIGHTS: Record<PayrollDocumentKind, HighlightField[]> =
   timesheet: ['row', 'name', 'payPeriod'],
   'payroll-register': ['payPeriod', 'payDate', 'amount'],
   'bank-statement': ['date', 'amount'],
+  // A spreadsheet: the person's rows of the run, filled yellow on the item's copy.
+  'payroll-details': ['row'],
 }
 
 /** The highlights in force for one proof type, and who last set them (null: the defaults). */
@@ -1444,6 +1561,192 @@ export interface HighlightSettingDto {
   changedByEmail: string | null
   changedAt: string | null
 }
+
+/**
+ * The words and day windows the payroll matchers read payroll files by, for the whole system (owner's decision,
+ * 2026-10-19): set by a platform admin in Admin tools → Payroll reading, read by both match screens. Each list is plain
+ * words, any case; a space also matches a hyphen or a line's spacing ("year to date" reads "Year-to-Date").
+ */
+export interface PayrollReading {
+  /** The label beside a payroll run's pay date: "Pay date", "Check date". */
+  payDateLabels: string[]
+  /** A word on the lines that print the pay period: "period". */
+  periodLabels: string[]
+  /** The labels a register states the run's bank debit under, best first: "Total direct deposits". */
+  debitTotalLabels: string[]
+  /** The label of a pay stub's gross pay, best first: "Gross pay", "Gross". */
+  grossLabels: string[]
+  /** Read when no gross label is found: "Total pay", "Earnings". */
+  totalPayLabels: string[]
+  /** The label of the net pay: "Net pay". */
+  netLabels: string[]
+  /** Words that mark a year-to-date amount, never this run's: "YTD", "Year to date". */
+  ytdLabels: string[]
+  /** The label before the person's name on a pay stub: "Employee name", "Paid to". */
+  nameLabels: string[]
+  /** Words of a bank line where money comes in, so it pays nobody (a direct deposit still counts): "Deposit", "Refund". */
+  moneyInWords: string[]
+  /** How many days a run's bank debit may be from its pay date. */
+  debitDaysFromPayDate: number
+  /** With no pay date on the register: how many days after the pay period ends its bank debit may be. */
+  debitDaysAfterPeriod: number
+  /** How many days a staff charge's date may be from a run's pay date to be that run's pay. */
+  chargeDaysFromPayDate: number
+  /** The bookkeeper's Auto-Match: how many days a staff charge may be from a date on its proof. */
+  proofDaysFromCharge: number
+}
+
+export type PayrollReadingList = {
+  [K in keyof PayrollReading]: PayrollReading[K] extends string[] ? K : never
+}[keyof PayrollReading]
+export type PayrollReadingDays = Exclude<keyof PayrollReading, PayrollReadingList>
+
+/** The defaults until a platform admin changes them. */
+export const DEFAULT_PAYROLL_READING: PayrollReading = {
+  payDateLabels: ['pay date', 'check date'],
+  periodLabels: ['period'],
+  debitTotalLabels: [
+    'total direct deposits',
+    'total direct deposit',
+    'total net pay',
+    'net pay total',
+    'total payroll debit',
+    'total debit',
+    'total cash required',
+    'total funding',
+  ],
+  grossLabels: ['gross pay', 'gross wages', 'gross earnings', 'gross'],
+  totalPayLabels: ['total pay', 'total earnings', 'earnings'],
+  netLabels: ['net pay'],
+  ytdLabels: ['ytd', 'year to date'],
+  nameLabels: ['employee name', 'employee', 'paid to', 'name'],
+  moneyInWords: ['deposit', 'deposits', 'credit', 'credits', 'interest', 'refund'],
+  debitDaysFromPayDate: 7,
+  debitDaysAfterPeriod: 16,
+  chargeDaysFromPayDate: 3,
+  proofDaysFromCharge: 16,
+}
+
+/** Each list on the admin's page, in order: its title and one line saying what it is for. */
+export const PAYROLL_READING_LISTS: { key: PayrollReadingList; title: string; line: string }[] = [
+  {
+    key: 'payDateLabels',
+    title: 'Pay date labels',
+    line: "The words beside a payroll run's pay date.",
+  },
+  {
+    key: 'periodLabels',
+    title: 'Pay period words',
+    line: 'A word on the lines that print the pay period.',
+  },
+  {
+    key: 'debitTotalLabels',
+    title: 'Bank debit totals',
+    line: "The labels a payroll register states the run's bank debit under, best first.",
+  },
+  { key: 'grossLabels', title: 'Gross pay labels', line: "A pay stub's gross pay, best first." },
+  {
+    key: 'totalPayLabels',
+    title: 'Total pay labels',
+    line: 'Read when no gross pay label is found.',
+  },
+  { key: 'netLabels', title: 'Net pay labels', line: "A pay stub's net pay." },
+  {
+    key: 'ytdLabels',
+    title: 'Year-to-date words',
+    line: "An amount after these is the year's, never this run's.",
+  },
+  {
+    key: 'nameLabels',
+    title: 'Name labels',
+    line: "The label before the person's name on a pay stub.",
+  },
+  {
+    key: 'moneyInWords',
+    title: 'Money-in words',
+    line: 'A bank line with these pays nobody, unless it is a direct deposit.',
+  },
+]
+
+/** Each day window on the admin's page: its title and one line. */
+export const PAYROLL_READING_DAYS: { key: PayrollReadingDays; title: string; line: string }[] = [
+  {
+    key: 'debitDaysFromPayDate',
+    title: 'Bank debit near the pay date',
+    line: "Days a run's bank debit may be from its pay date.",
+  },
+  {
+    key: 'debitDaysAfterPeriod',
+    title: 'Bank debit after the period',
+    line: 'With no pay date: days after the pay period ends.',
+  },
+  {
+    key: 'chargeDaysFromPayDate',
+    title: 'Staff charge near the pay date',
+    line: "Days a staff charge's date may be from a run's pay date.",
+  },
+  {
+    key: 'proofDaysFromCharge',
+    title: "Bookkeeper's Auto-Match window",
+    line: 'Days a staff charge may be from a date on its proof.',
+  },
+]
+
+/**
+ * One save of Admin tools → Payroll File Matching's configuration, for its history: who, when, and what changed, in
+ * words ("Pay date labels: added \"disbursement date\"").
+ */
+export interface PayrollSettingChangeDto {
+  changedAt: string
+  changedByEmail: string | null
+  /** Which part: the reading words and days, or one proof type's highlighting. */
+  part: 'reading' | 'highlights'
+  changes: string[]
+}
+
+/** The words and days in force, and who last changed them (null: the defaults). */
+export interface PayrollReadingDto {
+  reading: PayrollReading
+  changedByEmail: string | null
+  changedAt: string | null
+}
+
+/** One value AI read from a payroll file, with the line of the file's own text it was found on. */
+export interface AiPersonFact {
+  /** The name on our lists it is, as the list keeps it. */
+  name: string
+  line: StatementLine
+  gross: number | null
+  payDate: string | null
+  start: string | null
+  end: string | null
+}
+
+/**
+ * What AI read from one payroll file (owner's decision, 2026-10-19): the payroll run it is of (a register's pay date,
+ * period and stated totals; a timesheet's or stub's period and pay date) and the people on our lists it shows. Every
+ * value was found in the file's own text; a value that wasn't is never kept.
+ */
+export interface AiFileFacts {
+  payDate: string | null
+  start: string | null
+  end: string | null
+  totals: number[]
+  people: AiPersonFact[]
+  /** Why nothing was read, in plain words, when AI found nothing it could show in the file. */
+  note?: string
+}
+
+/** One payroll run of the month, as its register prints it: its pay date and its pay period, the same for everyone it paid. */
+export interface PayrollRunEntry {
+  /** yyyy-mm-dd, in the month. */
+  payDate: string
+  start: string
+  end: string
+}
+
+/** What a proof shows when the file it is on prints none of the month's pay dates. */
+export const PAYROLL_RUN_UNKNOWN = 'Payroll Periods unknown'
 
 /** One file of a payroll match run: staged from the zip, or (`staged: false`) a payroll document already on file. */
 export interface PayrollMatchFileDto {
@@ -1458,7 +1761,15 @@ export interface PayrollMatchFileDto {
   error: string | null
   staged: boolean
   personal: boolean
+  /** It has more payroll lines than are read (MAX_PAY_LINES): only the first are, and the screen says so. */
+  overLineCap: boolean
 }
+
+/**
+ * How many payroll lines (a register's rows, a bank statement's payments out) are read from one file. A file with more
+ * is flagged on the match screens and in the reconciliation, never cut short in silence (owner's decision, 2026-10-19).
+ */
+export const MAX_PAY_LINES = 2000
 
 /** The best line one file has for one payroll item's slot, as the server read it. */
 export interface PayrollCandidate {
@@ -1471,6 +1782,10 @@ export interface PayrollCandidate {
   sure: boolean
   /** Higher fits better; 0 is a file of the right kind that shows nothing of this item. */
   score: number
+  /** A bank line that is the debit of the pay run that paid the item, not a line of the item's own amount. */
+  payRun?: boolean
+  /** AI read it (marked ✨ on the screen), checked against the file's text. */
+  ai?: boolean
   /** Why, in plain words. */
   why: string
 }
@@ -1500,6 +1815,19 @@ export interface PayrollMatchRunDto {
   expiresAt: string
   files: PayrollMatchFileDto[]
   slots: PayrollSlotMatch[]
+  /** The month's payroll runs as the registers print them (pay date and period), in pay date order. */
+  runs: PayrollRunEntry[]
+  /**
+   * Reading the files with AI, when a person asks: `available` when the server can (a key, and zero data retention
+   * declared); the files AI has read (by run file id), and those it read nothing from.
+   */
+  ai: {
+    available: boolean
+    /** Before zero data retention is in place: the screen tells the person first what may be kept, and for how long. */
+    beta: boolean
+    read: string[]
+    nothing: string[]
+  }
 }
 
 /** Save: the proofs chosen, each a file of the run; the server works out its line and highlights, as Show draws them. */
@@ -1581,4 +1909,610 @@ export interface AdminReceiptsAddressesDto {
  */
 export interface ReleaseReceiptsAddressBody {
   receivedSinceRemoval: number
+}
+
+// ── Workspace payroll match (GitHub issue #22) ─────────────────────────────
+// One payroll zip for the whole workspace and a month, matched against the payroll items of every engagement with a
+// month for that period; each proof is filed once as a workspace document and linked from each item it proves. The
+// reconciliation accounts for every person-pay found in the files. Owners run it; auditors read the reconciliation.
+
+/** The files whose lines are person-pays: a register's rows, a bank statement's transactions, a pay stub. */
+export const PAY_LINE_KINDS = ['payroll-register', 'paystub', 'bank-statement'] as const
+export type PayLineKind = (typeof PAY_LINE_KINDS)[number]
+
+/** Where a person-pay landed: on an item's proof, guessed for one (waiting for a person), on none, or not grant-funded. */
+export type PayLineState = 'matched' | 'guessed' | 'unassigned' | 'not-funded'
+
+export const PAY_LINE_STATE_LABELS: Record<PayLineState, string> = {
+  matched: 'Matched',
+  guessed: 'Guessed: check it',
+  unassigned: 'Unassigned',
+  'not-funded': 'Not grant-funded',
+}
+
+/** A payroll item of one engagement's month, as the workspace match and its reconciliation list it. */
+export interface WorkspacePayrollItemDto {
+  target: 'expense' | 'wex'
+  id: string
+  kind: 'staff' | 'participant'
+  engagementId: string
+  engagementName: string
+  reportId: string
+  period: string
+  monthStatus: ReportStatus
+  /** The item's task in plain words: "Expense ISY-12" or "Jordan Sample's work-experience pay". */
+  title: string
+  sub: string
+  /** yyyy-mm-dd: the pay period, or a staff line's date twice. */
+  start: string
+  end: string
+  amount: number
+  /** The proofs already on file for it. */
+  proved: PayrollSlot[]
+}
+
+/** An engagement's month for the period, with its status: a closed or submitted one is reopened before Save. */
+export interface WorkspacePayrollMonthDto {
+  reportId: string
+  engagementId: string
+  engagementName: string
+  status: ReportStatus
+}
+
+/** One person-pay found in a file and where it landed. */
+export interface PayLineDto {
+  /** The kept line's id once saved; `<fileId>:<n>` while a match is open. */
+  id: string
+  /** The workspace document, once saved; null in an open match. */
+  documentId: string | null
+  /** The open match's file; null once saved. */
+  fileId: string | null
+  fileName: string
+  kind: PayLineKind
+  /** The line as the file prints it (a name and pay), with its box; null for a scanned pay stub. */
+  mark: StatementLine | null
+  state: PayLineState
+  /**
+   * The item it is on (matched) or guessed for. Null when matched in an open match to a work-experience payment Save
+   * will create from this pay stub (see `WorkspacePayrollRunDto.plan.stubs`).
+   */
+  item: Pick<
+    WorkspacePayrollItemDto,
+    'target' | 'id' | 'engagementId' | 'engagementName' | 'reportId' | 'period' | 'title'
+  > | null
+  notFunded: { reason: string; by: string; at: string } | null
+  /** What needs an owner's eye (PAY_LINE_FLAG_LABELS); flagged only, nothing is changed by a flag. */
+  flags: PayLineFlag[]
+  /** The person on the staff list this register row or bank line is of, when one is found. */
+  staff: { id: string; name: string } | null
+}
+
+/** A workspace payroll match: the run's files, every open slot's match across the engagements, and the person-pays. */
+export interface WorkspacePayrollRunDto extends PayrollMatchRunDto {
+  workspaceId: string
+  period: string
+  /** What this change to the month's payroll files is (`WORKSPACE_PAYROLL_MODES`). */
+  mode: WorkspacePayrollMode
+  /** Replace all: how many different files (by contents) the zip holds, as the screen counted them; null otherwise. */
+  expectedFiles: number | null
+  items: WorkspacePayrollItemDto[]
+  months: WorkspacePayrollMonthDto[]
+  pays: PayLineDto[]
+  /** What Save will do from the staff list and the participant lists, before anything is written. */
+  plan: WorkspacePayrollPlanDto
+}
+
+/** Save: the proofs chosen, and the reason when a chosen item's month is closed or submitted and must be reopened. */
+export interface WorkspacePayrollSaveInput extends PayrollMatchSaveInput {
+  reopenReason?: string
+}
+
+/**
+ * Each workspace month has one set of payroll files, and matching always comes from that set (owner's decision,
+ * 2026-10-18). A change to the set is a run of one of these, checked and then saved; after any change the whole month
+ * is matched again from the full set and written as a difference.
+ * - replace: the uploaded zip becomes the set; files no longer in it leave.
+ * - add: one or more files join the set (a file of the same name and kind takes the place of the one in the set).
+ * - remove: one file leaves the set.
+ * - match: the set is unchanged and matched again (a participant added, staff tagged).
+ */
+export const WORKSPACE_PAYROLL_MODES = ['replace', 'add', 'remove', 'match'] as const
+export type WorkspacePayrollMode = (typeof WORKSPACE_PAYROLL_MODES)[number]
+
+/** A month's set holds at most this many files; more is refused, never dropped. */
+export const MAX_WORKSPACE_PAYROLL_FILES = 1000
+
+/** POST /workspaces/:id/payroll/:period/match: start a change of the month's set by upload. */
+export interface WorkspacePayrollStartInput {
+  /** Default 'add'. */
+  mode?: 'replace' | 'add'
+  /** Replace all only, and required there: how many different files (by contents, sha256) the zip holds. */
+  expected?: number
+}
+
+/** One file of a month's set. */
+export interface WorkspacePayrollFileDto {
+  id: string
+  kind: PayrollDocumentKind
+  fileName: string
+  size: number
+  /** The contents' sha256: the same file uploaded again is the same file. */
+  sha256: string
+  uploadedAt: string
+  personal: boolean
+}
+
+/** GET /workspaces/:id/payroll/:period/files: the month's set. */
+export interface WorkspacePayrollFilesDto {
+  workspaceId: string
+  period: string
+  files: WorkspacePayrollFileDto[]
+  /** Owners change the set; auditors read it. */
+  can: { change: boolean }
+}
+
+/** Why an owner's decision on a file was dropped: the file's contents or name changed, or the file left the set. */
+export type DroppedDecisionWhy = 'changed' | 'left'
+
+export const DROPPED_DECISION_WHY_LABELS: Record<DroppedDecisionWhy, string> = {
+  changed: 'The file changed',
+  left: 'The file left the payroll files',
+}
+
+/**
+ * An owner's decision (a proof linked by hand or a guess confirmed, or a pay marked not grant-funded) dropped because
+ * the file it was made on changed or left the month's set. Kept while the same file (name and contents) stays.
+ */
+export interface DroppedDecisionDto {
+  /** Null in a plan (not saved yet). */
+  id: string | null
+  fileName: string
+  kind: PayrollDocumentKind
+  decision: 'linked' | 'not-funded'
+  why: DroppedDecisionWhy
+  /** The item a linked proof was on ("Expense ISY-12"), and its engagement; null for not grant-funded. */
+  itemTitle: string | null
+  engagementName: string | null
+  /** Who saved the change that dropped it, and when; null in a plan. */
+  by: string | null
+  at: string | null
+}
+
+/** The months of the workspace that can be matched, newest first. */
+export interface WorkspacePayrollPeriodDto {
+  period: string
+  months: number
+  payLines: number
+}
+
+/** The reconciliation of one month's payroll across the workspace. */
+export interface PayrollReconciliationDto {
+  workspaceId: string
+  period: string
+  pays: PayLineDto[]
+  /** The bank statement's other lines (balances, vendor and card payments): no one's pay, counted and not listed. */
+  otherBankLines: number
+  /** Engagement payroll items with a proof still missing, and which. */
+  unproved: { item: WorkspacePayrollItemDto; missing: PayrollSlot[] }[]
+  /**
+   * The books against the payroll files, per engagement, run and kind of payroll: the books' payroll transactions of a
+   * run (by their date) and what the match put on the month for it (the staff lines it wrote, the participants'
+   * payments). Null on a side that has none.
+   */
+  books: BooksRunDto[]
+  /** Every engagement payroll item of the month and the proofs it needs (`item.proved` says which are on file). */
+  items: { item: WorkspacePayrollItemDto; needed: PayrollSlot[] }[]
+  counts: Record<PayLineState, number> & { unproved: number; flagged: number }
+  /**
+   * People on the staff list who are on no engagement: their pay in these files proves nothing (`inFiles`), or they
+   * are on the list alone. Tag them to an engagement, then match again.
+   */
+  staffOnNoEngagement: {
+    id: string
+    name: string
+    inFiles: boolean
+    /** Their pay on the register rows found this month (gross); null when none was found. */
+    paid: number | null
+    /** What payroll details charges the program for them this month: grant pay on no engagement. Null: none. */
+    charged: number | null
+  }[]
+  /** Decisions dropped because their file changed or left the month's set, newest first. */
+  dropped: DroppedDecisionDto[]
+  /** Payroll items with two different files as one proof (the bookkeeper's and the match's), for the owner to check. */
+  twoProofs: TwoProofsDto[]
+  /** Files of the month that reached MAX_PAY_LINES: lines after it were not read. */
+  filesOverLineCap: { documentId: string; fileName: string }[]
+  /** Owners fix and mark; auditors read. */
+  can: { change: boolean }
+}
+
+/** One run's payroll of one kind on an engagement: the books' amount and the payroll files' (the match's). */
+export interface BooksRunDto {
+  engagementId: string
+  engagementName: string
+  reportId: string
+  /** The run's pay date (yyyy-mm-dd), as the books date it. */
+  date: string
+  kind: PayrollBudgetKind
+  books: number | null
+  files: number | null
+}
+
+/** Fix by hand: link a person-pay to an engagement's payroll item. */
+export interface PayLineLinkInput {
+  target: 'expense' | 'wex'
+  id: string
+}
+
+/**
+ * What a pay in the files is flagged for (GitHub issue #22): nothing is changed by a flag, an owner looks at it.
+ * A pay stub: its pay or pay period could not be read, it names nobody on an engagement's participant list, it names
+ * someone on more than one, the participant's engagement has no month for the period, it was paid in another month
+ * (a pay belongs to the month of its pay date, owner's decision, 2026-10-19), or its pay is not what the
+ * payroll register pays them (a bank statement shows one debit per pay run, never a line per person). A register row or bank line: the person is on the staff list but on no engagement, or on no list at all.
+ */
+export const PAY_LINE_FLAGS = [
+  'stub-unreadable',
+  'no-participant',
+  'several-participants',
+  'no-month',
+  'other-month',
+  'register-disagrees',
+  'duplicate',
+  'named-by-ai',
+  'staff-untagged',
+  'not-on-a-list',
+  'several-people',
+  'pay-unclear',
+] as const
+export type PayLineFlag = (typeof PAY_LINE_FLAGS)[number]
+/** The flags a pay stub's line keeps from the match that read it (the rest are worked out when the page opens). */
+export type StubFlag = Extract<
+  PayLineFlag,
+  | 'stub-unreadable'
+  | 'no-participant'
+  | 'several-participants'
+  | 'no-month'
+  | 'other-month'
+  | 'register-disagrees'
+  | 'duplicate'
+  | 'named-by-ai'
+>
+
+export const PAY_LINE_FLAG_LABELS: Record<PayLineFlag, string> = {
+  'stub-unreadable': "The pay or pay period can't be read",
+  'no-participant': 'Pay stub names someone on no participant list',
+  'several-participants': 'Names someone on more than one participant list',
+  'no-month': "The participant's engagement has no month for it",
+  'other-month': "Paid in another month: it belongs to that month's payroll",
+  'register-disagrees': 'The pay stub and the payroll register disagree',
+  'named-by-ai': '✨ Matched to this person by AI: check the name',
+  duplicate: 'A payment for this pay period is already on the month',
+  'staff-untagged': 'On the staff list, on no engagement',
+  'not-on-a-list': 'Names nobody on the staff or participant lists',
+  'several-people': 'Fits more than one person on the lists',
+  'pay-unclear': "Can't tell which amount is this period's pay",
+}
+
+// ── Staff and engagement staffing (GitHub issue #22) ───────────────────────
+// The owner's list of the company's staff (records, not accounts) and the engagements each works on. The workspace
+// payroll match links each person's timesheet, register row and bank line to the staff payroll lines of every
+// engagement they are on. Owners change it; owners and auditors read it; a bookkeeper sees none of it.
+
+/** The report lines a staff member's pay is charged on: their proofs are linked to these expense lines. */
+export const STAFF_REPORT_LINES = [
+  'staff-salaries',
+  'staff-fringe',
+] as const satisfies readonly ReportLine[]
+
+/** One person on the staff list, with the engagements they work on. */
+export interface StaffMemberDto {
+  id: string
+  /** Unique in the workspace, whatever its case; the payroll files are matched by it. No employee number is kept. */
+  name: string
+  role: string | null
+  engagements: { id: string; name: string }[]
+  /** Named in saved payroll proof: they can't be removed from the list (their engagements can still change). */
+  inSavedProof: boolean
+}
+
+/** GET /workspaces/:id/staff and every staff change's answer. */
+export interface StaffListDto {
+  workspaceId: string
+  staff: StaffMemberDto[]
+  /** The workspace's engagements, for "+ Add person" and "+ Add engagement". */
+  engagements: { id: string; name: string; code: string | null; status: EngagementStatus }[]
+  /** Owners change it; auditors read. */
+  can: { change: boolean }
+}
+
+/** One person to add (a pasted row) or a person's new details. An empty role is none. */
+export interface StaffInput {
+  name: string
+  role?: string | null
+}
+
+/** POST /workspaces/:id/staff: the paste import, every row at once. */
+export interface StaffAddInput {
+  staff: StaffInput[]
+}
+
+/**
+ * One problem of a paste import or an edit, beside its field. A 400's body carries every problem at once:
+ * `{ message, problems: StaffInputProblem[] }` (`row` is 1-based; 1 for an edit).
+ */
+export interface StaffInputProblem {
+  row: number
+  field: 'name' | 'role'
+  message: string
+}
+
+/** Someone a payroll register names who is not on the staff list, offered for the paste import. */
+export interface StaffSuggestionDto {
+  name: string
+  fileName: string
+}
+
+/** Where one proof was found in a file of the run: the file, and the line on it (null: the file names them, no line). */
+export interface ProofSpotDto {
+  fileId: string
+  mark: StatementLine | null
+  /** The pay run's bank debit: one line everyone paid in the run shares. */
+  run?: boolean
+  /** The pay date (yyyy-mm-dd) of the pay run it is of, when it is one run's: a register row, a time report, a debit. */
+  payDate?: string | null
+  /** Where it was found, when not by the rules: AI read it (marked ✨), or the payroll company's payroll details. */
+  source?: 'ai' | 'details'
+  /** With a source: the amount on that line, so a person found on several lines of one file can tell them apart. */
+  amount?: number | null
+}
+
+/**
+ * A payroll item with two different files as one proof (owner's decision, 2026-10-19): the one already on it (the
+ * bookkeeper's) and the owner's from the payroll files. Both are kept; the owner checks which is right.
+ */
+export interface TwoProofsDto {
+  target: 'expense' | 'wex'
+  id: string
+  title: string
+  engagementName: string
+  reportId: string
+  slot: PayrollSlot
+  /** "Casey Demo's pay has two different pay stubs: check which is right". */
+  message: string
+}
+
+/** Someone a payroll register pays who is on no list (not the staff list, a participant list or a pay stub). */
+export interface UnlistedPersonDto {
+  name: string
+  register: ProofSpotDto[]
+  timesheet: ProofSpotDto[]
+}
+
+/** What the workspace payroll match found of one person on the staff list, before Save. */
+export interface StaffFoundDto {
+  staffId: string
+  name: string
+  engagements: { id: string; name: string }[]
+  /** Their pay on the register rows found (the largest amount on each row, the gross), added up; null when none. */
+  pay: number | null
+  /** The run's files each proof was found in. */
+  timesheet: string[]
+  register: string[]
+  bank: string[]
+  /** Bank statements with a line of their pay's amount but not their name: a guess, checked in the reconciliation. */
+  bankGuess: string[]
+  /** Their pay on each run's register (gross), by the run's pay date, in pay date order; `pay` is the month's total. */
+  payByRun: { payDate: string | null; amount: number }[]
+  /** What payroll details charge to the grant for them, per run (#22, section 8); empty when none, or no file was given. */
+  charged: { start: string | null; end: string | null; amount: number }[]
+  /** Where each proof was found, line by line (one per run), for the screen's "Found, page N" and Show. */
+  found: {
+    timesheet: ProofSpotDto[]
+    register: ProofSpotDto[]
+    bank: ProofSpotDto[]
+    bankGuess: ProofSpotDto[]
+  }
+}
+
+/** What Save will do with one pay stub: the participant it names, and their work-experience payment from it. */
+export interface StubPayDto {
+  /** The run's file. */
+  fileId: string
+  fileName: string
+  participant: {
+    id: string
+    name: string
+    participantId: string
+    engagementId: string
+    engagementName: string
+  } | null
+  /** yyyy-mm-dd, as read from the stub; null when it could not be read. */
+  payPeriodStart: string | null
+  payPeriodEnd: string | null
+  /** The payroll run it was paid in: the pay date it prints, else its period's end. */
+  payDate: string | null
+  /** Where its pay was read: by the rules, or by AI (marked ✨). */
+  source: 'rules' | 'ai'
+  grossAmount: number | null
+  /** create: a new payment; update: the payment from this stub (or the same pay period typed by hand) changes; same: nothing to change; none: flagged. */
+  action: 'create' | 'update' | 'same' | 'none'
+  /** The payment it is, once there is one. */
+  wexPaymentId: string | null
+  /** The month it goes on. */
+  reportId: string | null
+  flags: StubFlag[]
+  /** The payment's amount before Save (update and same); null for a new one or none. */
+  previousAmount: number | null
+  /** The stub's pay line, for Show; null when it was scanned. */
+  payLine: StatementLine | null
+  /** The pay run's bank debit Save links to the payment as its bank line; null when none was found. */
+  bank: ProofSpotDto | null
+  /** Their timesheet line Save attaches; null when none was found. */
+  timesheet: ProofSpotDto | null
+  /** Their register row Save attaches, else the run's register at its stated total (`run`); null when none. */
+  register: ProofSpotDto | null
+  /** The name the stub prints, when it can be read (a stub naming someone on no list shows it). */
+  named: string | null
+}
+
+/** One file of the month's set after Save, and the engagements its proof links reach: none, it is matched to nothing. */
+export interface PlanFileDto {
+  fileId: string
+  fileName: string
+  kind: PayrollDocumentKind
+  engagements: { id: string; name: string }[]
+}
+
+/** One file Save attaches to a payroll item, as which proof, and whose line on it led there. */
+export interface PlanProofFileDto {
+  fileId: string
+  fileName: string
+  kind: PayrollDocumentKind
+  slot: PayrollSlot
+  /** The tagged staff (a staff line) or the participant (their payment) whose line it is; empty for Auto-Match's pick. */
+  people: string[]
+}
+
+/** The proof Save attaches to one payroll item (the links it adds or changes). */
+export interface PlanProofDto {
+  target: 'expense' | 'wex'
+  /** The item; null for the work-experience payment a pay stub makes (`stubFileId`). */
+  id: string | null
+  stubFileId: string | null
+  title: string
+  engagementId: string
+  engagementName: string
+  reportId: string
+  files: PlanProofFileDto[]
+}
+
+/** The staff and participant work Save will do, worked out from the lists and the files. */
+export interface WorkspacePayrollPlanDto {
+  staff: StaffFoundDto[]
+  stubs: StubPayDto[]
+  /** How many proof links Save will add or change (each person's proofs on each engagement's staff payroll lines). */
+  links: number
+  /** How many proof links Save will remove: the match no longer finds them, or their file leaves the set. */
+  unlinks: number
+  /** Every file of the set after Save, with the engagements it reaches; only those reach an engagement's records. */
+  files: PlanFileDto[]
+  /** The links Save adds or changes (`links`), by payroll item. */
+  proof: PlanProofDto[]
+  /** The set after Save: the files that join it, those that leave it (and why), and how many stay as they are. */
+  change: {
+    joining: { fileId: string; fileName: string; kind: PayrollDocumentKind }[]
+    leaving: {
+      documentId: string
+      fileName: string
+      kind: PayrollDocumentKind
+      why: DroppedDecisionWhy
+    }[]
+    unchanged: number
+    /** How many files the set holds after Save (at most MAX_WORKSPACE_PAYROLL_FILES). */
+    total: number
+  }
+  /** Work-experience payments from pay stubs Save makes, changes and removes (a payment typed by hand is never removed). */
+  payments: { create: number; update: number; remove: number }
+  /**
+   * The month's payroll on the budget (owner's decisions, 2026-10-20): the lines Save writes or changes from payroll
+   * details, and the payroll lines already on a month that the match now counts, which Save keeps for reconciliation
+   * only so the same pay is not counted twice.
+   */
+  payrollLines: {
+    write: number
+    keep: {
+      reportId: string
+      engagementName: string
+      itemNumber: string
+      date: string
+      amount: number
+      kind: PayrollBudgetKind
+    }[]
+  }
+  /** The owner's decisions Save drops, because their file changed or leaves the set. */
+  dropped: DroppedDecisionDto[]
+  /** Every engagement month whose proof or payments Save changes; only these are touched. */
+  months: WorkspacePayrollMonthDto[]
+  /** Closed or submitted months Save will reopen, with the owner's reason, to make those changes. */
+  reopen: WorkspacePayrollMonthDto[]
+  /**
+   * Proofs Save attaches that are already on file: the same file (by its contents) is on the item, or filed on its
+   * month by the bookkeeper and linked from there instead of a copy.
+   */
+  alreadyOnFile: number
+  /** Items Save leaves with two different files as one proof, for the owner to check. */
+  twoProofs: TwoProofsDto[]
+  /** People the registers pay who are on no list: on no engagement until added to the staff list and tagged. */
+  unlisted: UnlistedPersonDto[]
+  /** Replace all: every file of the zip has arrived (`expectedFiles`); Save is refused until then. Always true otherwise. */
+  complete: boolean
+}
+
+/** Which of a person's proofs were found in the month's saved payroll files. */
+export interface StaffProofFound {
+  timesheet: boolean
+  register: boolean
+  bank: boolean
+}
+
+/** One person tagged to an engagement, on its card. */
+export interface EngagementCardStaffDto {
+  staffId: string
+  name: string
+  role: string | null
+  /** Their pay found in the files (register rows, gross); null when none was found. Never split across engagements. */
+  pay: number | null
+  /** What payroll details charges to the grant for them this month (#22, section 8); null when it charges none. */
+  charged: number | null
+  proof: StaffProofFound
+  /** The other engagements they are tagged to ("also on …"). */
+  alsoOn: { id: string; name: string }[]
+}
+
+/** One engagement's card for the month: its staff payroll charge against the pay in the files. */
+export interface EngagementPayrollCardDto {
+  engagementId: string
+  engagementName: string
+  engagementCode: string | null
+  reportId: string
+  monthStatus: ReportStatus
+  /** Its staff payroll lines this month (Staff Salaries and Staff Fringe Benefits, the amount charged to the program). */
+  charged: number
+  /** What payroll details charges to the grant this month for the staff tagged to it (a shared person on each card). */
+  chargedByDetails: number
+  /** The month page's budget table: each budget line's approved amount, spent before, this month and what is left. */
+  lines: BudgetLineRow[]
+  /** Work experience: the payments on its month, those of earlier months, and its approved WEX budget lines. */
+  wex: { thisMonth: number; payments: number; before: number; approved: number }
+  staffBudget: {
+    /** The approved budget lines on those report lines. */
+    approved: number
+    /** Charged on them in the months before this one. */
+    chargedBefore: number
+    /** Left after this month; below zero, how much over. */
+    left: number
+  }
+  staff: EngagementCardStaffDto[]
+  /** The pay found for everyone tagged to it (each person's full pay: an upper bound). */
+  payFound: number
+  /** ✓ Covered by the payroll files: charged is not more than `payFound`. */
+  covered: boolean
+}
+
+/** Shown above the cards for each group of engagements that share staff and are charged more than those people's pay. */
+export const SHARED_STAFF_OVERCHARGED_LABEL =
+  'Charged more than the pay in the files across engagements'
+
+/** GET /workspaces/:id/payroll/:period/engagements: one card per engagement with a month for the period. */
+export interface WorkspacePayrollOutputDto {
+  workspaceId: string
+  period: string
+  engagements: EngagementPayrollCardDto[]
+  /**
+   * The workspace-level check (each card counts a shared person's full pay, so two cards can both look covered): for
+   * each group of engagements that share tagged staff, flagged when the charges on those engagements add up to more
+   * than the pay found for everyone tagged to them. Names the engagements only, never anyone's pay.
+   */
+  sharedStaffOvercharged: { engagements: { id: string; name: string }[] }[]
 }

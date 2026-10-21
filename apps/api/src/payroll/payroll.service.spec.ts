@@ -83,11 +83,12 @@ const WEX = {
 }
 
 const pick = <T extends Record<string, unknown>>(rows: T[], where: Record<string, unknown> = {}) =>
-  rows.filter((r) =>
+  rows.filter((r): boolean =>
     Object.entries(where).every(([k, v]) => {
       if (v && typeof v === 'object' && 'in' in v)
         return (v.in as string[]).includes(r[k] as string)
       if (k === 'AND') return true
+      if (k === 'OR') return (v as Record<string, unknown>[]).some((w) => pick([r], w).length > 0)
       return r[k] === v
     })
   )
@@ -183,6 +184,8 @@ function setup(status = 'draft', docs: Row[] = []) {
       findMany: jest.fn().mockResolvedValue([]),
     },
     wexPayment: {
+      // The participants' pay before this month, counted on its budget line.
+      groupBy: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn(
         async ({ where }: { where: Record<string, unknown> }) => pick([WEX], where)[0] ?? null
       ),

@@ -30,6 +30,13 @@ export interface RuleExpense {
   reportLine: ReportLine
   /** The engagement's budget line it is spent against; null: none chosen yet. */
   budgetLineId?: string | null
+  /** Written by the payroll match from payroll details: a payroll line whatever its budget line. */
+  fromPayroll?: boolean
+  /**
+   * A payroll line entered on the month whose kind of payroll the match counts there too (report-lines.ts): the same
+   * pay counted twice, as its kind's words say ("participant pay").
+   */
+  countedTwice?: string | null
   /** Purposes of the documents attached to this expense. */
   documents: DocumentPurpose[]
   /** Its payroll proofs with the words highlighted on each, for the mismatch rule; none on other lines. */
@@ -41,6 +48,8 @@ export interface RuleProof {
   purpose: DocumentPurpose
   kind: string
   words: string[]
+  /** A bank line matched as the debit of the pay run that paid the item (owner's decision, 2026-10-19). */
+  payRun?: boolean
 }
 
 /** A participant's pay for work experience: what proves it, and the words its proofs show. */
@@ -69,7 +78,14 @@ export interface RuleMonth {
   /** Cumulative billed on earlier reports, per line. */
   previouslyBilled: Partial<Record<ReportLine, number>>
   /** The engagement's budget lines: approved, and spent against each on earlier reports. */
-  budgetLines?: { id: string; name: string; amount: number; previouslyBilled: number }[]
+  budgetLines?: {
+    id: string
+    name: string
+    amount: number
+    previouslyBilled: number
+    /** Spent on it this month besides the month's lines: the participants' pay, on the line that holds it. */
+    alsoNow?: number
+  }[]
   expenses: RuleExpense[]
   /** The month's work-experience payments. */
   wexPayments?: RuleWex[]
@@ -96,7 +112,9 @@ const kindWords = (kind: string) => DOCUMENT_KIND_LABELS[kind as DocumentKind] ?
  * Where a highlighted proof does not show what it proves: the amount (on evidence of payment or a timesheet) or the
  * pay period (a participant's proofs). Only proofs the matcher highlighted are read, and only for what the platform
  * highlights on that kind of proof, so a field nobody asked for is never reported missing. A register for a
- * participant is a company summary that rarely names their pay: its amount is not asked for.
+ * participant is a company summary that rarely names their pay: its amount is not asked for. A bank line passes when
+ * it shows the item's amount, or when it was matched as the one debit of the pay run that paid the item (owner's
+ * decision, 2026-10-19): that line shows the run's total, never the item's.
  */
 function mismatches(
   item: { amount: number; start?: string; end?: string; participant: boolean },
@@ -112,7 +130,8 @@ function mismatches(
     const asksAmount =
       fields.includes('amount') &&
       (p.purpose === 'payment' || (p.purpose === 'timesheet' && item.participant))
-    if (asksAmount && !amount.test(words))
+    const runDebit = p.kind === 'bank-statement' && p.payRun === true
+    if (asksAmount && !amount.test(words) && !runDebit)
       out.push(`${money(item.amount)} was not found on its ${kindWords(p.kind)}`)
     if (item.participant && item.start && fields.includes('payPeriod')) {
       const dates = new Set(dateSpans(words).map((d) => d.iso))
@@ -163,7 +182,7 @@ export function runRules(month: RuleMonth): Finding[] {
     const has = (p: DocumentPurpose) => e.documents.includes(p)
     const label = `${e.itemNumber} (${e.vendor}, ${money(e.allocatedAmount)})`
 
-    if (PAYROLL_REPORT_LINES.has(e.reportLine)) {
+    if (PAYROLL_REPORT_LINES.has(e.reportLine) || e.fromPayroll) {
       if (!has('timesheet'))
         findings.push({
           code: 'missing-timesheet',
@@ -195,7 +214,7 @@ export function runRules(month: RuleMonth): Finding[] {
         message: `${label}: no bank or card statement, cancelled check or EFT confirmation attached.`,
       })
 
-    if (PAYROLL_REPORT_LINES.has(e.reportLine) && e.proofs)
+    if ((PAYROLL_REPORT_LINES.has(e.reportLine) || e.fromPayroll) && e.proofs)
       for (const what of mismatches(
         { amount: e.totalCost, participant: false },
         e.proofs,
@@ -290,6 +309,17 @@ export function runRules(month: RuleMonth): Finding[] {
       })
   }
 
+  // A payroll line typed or imported whose pay the payroll match counts too: matching the month again keeps it for
+  // payroll reconciliation only (owner's decision, 2026-10-20).
+  for (const e of month.expenses)
+    if (e.countedTwice)
+      findings.push({
+        code: 'payroll-counted-twice',
+        severity: 'attention',
+        expenseId: e.id,
+        message: `${e.itemNumber} (${e.vendor}, ${money(e.allocatedAmount)}): the payroll match already counts this ${e.countedTwice} on the month, so it is counted twice. Match the month's payroll again to keep this line for reconciliation only.`,
+      })
+
   // Every expense is spent against one of the engagement's budget lines: the auditor compares each line with the
   // approved budget, so an expense on no line blocks the month.
   for (const e of month.expenses)
@@ -303,9 +333,10 @@ export function runRules(month: RuleMonth): Finding[] {
 
   // Budget overrun per budget line, as the contract approved it.
   for (const line of month.budgetLines ?? []) {
-    const now = month.expenses
-      .filter((e) => e.budgetLineId === line.id)
-      .reduce((t, e) => t + e.allocatedAmount, 0)
+    const now =
+      month.expenses
+        .filter((e) => e.budgetLineId === line.id)
+        .reduce((t, e) => t + e.allocatedAmount, 0) + (line.alsoNow ?? 0)
     if (!now) continue
     const cumulative = line.previouslyBilled + now
     if (cumulative > line.amount + 0.005)

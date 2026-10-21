@@ -279,7 +279,7 @@
       <section id="ai">
         <h2><span aria-hidden="true">🤖</span> How we use AI</h2>
         <p>
-          Audit Differently can use an AI model for two jobs, and only when someone says yes. Each
+          Audit Differently can use an AI model for a few jobs, and only when someone says yes. Each
           time, it fills in fields on your screen, and you check them before anything is saved.
           Without that yes, nothing goes to an AI model, and you map or type the fields yourself.
         </p>
@@ -299,11 +299,20 @@
             so a workspace owner decides. It is off unless an owner turns on "Read emailed receipts
             with AI" in the workspace's settings.
           </li>
+          <li>
+            <strong>Matching payroll files:</strong> when you tick "Read the payroll files with AI"
+            on the Upload step of a payroll match, we send those payroll files as uploaded (pay
+            stubs included), the payroll details file as its rows, and the names on your staff and
+            participant lists, each file on its own, to find each person's pay. Bank statements are
+            never sent. The box is unticked every time the screen opens. While this is in beta, our
+            AI provider may keep what we send for up to 30 days, and the screen says so before you
+            tick it; it is never used to train AI models.
+          </li>
         </ul>
         <p>
-          We never send personal documents (eligibility records, enrollment forms, pay stubs) to an
-          AI model, whatever is ticked or turned on. When AI read a receipt or suggested a mapping,
-          the workspace's activity log says so.
+          We never send eligibility records or enrollment forms to an AI model, whatever is ticked
+          or turned on, and pay stubs only when you tick the payroll box above. When AI read a file
+          or suggested a mapping, the workspace's activity log says so.
         </p>
         <p>
           The AI model is run by a service provider that processes what we send on our behalf, under

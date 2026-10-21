@@ -1,0 +1,248 @@
+/* Engagement staffing (EngagementStaffingPage.tsx): who works on which engagement. */
+
+.ss-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+/* By engagement | By person */
+.ss-mode {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+}
+.ss-mode button {
+  padding: 6px 16px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.ss-mode button.ss-on {
+  background: var(--navy);
+  color: var(--on-dark);
+}
+
+.ss-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+/* By person */
+
+/* By engagement */
+.ss-eng-grid {
+  display: grid;
+  gap: 16px;
+}
+@media (min-width: 1024px) {
+  .ss-eng-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.ad-card.ss-eng-card {
+  padding: 18px 20px;
+  border-top-width: 6px;
+  border-top-style: solid;
+}
+.ss-eng-card header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ss-people {
+  display: grid;
+  gap: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.ss-people li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.ss-month {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.ss-add {
+  margin-top: 12px;
+  padding: 6px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ss-paste {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px;
+}
+.ss-people small,
+.ss-person-list small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.ss-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.ss-remove {
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 600;
+}
+.ss-person-list {
+  display: grid;
+}
+.ss-person-list > li {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.ss-person-list > li:last-child {
+  border-bottom: 0;
+}
+.ss-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ss-chips .ss-add {
+  margin-top: 0;
+}
+.ss-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px 4px 10px;
+  border: 1.5px solid;
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 700;
+}
+.ss-tag button {
+  margin-left: 8px;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ss-tag button:hover:not(:disabled) {
+  text-decoration: underline;
+}
+@media (max-width: 640px) {
+  .ss-person-list > li {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}
+
+.ss-remove:disabled,
+.ss-add:disabled,
+.ss-tag button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ss-edit {
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+/* "Suggest from a register" in Add All Staff: plain rows under a bold line, no box */
+.ss-suggest {
+  display: grid;
+  gap: 6px;
+}
+.ss-suggest ul {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.ss-suggest label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+}
+.ss-suggest input {
+  margin-top: 3px;
+}
+.ss-suggest small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.ss-code {
+  display: block;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
+.ss-help {
+  margin: -8px 0 16px;
+  font-size: 13px;
+}
+.ss-help summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--navy);
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.ss-help summary::-webkit-details-marker {
+  display: none;
+}
+.ss-help ul {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 10px 14px 10px 32px;
+  list-style: disc;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+.ss-help b {
+  color: var(--ink);
+}
+.ss-help-i {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--navy);
+  color: var(--on-dark);
+}
+.ss-help-i svg {
+  stroke-width: 3;
+}

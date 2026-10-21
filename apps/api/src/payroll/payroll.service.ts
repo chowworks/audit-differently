@@ -29,7 +29,7 @@ import { describe } from '../documents/staged-file'
 import { PrismaService } from '../prisma/prisma.service'
 import { ReportsService } from '../reports/reports.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
-import { itemCopy } from './mark-pdf'
+import { COPIED_TYPES, itemCopy } from './mark-pdf'
 import { linesWithAmount, readStatement } from './statement-lines'
 
 export const MAX_PAYROLL_FILES = 20
@@ -298,8 +298,9 @@ export class PayrollService {
     const saved = (Array.isArray(link.marks) ? link.marks : []) as unknown as StatementMark[]
     const marks = saved.length ? saved : link.mark ? [link.mark as unknown as StatementMark] : []
     const original = new Uint8Array(await this.storage.read(doc.storageKey))
-    const bytes =
-      doc.contentType === 'application/pdf' ? (await itemCopy(original, marks)).bytes : original
+    const bytes = COPIED_TYPES.includes(doc.contentType)
+      ? (await itemCopy(original, marks)).bytes
+      : original
     const subject =
       'expense' in link ? `expense ${link.expense.itemNumber}` : 'a work-experience payment'
     await this.log.log(caller, {
@@ -427,7 +428,8 @@ export class PayrollService {
             if (link)
               await tx.expenseDocument.update({
                 where: { expenseId_documentId: { expenseId: id, documentId } },
-                data: { purpose: 'payment', mark: value, marks: [value] },
+                // Marked by hand: no longer a pay run's matched debit.
+                data: { purpose: 'payment', mark: value, marks: [value], payRun: false },
               })
             else
               await tx.expenseDocument.create({
@@ -449,7 +451,8 @@ export class PayrollService {
           if (link)
             await tx.wexPaymentDocument.update({
               where: { wexPaymentId_documentId: { wexPaymentId: id, documentId } },
-              data: { purpose: 'payment', mark: value, marks: [value] },
+              // Marked by hand: no longer a pay run's matched debit.
+              data: { purpose: 'payment', mark: value, marks: [value], payRun: false },
             })
           else
             await tx.wexPaymentDocument.create({

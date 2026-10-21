@@ -9,6 +9,7 @@ import {
   ALLOCATION_TYPE_LABELS,
   DOCUMENT_PURPOSE_LABELS,
   PAYROLL_REPORT_LINES,
+  isPayrollLine,
   type CheckDto,
   type DocumentPurpose,
   type ExpenseDto,
@@ -56,7 +57,7 @@ const PAYROLL_PURPOSES: DocumentPurpose[] = ['timesheet', 'register', 'payment']
 
 /** The proof each expense needs (the same rule as ReportPage's ledger). */
 function requiredPurposes(e: ExpenseDto): DocumentPurpose[] {
-  const base: DocumentPurpose[] = PAYROLL_REPORT_LINES.has(e.reportLine)
+  const base: DocumentPurpose[] = isPayrollLine(e)
     ? ['timesheet', 'register', 'payment']
     : ['invoice', 'payment']
   return e.allocationType === 'direct' ? base : [...base, 'allocation']
@@ -108,7 +109,7 @@ function overrunOf(k: CheckDto, lines: TileLine[]) {
 }
 
 /** Where each check shows: on its expense row, its payroll row, its report line, or above the grid. */
-function placeChecks(r: ReportDetail) {
+export function placeChecks(r: ReportDetail) {
   const onLine = new Map<string, { check: CheckDto }>()
   const loose: CheckDto[] = []
   let late: CheckDto | null = null
@@ -832,7 +833,7 @@ function ExpensesSection({
   openReceipts: () => void
 }) {
   const [openChecks, toggleChecks] = useOpenChecks()
-  const all = r.expenses.filter((e) => !PAYROLL_REPORT_LINES.has(e.reportLine))
+  const all = r.expenses.filter((e) => !isPayrollLine(e))
   const needed = new Set(all.flatMap(requiredPurposes))
   const fields: FieldChoices[] = [
     tagChoices(r, 'expense'),
@@ -1062,6 +1063,7 @@ function ProofChips({
   testId,
   onAdd,
   proofOf,
+  files = true,
 }: {
   can: boolean
   needed: DocumentPurpose[]
@@ -1070,6 +1072,8 @@ function ProofChips({
   onAdd: (purpose: DocumentPurpose) => void
   /** A payroll item: its proofs open as its own highlighted copies. */
   proofOf?: { target: 'expense' | 'wex'; id: string }
+  /** False: "Bookkeepers see staff payroll" is off, so the proofs show as labels that open nothing. */
+  files?: boolean
 }) {
   const have = new Map(docs.map((d) => [d.purpose, d]))
   const extra = docs.filter((d) => !needed.includes(d.purpose))
@@ -1078,10 +1082,14 @@ function ProofChips({
       {needed.map((purpose) => {
         const d = have.get(purpose)
         return d ? (
-          <Chip key={purpose} tone="ok" fill title={d.document.fileName}>
-            <DocumentLink doc={d.document} proofOf={proofOf}>
-              ✓ {DOCUMENT_PURPOSE_LABELS[purpose]}
-            </DocumentLink>
+          <Chip key={purpose} tone="ok" fill title={files ? d.document.fileName : undefined}>
+            {files ? (
+              <DocumentLink doc={d.document} proofOf={proofOf}>
+                ✓ {DOCUMENT_PURPOSE_LABELS[purpose]}
+              </DocumentLink>
+            ) : (
+              <>✓ {DOCUMENT_PURPOSE_LABELS[purpose]}</>
+            )}
           </Chip>
         ) : can ? (
           <button
@@ -1100,8 +1108,12 @@ function ProofChips({
         )
       })}
       {extra.map((d) => (
-        <Chip key={d.document.id} tone="muted" title={d.document.fileName}>
-          <DocumentLink doc={d.document}>{DOCUMENT_PURPOSE_LABELS[d.purpose]}</DocumentLink>
+        <Chip key={d.document.id} tone="muted" title={files ? d.document.fileName : undefined}>
+          {files ? (
+            <DocumentLink doc={d.document}>{DOCUMENT_PURPOSE_LABELS[d.purpose]}</DocumentLink>
+          ) : (
+            DOCUMENT_PURPOSE_LABELS[d.purpose]
+          )}
         </Chip>
       ))}
     </div>
@@ -1137,7 +1149,8 @@ function PayrollSection({
   const [openChecks, toggleChecks] = useOpenChecks()
   const all: PayRow[] = [
     ...r.expenses
-      .filter((e) => PAYROLL_REPORT_LINES.has(e.reportLine))
+      // A books' payroll transaction the match covers is no longer the month's pay: it shows in the reconciliation only.
+      .filter((e) => isPayrollLine(e) && e.counts)
       .map((e) => ({ kind: 'expense' as const, id: e.id, e })),
     ...r.wexPayments.map((w) => ({ kind: 'wex' as const, id: w.id, w })),
   ]
@@ -1208,6 +1221,8 @@ function PayrollSection({
     onTokens([])
     onText('')
   }
+  // "Bookkeepers see staff payroll" off: the same rows, but no proof opens its file (the screen only).
+  const files = r.can.seeStaffPayroll !== false
   const hasStatements = r.payrollDocuments.some((d) => d.kind === 'bank-statement')
   // Payroll items still missing any of their three proofs: the count on the matching button.
   const unproved = all.filter(
@@ -1215,7 +1230,8 @@ function PayrollSection({
   ).length
   const addProof = (row: PayRow, purpose: DocumentPurpose) => {
     // A staff line's evidence of payment is its bank line: found for this row alone, not the whole payroll match.
-    if (purpose === 'payment' && row.kind === 'expense' && hasStatements)
+    // Finding it opens the statement, so with the files hidden the proof is attached like the others.
+    if (purpose === 'payment' && row.kind === 'expense' && hasStatements && files)
       return act.findBankLine(row.e)
     if (row.kind === 'expense') act.attach(row.e, purpose)
     else act.attachPayment(row.w, purpose)
@@ -1232,23 +1248,26 @@ function PayrollSection({
               + Add payroll
             </Button>
           )}
-          <Button
-            kind="navy"
-            onClick={openProof}
-            className="rl-c-badged"
-            title={
-              unproved
-                ? `${unproved} payroll ${unproved === 1 ? 'item' : 'items'} missing proof`
-                : undefined
-            }
-          >
-            Match payroll &amp; timecards
-            {unproved > 0 && (
-              <span className="rl-c-badge" aria-hidden="true">
-                {unproved}
-              </span>
-            )}
-          </Button>
+          {/* The match shows the files themselves, so it is not offered when they are hidden. */}
+          {files && (
+            <Button
+              kind="navy"
+              onClick={openProof}
+              className="rl-c-badged"
+              title={
+                unproved
+                  ? `${unproved} payroll ${unproved === 1 ? 'item' : 'items'} missing proof`
+                  : undefined
+              }
+            >
+              Match payroll &amp; timecards
+              {unproved > 0 && (
+                <span className="rl-c-badge" aria-hidden="true">
+                  {unproved}
+                </span>
+              )}
+            </Button>
+          )}
         </>
       }
     >
@@ -1332,6 +1351,7 @@ function PayrollSection({
                         testId={row.kind === 'expense' ? row.e.itemNumber : row.w.participantNumber}
                         onAdd={(purpose) => addProof(row, purpose)}
                         proofOf={{ target: row.kind, id: row.id }}
+                        files={files}
                       />
                       <SeeChecks
                         checks={f.checks}

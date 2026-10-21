@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts } from 'pdf-lib'
-import { DEFAULT_HIGHLIGHTS } from '@ad/types'
+import { DEFAULT_HIGHLIGHTS, DEFAULT_PAYROLL_READING } from '@ad/types'
 import { MatchStatsService } from '../core/match-stats.service'
 import { PayrollMatchService } from './payroll-match.service'
 import { readStatement } from './statement-lines'
@@ -69,6 +69,8 @@ async function setup(opts: { replace?: boolean; status?: string } = {}) {
   }
   const earlier = [{ id: 'd-old', kind: 'paystub', storageKey: `${W}/e-1/2026-09/old.pdf` }]
   const prisma = {
+    // The budget lines a covered books' payroll row is tested against: none holds participant pay unless a test says.
+    budgetLine: { findMany: jest.fn().mockResolvedValue([]) },
     payrollMatchRun: {
       findFirst: jest.fn().mockResolvedValue(run),
       findMany: jest.fn().mockResolvedValue([]),
@@ -149,7 +151,9 @@ async function setup(opts: { replace?: boolean; status?: string } = {}) {
     {} as never,
     highlights as never,
     storage as never,
-    new MatchStatsService(prisma as never)
+    new MatchStatsService(prisma as never),
+    { current: jest.fn().mockResolvedValue(DEFAULT_PAYROLL_READING) } as never,
+    { attach: async (_w: string, f: unknown[]) => f, read: jest.fn() } as never
   )
   /** The Matching statistics rows written, as createMany got them. */
   const stats = () =>
@@ -383,6 +387,30 @@ describe('PayrollMatchService', () => {
       // The staged pay stub goes; the document already on file stays.
       expect(s.storage.delete.mock.calls).toEqual([[`${W}/e-1/2026-09/stub.pdf`]])
       expect(s.stats()).toEqual([expect.objectContaining({ outcome: 'expired' })])
+    })
+
+    it('removes a workspace run left past RUN_HOURS too, naming its period', async () => {
+      const s = await setup()
+      const old = {
+        ...s.run,
+        monthlyReportId: null,
+        period: '2026-09',
+        createdAt: new Date(Date.now() - 25 * 3_600_000),
+        files: [{ ...s.run.files[0]!, storageKey: `${W}/workspace/2026-09/stub.pdf` }],
+      }
+      s.prisma.payrollMatchRun.findMany.mockResolvedValueOnce([old])
+      expect(await s.service.expireAll()).toBe(1)
+      expect(s.lines).toEqual([
+        'Removed an unsaved workspace payroll match for September 2026 left for over 24 hours (1 staged file)',
+      ])
+      expect(s.storage.delete.mock.calls).toEqual([[`${W}/workspace/2026-09/stub.pdf`]])
+    })
+
+    it('opens no workspace run through the month routes', async () => {
+      const s = await setup()
+      s.prisma.payrollMatchRun.findFirst.mockResolvedValue({ ...s.run, monthlyReportId: null })
+      await expect(s.service.get(caller, 'run-1')).rejects.toThrow(/Not Found/)
+      await expect(s.service.discard(caller, 'run-1')).rejects.toThrow(/Not Found/)
     })
 
     it('leaves a run saved or discarded in between alone: no line, no object removed', async () => {

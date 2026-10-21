@@ -19,6 +19,12 @@ import { eligibilityItemsOf } from './eligibility'
 import { zipEntries, type ZipSource } from './zip-stream'
 import { splitParts, streamPart, type ExportObject, type PartLayout } from './export-parts'
 import { staffName, tenantWhere, workspaceRole, type Caller } from '../core/caller'
+import {
+  countsOnBudget,
+  holdsPayroll,
+  participantPaySpend,
+  payrollCovers,
+} from '../reports/report-lines'
 import { howMany } from '../core/changes'
 import { itemCopy, markPlace, NOT_DRAWN } from '../payroll/mark-pdf'
 import { PrismaService } from '../prisma/prisma.service'
@@ -452,8 +458,21 @@ export class AuditPackageService {
 
     // What the auditor compares first: the approved budget, line by line, against what was spent on each.
     const spent = new Map<string | null, number>()
+    // A books' payroll transaction stops counting once the match covers its kind of payroll on its month.
+    const covers = payrollCovers(
+      c.monthlyReports.flatMap((r) => r.expenses.map((e) => ({ ...e, monthlyReportId: r.id }))),
+      new Map(c.monthlyReports.map((r) => [r.id, r.wexPayments.length] as const)),
+      () => holdsPayroll(c.budgetLines, 'participant-pay')
+    )
     for (const r of c.monthlyReports)
-      for (const e of r.expenses)
+      for (const e of [
+        ...r.expenses.filter((e) => countsOnBudget(e, covers.get(r.id))),
+        // The participants' pay counts on the line that holds it.
+        ...participantPaySpend(
+          c.budgetLines,
+          r.wexPayments.reduce((t, w) => t + Number(w.grossAmount), 0)
+        ),
+      ])
         spent.set(e.budgetLineId, (spent.get(e.budgetLineId) ?? 0) + Number(e.allocatedAmount))
     files[`${root}/Budget vs actual.csv`] = strToU8(
       csv([

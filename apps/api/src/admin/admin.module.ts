@@ -5,6 +5,7 @@ import { AdminInboundController } from './admin-inbound.controller'
 import { AdminInboundService } from './admin-inbound.service'
 import { AdminMatchStatsController } from './admin-match-stats.controller'
 import { AdminMatchStatsService } from './admin-match-stats.service'
+import { AdminPayrollReadingController } from './admin-payroll-reading.controller'
 import { AdminReceiptsAddressesController } from './admin-receipts-addresses.controller'
 import { AdminReceiptsAddressesService } from './admin-receipts-addresses.service'
 import { AdminUsersController } from './admin-users.controller'
@@ -16,6 +17,7 @@ import { AdminUsersService } from './admin-users.service'
     AdminUsersController,
     AdminInboundController,
     AdminHighlightsController,
+    AdminPayrollReadingController,
     AdminMatchStatsController,
     AdminReceiptsAddressesController,
   ],

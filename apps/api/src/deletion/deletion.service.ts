@@ -22,7 +22,7 @@ import {
 } from '@ad/types'
 import { AccessLogService } from '../core/access-log.service'
 import { allow, staffName, tenantWhere, workspaceRole, type Caller } from '../core/caller'
-import { howMany } from '../core/changes'
+import { howMany, monthName } from '../core/changes'
 import { runAsSystem } from '../core/tenant-context'
 import { keyInWorkspace } from '../documents/documents.service'
 import { AuditPackageService, csv, safe } from '../engagements/audit-package.service'
@@ -454,29 +454,143 @@ export class DeletionService {
   async deleteEngagement(caller: Caller, id: string, body: ConfirmBody): Promise<void> {
     const c = await this.ownedEngagement(caller, id)
     const rec = (await this.confirm(c.workspaceId, id, c.name, body, true))!
+    const { shared, staffKept, decidedKept } = await this.sharedOnlyHere(c.workspaceId, id)
+    const sharedIds = shared.map((d) => d.id)
     await this.log.log(caller, {
       workspaceId: c.workspaceId,
       resource: 'engagement',
       subjectId: id,
       action: 'delete',
-      description: `Deleted the engagement ${c.name} permanently, after its full export`,
+      description: `Deleted the engagement ${c.name} permanently, after its full export${shared.length ? `, with ${howMany(shared.length, 'workspace payroll file')} no other engagement uses` : ''}${staffKept ? `; ${howMany(staffKept, 'workspace payroll file')} it alone linked kept, as staff payroll proof still uses ${staffKept === 1 ? 'it' : 'them'}` : ''}${decidedKept ? `; ${howMany(decidedKept, 'workspace payroll file')} it alone linked kept, as an owner marked pays on ${decidedKept === 1 ? 'it' : 'them'} not grant-funded` : ''}`,
     })
     const folder = `${c.workspaceId}/${id}/`
     await this.storage.deleteByPrefix(folder)
     // The engagement's documents go first: an engagement delete would otherwise try to unlink them, which their
     // storage-key trigger refuses. Months go before the engagement so a payment is never left pointing at a
     // participant that is already gone (WexPayment -> Participant is Restrict).
-    await this.prisma.$transaction(async (tx) => {
+    const { gone, runs } = await this.prisma.$transaction(async (tx) => {
+      // The workspace payroll files that may go, locked: a link or an upload taking one in meanwhile waits for this,
+      // then finds it gone; one made first is seen below, and the file stays.
+      if (sharedIds.length)
+        await tx.$queryRaw`SELECT "id" FROM "Document" WHERE "id" = ANY(${sharedIds}::text[]) FOR UPDATE`
+      // An upload not saved yet that holds one of this engagement's documents (a month's run) or one of those files
+      // (the workspace's run) is discarded, as Discard does, each with its line: the database keeps a document while
+      // an upload holds it (PayrollMatchFile -> Document, Restrict).
+      const runs = await tx.payrollMatchRun.findMany({
+        where: {
+          workspaceId: c.workspaceId,
+          OR: [
+            { monthlyReport: { engagementId: id } },
+            ...(sharedIds.length ? [{ files: { some: { documentId: { in: sharedIds } } } }] : []),
+          ],
+        },
+        include: { files: true, monthlyReport: { select: { period: true } } },
+      })
+      if (runs.length) {
+        await tx.payrollMatchRun.deleteMany({ where: { id: { in: runs.map((r) => r.id) } } })
+        for (const run of runs) {
+          const period = run.period ?? run.monthlyReport?.period
+          await this.log.also(tx, caller, {
+            workspaceId: c.workspaceId,
+            resource: run.monthlyReportId ? 'report' : 'workspace',
+            subjectId: run.monthlyReportId ?? c.workspaceId,
+            action: 'delete',
+            description: `Removed an unsaved ${run.monthlyReportId ? '' : 'workspace '}payroll match${period ? ` for ${monthName(period)}` : ''} (${howMany(run.files.filter((f) => !f.documentId).length, 'staged file')}) with the engagement ${c.name}`,
+          })
+        }
+      }
       await tx.document.deleteMany({ where: { engagementId: id } })
       await tx.monthlyReport.deleteMany({ where: { engagementId: id } })
+      // Its links went with its months; a workspace payroll file nothing links now goes too, its pays with it. One that
+      // staff payroll proof (StaffPayProof) still uses stays: it is still in its month's set of payroll files. So does
+      // one with a pay an owner marked not grant-funded, which would otherwise go with it unseen.
+      let gone: string[] = []
+      if (sharedIds.length) {
+        const unlinked = await tx.document.findMany({
+          where: {
+            id: { in: sharedIds },
+            engagementId: null,
+            expenses: { none: {} },
+            wexPayments: { none: {} },
+            staffPayProofs: { none: {} },
+            payLines: { none: { notFundedReason: { not: null } } },
+          },
+          select: { id: true },
+        })
+        gone = unlinked.map((d) => d.id)
+        if (gone.length) await tx.document.deleteMany({ where: { id: { in: gone } } })
+      }
       await tx.engagement.delete({ where: { id } })
       await tx.deletionRecord.update({
         where: { id: rec.id },
         data: { status: 'deleted', deletedAt: new Date() },
       })
+      return { gone, runs }
     })
+    // Only now, with the rows gone for good: the stored objects of the workspace files that went, and those the
+    // discarded uploads staged outside this engagement's folder. A failure here is a leftover object, never a link
+    // to a missing file.
+    const drop = (key: string) =>
+      this.storage
+        .delete(key)
+        .catch((e: Error) => this.logger.error(`Could not delete ${key}: ${e.message}`))
+    for (const d of shared) if (gone.includes(d.id)) await drop(d.storageKey)
+    for (const run of runs)
+      for (const f of run.files)
+        if (
+          !f.documentId &&
+          f.storageKey.startsWith(`${c.workspaceId}/`) &&
+          !f.storageKey.startsWith(folder)
+        )
+          await drop(f.storageKey)
     // A file uploaded while this ran has no row now; sweep again.
     await this.storage.deleteByPrefix(folder).catch((e: Error) => this.logger.error(e.message))
+  }
+
+  /**
+   * The workspace payroll files (one file proving several engagements' items, migration 20261017000500) that this
+   * engagement's payroll items link and no other engagement's do: they go with it. One still linked elsewhere stays,
+   * with only this engagement's links gone; the export of this engagement includes each either way (its audit package
+   * files them through the links). One that staff payroll proof still uses (what the match found of a person on the
+   * staff list) stays too, still one of its month's payroll files: `staffKept` counts them, for the log line. So does
+   * one with a pay an owner marked not grant-funded (the owner's decision, kept with its file): `decidedKept`.
+   */
+  private async sharedOnlyHere(workspaceId: string, engagementId: string) {
+    const docs = await this.prisma.document.findMany({
+      where: {
+        workspaceId,
+        engagementId: null,
+        OR: [
+          { expenses: { some: { expense: { engagementId } } } },
+          { wexPayments: { some: { wexPayment: { monthlyReport: { engagementId } } } } },
+        ],
+      },
+      include: {
+        expenses: { select: { expense: { select: { engagementId: true } } } },
+        wexPayments: {
+          select: { wexPayment: { select: { monthlyReport: { select: { engagementId: true } } } } },
+        },
+        _count: {
+          select: {
+            staffPayProofs: true,
+            payLines: { where: { notFundedReason: { not: null } } },
+          },
+        },
+      },
+    })
+    const onlyHere = docs.filter(
+      (d) =>
+        keyInWorkspace(d) &&
+        d.expenses.every((x) => x.expense.engagementId === engagementId) &&
+        d.wexPayments.every((x) => x.wexPayment.monthlyReport.engagementId === engagementId)
+    )
+    const usedByStaff = (d: (typeof docs)[number]) => (d._count?.staffPayProofs ?? 0) > 0
+    const decided = (d: (typeof docs)[number]) => !usedByStaff(d) && (d._count?.payLines ?? 0) > 0
+    return {
+      shared: onlyHere.filter((d) => !usedByStaff(d) && !decided(d)),
+      staffKept: onlyHere.filter(usedByStaff).length,
+      decidedKept: onlyHere.filter(decided).length,
+    }
   }
 
   async deleteWorkspace(caller: Caller, id: string, body: ConfirmBody): Promise<void> {
@@ -496,6 +610,9 @@ export class DeletionService {
     const folder = `${id}/`
     await this.storage.deleteByPrefix(folder)
     await this.prisma.$transaction(async (tx) => {
+      // An upload not saved yet holds documents the database keeps while it does (PayrollMatchFile -> Document,
+      // Restrict); it goes with the workspace, its staged objects with the folder.
+      await tx.payrollMatchRun.deleteMany({ where: { workspaceId: id } })
       await tx.document.deleteMany({ where: { workspaceId: id } })
       if (rec)
         await tx.deletionRecord.update({

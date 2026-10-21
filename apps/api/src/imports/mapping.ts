@@ -210,6 +210,8 @@ export interface Transaction {
   amountUnreadable: boolean
   reference: string | null
   account: string | null
+  /** The account as the file has it, whole: what tells payroll apart (a long account name is cut short in `account`). */
+  accountText: string
   category: string
 }
 
@@ -243,6 +245,7 @@ export function transactionsOf(table: Table, columns: ImportColumns): Transactio
       amountUnreadable,
       reference: idLikeOrNull(cell('reference')),
       account: idLikeOrNull(cell('account')),
+      accountText: (cell('account') ?? '').trim(),
       category: (col.category >= 0 ? cell('category') : cell('account')).slice(0, 200),
     }
   })

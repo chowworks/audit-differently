@@ -52,6 +52,7 @@ export function StatementViewer({
   page: startPage = 1,
   mark,
   onDraw,
+  downloadName,
 }: {
   doc: Pick<DocumentDto, 'id' | 'sensitivity'> & { kind?: string }
   /** Where the bytes come from, when not a filed bank statement: a payroll match's staged file. */
@@ -59,6 +60,8 @@ export function StatementViewer({
   page?: number
   mark?: StatementMark | null
   onDraw?: (mark: StatementMark) => void
+  /** Offers Download: the bytes on screen (a payroll item's own highlighted copy), saved under this name. */
+  downloadName?: string
 }) {
   const api = useApi()
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -68,6 +71,8 @@ export function StatementViewer({
   const [drawing, setDrawing] = useState<{ x: number; y: number; box: Box } | null>(null)
   const [drawn, setDrawn] = useState<Box | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** The bytes as served, kept for Download: saving them fetches nothing again, so no second open is logged. */
+  const kept = useRef<Blob | null>(null)
   // A pay stub is shown like the other payroll files (owner's decision, 2026-10-16); no other personal document is.
   const financial = doc.sensitivity === 'financial' || doc.kind === 'paystub'
 
@@ -89,6 +94,8 @@ export function StatementViewer({
         // Through the API with the session's token (which logs the open), never from storage directly.
         const data = await apiRef.current.bytes(src ?? `/payroll/statements/${doc.id}/file`)
         if (done) return
+        // pdf.js takes the array it is given to its worker, so Download keeps its own copy.
+        kept.current = new Blob([data.slice(0)], { type: 'application/pdf' })
         loading = getDocument({ data: new Uint8Array(data) })
         const opened = await loading.promise
         if (!done) setPdf(opened)
@@ -151,6 +158,27 @@ export function StatementViewer({
   return (
     <div className="ad-statement">
       <ErrorNote message={error} />
+      {pdf && downloadName && (
+        <div className="ad-statement-download">
+          <Button
+            size="sm"
+            kind="navy"
+            onClick={() => {
+              if (!kept.current) return
+              const url = URL.createObjectURL(kept.current)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = downloadName
+              document.body.appendChild(a)
+              a.click()
+              a.remove()
+              setTimeout(() => URL.revokeObjectURL(url), 10_000)
+            }}
+          >
+            Download
+          </Button>
+        </div>
+      )}
       {pdf && pdf.numPages > 1 && (
         <div className="ad-statement-pages">
           <Button size="sm" kind="ghost" disabled={page <= 1} onClick={() => setPage(page - 1)}>

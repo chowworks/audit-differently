@@ -220,6 +220,7 @@ export function Modal({
   children,
   wide,
   full,
+  className = '',
 }: {
   title: string
   onClose: () => void
@@ -227,6 +228,8 @@ export function Modal({
   wide?: boolean
   /** As wide as the screen allows, for a grid with several columns to fill in. */
   full?: boolean
+  /** One dialog's own look (the verification model's navy header). */
+  className?: string
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -236,7 +239,7 @@ export function Modal({
   return (
     <div className="ad-backdrop" onClick={onClose}>
       <div
-        className={`ad-modal ${wide ? 'ad-modal-wide' : ''} ${full ? 'ad-modal-full' : ''}`}
+        className={`ad-modal ${wide ? 'ad-modal-wide' : ''} ${full ? 'ad-modal-full' : ''} ${className}`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -256,15 +259,27 @@ export function Modal({
 
 export function Notice({
   tone = 'info',
+  fade = false,
   children,
 }: {
   tone?: 'ok' | 'danger' | 'warn' | 'info'
+  /** A "that worked" message: it fades after a few seconds. A warning or a standing state stays. */
+  fade?: boolean
   children: React.ReactNode
 }) {
+  const [shown, setShown] = useState(true)
+  const text = typeof children === 'string' ? children : null
+  useEffect(() => {
+    setShown(true)
+    if (!fade) return
+    const t = setTimeout(() => setShown(false), 4000)
+    return () => clearTimeout(t)
+  }, [fade, text])
   return (
-    <div className={`ad-notice ad-notice-${tone}`} role="status">
+    <p className={`ad-quiet ad-quiet-${tone} ${shown ? '' : 'ad-quiet-gone'}`} role="status">
+      {tone === 'ok' && <span aria-hidden="true">✓ </span>}
       {children}
-    </div>
+    </p>
   )
 }
 

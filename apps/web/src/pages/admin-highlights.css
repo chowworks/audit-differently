@@ -72,3 +72,38 @@
   background: rgba(255, 214, 0, 0.45);
   outline: 1px solid rgba(217, 140, 0, 0.9);
 }
+
+/* Admin tools → Payroll reading: a list of words (or a day window) per row, beside its title; each change saves. */
+.ad-pr-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 260px) minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+@media (max-width: 700px) {
+  .ad-pr-row {
+    grid-template-columns: 1fr;
+  }
+}
+.ad-pr-x {
+  margin-left: 2px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ad-pr-x:hover:not(:disabled) {
+  color: var(--danger);
+}
+.ad-pr-add {
+  max-width: 260px;
+}
+.ad-pr-days {
+  width: 90px;
+}

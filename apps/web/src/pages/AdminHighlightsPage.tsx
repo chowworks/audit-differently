@@ -8,7 +8,7 @@ import {
 import { useApi, useLoad } from '@/hooks/useApi'
 import { shortDate } from '@/lib/format'
 import { Card, Empty, ErrorNote } from '@/components/ui'
-import { AdminHow, AdminToolHead } from '@/pages/AdminPage'
+import { AdminHow } from '@/pages/AdminPage'
 import './admin-highlights.css'
 
 const kindTitle = (k: string) => {
@@ -107,6 +107,9 @@ function Preview({ kind, fields }: { kind: string; fields: HighlightField[] }) {
   )
 }
 
+const HIGHLIGHTS_HOW =
+  "When a payroll item is matched to its proof, these words are highlighted on that item's own copy of the file, so the auditor sees exactly what proves it. The same choice holds for every workspace. Each tick saves at once and is kept, with who made it and when; a proof type never changed uses the defaults. What a matched file can't show is left out, never guessed."
+
 const lastChanged = (s: HighlightSettingDto) =>
   s.changedAt
     ? `Changed by ${s.changedByEmail ?? 'an admin'}, ${shortDate(s.changedAt)}`
@@ -117,7 +120,7 @@ const lastChanged = (s: HighlightSettingDto) =>
  * whole system. One long row per proof type: its choices as chips and a preview of a fictional sample with them
  * highlighted. Each tick saves at once, kept with who made it and when.
  */
-export function AdminHighlightsPage() {
+export function HighlightsSection({ onSaved }: { onSaved: () => void }) {
   const api = useApi()
   const { data, error, setData } = useLoad<HighlightSettingDto[]>('/admin/highlights')
   // The proof types being saved, and the last one saved, for the word beside each name.
@@ -141,6 +144,7 @@ export function AdminHighlightsPage() {
       const all = await api.put<HighlightSettingDto[]>(`/admin/highlights/${s.kind}`, { fields })
       put(all.find((x) => x.kind === s.kind) ?? { ...s, fields })
       setSaved(s.kind)
+      onSaved()
     } catch (e) {
       put(s)
       setSaveError((e as Error).message)
@@ -154,9 +158,8 @@ export function AdminHighlightsPage() {
   }
   return (
     <>
-      <AdminToolHead to="/admin/highlights" />
-      <ErrorNote message={saveError} />
-      <Card title="What is highlighted">
+      <Card title="Payroll proof highlighting">
+        <ErrorNote message={saveError} />
         <div className="ad-hl-list">
           {data.map((s) => (
             <div key={s.kind} className="ad-hl-row">
@@ -191,7 +194,7 @@ export function AdminHighlightsPage() {
             </div>
           ))}
         </div>
-        <AdminHow to="/admin/highlights" />
+        <AdminHow to="/admin/matching" text={HIGHLIGHTS_HOW} />
       </Card>
     </>
   )

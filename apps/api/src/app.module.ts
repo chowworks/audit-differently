@@ -21,6 +21,7 @@ import { ImportsModule } from './imports/imports.module'
 import { ReceiptsModule } from './receipts/receipts.module'
 import { PayrollModule } from './payroll/payroll.module'
 import { InboundModule } from './inbound/inbound.module'
+import { StaffModule } from './staff/staff.module'
 import { TenantMiddleware } from './core/tenant.middleware'
 
 @Module({
@@ -46,6 +47,7 @@ import { TenantMiddleware } from './core/tenant.middleware'
     ImportsModule,
     ReceiptsModule,
     PayrollModule,
+    StaffModule,
     InboundModule,
   ],
   providers: [

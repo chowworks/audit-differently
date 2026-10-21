@@ -2,11 +2,22 @@ import { Injectable } from '@nestjs/common'
 import type { PrismaClient } from '@prisma/client'
 import {
   DEFAULT_HIGHLIGHTS,
+  PAYROLL_BUDGET_KIND_LABELS,
   type DocumentPurpose,
   type HighlightField,
+  type PayrollBudgetKind,
   type ReportLine,
 } from '@ad/types'
 import { PrismaService } from '../prisma/prisma.service'
+import {
+  countedTwice,
+  countsOnBudget,
+  holdsPayroll,
+  participantPaySpend,
+  PAYROLL_KIND_OF_COVER,
+  payrollCovers,
+  payrollRowKind,
+} from '../reports/report-lines'
 import { runRules, type Finding, type RuleMonth, type RuleProof } from './rules'
 
 const isoDate = (d: Date) => d.toISOString().slice(0, 10)
@@ -15,10 +26,12 @@ const isoDate = (d: Date) => d.toISOString().slice(0, 10)
 const proofOf = (d: {
   purpose: string
   marks: unknown
+  payRun?: boolean
   document: { kind: string }
 }): RuleProof => ({
   purpose: d.purpose as DocumentPurpose,
   kind: d.document.kind,
+  payRun: d.payRun === true,
   words: (Array.isArray(d.marks) ? (d.marks as { text?: unknown }[]) : [])
     .map((m) => m.text)
     .filter((t): t is string => typeof t === 'string'),
@@ -99,14 +112,39 @@ async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Findi
         reportLine: true,
         budgetLineId: true,
         allocatedAmount: true,
+        monthlyReportId: true,
+        payrollKey: true,
+        payrollKind: true,
+        account: true,
+        memo: true,
       },
     })
+    const wexByMonth = await prisma.wexPayment.groupBy({
+      by: ['monthlyReportId'],
+      where: {
+        monthlyReport: { engagementId: report.engagementId, period: { lt: report.period } },
+      },
+      _sum: { grossAmount: true },
+      _count: { _all: true },
+    })
+    // A books' payroll transaction stops counting once the match covers its kind of payroll on its month: it is then
+    // kept for reconciliation, neither spent on the budget nor checked as a line of its own.
+    const covers = payrollCovers(
+      [...earlier, ...report.expenses.map((e) => ({ ...e, monthlyReportId: report.id }))],
+      new Map([
+        ...wexByMonth.map((g) => [g.monthlyReportId, g._count._all] as const),
+        [report.id, report.wexPayments.length] as const,
+      ]),
+      () => holdsPayroll(report.engagement.budgetLines, 'participant-pay')
+    )
+    const counted = earlier.filter((e) => countsOnBudget(e, covers.get(e.monthlyReportId)))
+    const wexBefore = wexByMonth.reduce((t, g) => t + Number(g._sum.grossAmount ?? 0), 0)
     const budget: Partial<Record<ReportLine, number>> = {}
     for (const b of report.engagement.budgetLines)
       budget[b.reportLine as ReportLine] =
         (budget[b.reportLine as ReportLine] ?? 0) + Number(b.amount)
     const previouslyBilled: Partial<Record<ReportLine, number>> = {}
-    for (const e of earlier)
+    for (const e of counted)
       previouslyBilled[e.reportLine as ReportLine] =
         (previouslyBilled[e.reportLine as ReportLine] ?? 0) + Number(e.allocatedAmount)
     const month: RuleMonth = {
@@ -121,25 +159,39 @@ async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Findi
         id: b.id,
         name: b.name,
         amount: Number(b.amount),
-        previouslyBilled: earlier
+        previouslyBilled: [...counted, ...participantPaySpend([b], wexBefore)]
           .filter((e) => e.budgetLineId === b.id)
           .reduce((t, e) => t + Number(e.allocatedAmount), 0),
+        // The participants' pay this month, when this line holds it.
+        alsoNow: participantPaySpend(
+          [b],
+          report.wexPayments.reduce((t, w) => t + Number(w.grossAmount), 0)
+        )[0]?.allocatedAmount,
       })),
       submittedAt: report.submittedAt?.toISOString() ?? null,
-      expenses: report.expenses.map((e) => ({
-        id: e.id,
-        itemNumber: e.itemNumber,
-        date: isoDate(e.date),
-        vendor: e.vendor,
-        memo: e.memo,
-        totalCost: Number(e.totalCost),
-        allocatedAmount: Number(e.allocatedAmount),
-        allocationType: e.allocationType as 'direct' | 'payroll' | 'usage',
-        reportLine: e.reportLine as ReportLine,
-        budgetLineId: e.budgetLineId,
-        documents: e.documents.map((d) => d.purpose as DocumentPurpose),
-        proofs: e.documents.map(proofOf),
-      })),
+      expenses: report.expenses
+        .filter((e) => countsOnBudget(e, covers.get(report.id)))
+        .map((e) => ({
+          id: e.id,
+          itemNumber: e.itemNumber,
+          date: isoDate(e.date),
+          vendor: e.vendor,
+          memo: e.memo,
+          totalCost: Number(e.totalCost),
+          allocatedAmount: Number(e.allocatedAmount),
+          allocationType: e.allocationType as 'direct' | 'payroll' | 'usage',
+          reportLine: e.reportLine as ReportLine,
+          budgetLineId: e.budgetLineId,
+          // The match's own line, or a books' payroll transaction that still counts: proved as payroll.
+          fromPayroll: !!e.payrollKey || !!e.payrollKind,
+          countedTwice: countedTwice(e, covers.get(report.id))
+            ? PAYROLL_BUDGET_KIND_LABELS[
+                PAYROLL_KIND_OF_COVER[payrollRowKind(e)] as PayrollBudgetKind
+              ].toLowerCase()
+            : null,
+          documents: e.documents.map((d) => d.purpose as DocumentPurpose),
+          proofs: e.documents.map(proofOf),
+        })),
       wexPayments: report.wexPayments.map((w) => ({
         id: w.id,
         label: `${w.participant.displayName}, ${isoDate(w.payPeriodStart)} to ${isoDate(w.payPeriodEnd)}`,

@@ -36,6 +36,7 @@ import {
 import { ActivityModal } from '@/components/ActivityModal'
 import { HandCard } from '@/components/HandCard'
 import { ReceiptsAddress, ReceiptsInbox } from '@/components/ReceiptsInbox'
+import { WorkspaceActions } from '@/pages/WorkspaceActions'
 import { Icon, type IconName } from '@/components/icons'
 
 const ROLE_ICON: Record<Role, IconName> = { owner: 'key', bookkeeper: 'pencil', auditor: 'shield' }
@@ -71,6 +72,8 @@ export function WorkspacePage() {
   const { data: all } = useLoad<EngagementSummary[]>('/engagements')
   const [filter, setFilter] = useState('')
   const [log, setLog] = useState(false)
+  // Bumped when the inbox changes something, so Workspace Owner Actions counts again.
+  const [actionsVersion, setActionsVersion] = useState(0)
   if (error) return <ErrorNote message={error} />
   if (!w) return <Empty>Loading…</Empty>
   const today = new Date()
@@ -139,13 +142,6 @@ export function WorkspacePage() {
             </p>
           </div>
         </div>
-        {mayAdd && (
-          <div className="ad-actions">
-            <Link to={`/engagements/new?workspace=${w.id}`} className="ad-btn">
-              + Set up an award
-            </Link>
-          </div>
-        )}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -167,6 +163,15 @@ export function WorkspacePage() {
         <div className="grid content-start gap-4 lg:col-span-1 lg:pt-[46px]">{hand}</div>
       </div>
 
+      {/* What waits on the owners, when anything does. */}
+      {w.myRole === 'owner' && (
+        <WorkspaceActions
+          key={actionsVersion}
+          workspaceId={w.id}
+          bookkeepersSeeStaffPayroll={w.bookkeepersSeeStaffPayroll !== false}
+        />
+      )}
+
       {/* Row 1: the engagements, full width */}
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
         <section className="ad-section lg:col-span-3">
@@ -185,11 +190,21 @@ export function WorkspacePage() {
                 <span>
                   {q ? `${shown.length} of ${engagements.length} shown` : `${active} active`}
                 </span>
+                {w.myRole === 'owner' && (
+                  <Link to={`/workspaces/${w.id}/staff`} className="ad-btn ad-btn-navy ad-btn-sm">
+                    Tag Staff
+                  </Link>
+                )}
+                {mayAdd && (
+                  <Link to={`/engagements/new?workspace=${w.id}`} className="ad-btn ad-btn-sm">
+                    + Add Engagement
+                  </Link>
+                )}
               </>
             }
           >
             {engagements.length === 0 && (
-              <Empty>Nothing tracked yet. Set up the first award from its letter.</Empty>
+              <Empty>Nothing tracked yet. Add the first engagement.</Empty>
             )}
             {engagements.length > 0 && shown.length === 0 && (
               <Empty>Nothing matches “{filter.trim()}”.</Empty>
@@ -309,9 +324,14 @@ export function WorkspacePage() {
       {/* Row 3: emailed receipts */}
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
         {/* min-w-0: a grid item is otherwise as wide as its table, and the page scrolls sideways. */}
-        <section className="ad-section min-w-0 lg:col-span-3">
+        <section id="receipts" className="ad-section min-w-0 lg:col-span-3">
           <SectionHead icon="mail" title="Reconcile emailed receipts" />
-          <ReceiptsInbox workspaceId={w.id} address={w.receiptsEmail} engagements={engagements} />
+          <ReceiptsInbox
+            workspaceId={w.id}
+            address={w.receiptsEmail}
+            engagements={engagements}
+            onChange={() => setActionsVersion((v) => v + 1)}
+          />
         </section>
       </div>
 
@@ -322,6 +342,9 @@ export function WorkspacePage() {
           <div className="grid gap-4">
             {w.canManage && <Rename w={w} onChange={reload} />}
             <ReceiptsAddress w={w} onChange={setData} />
+            {(w.myRole === 'owner' || w.myRole === 'auditor') && (
+              <MonthEnd w={w} onChange={reload} />
+            )}
           </div>
         </section>
       </div>
@@ -1055,7 +1078,11 @@ function MoreLists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promis
         Suggest it.
       </p>
       <ErrorNote message={error} />
-      {thanks && <Notice tone="ok">Noted. We keep these and will follow up.</Notice>}
+      {thanks && (
+        <Notice tone="ok" fade>
+          Noted. We keep these and will follow up.
+        </Notice>
+      )}
       {w.myRole !== 'auditor' && (
         <form onSubmit={suggest} className="mt-3 flex gap-2">
           <input
@@ -1088,3 +1115,84 @@ function MoreLists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promis
 }
 
 /** The access log, newest first: every read, download, export and change leaves a line here. */
+
+/**
+ * "Bookkeepers see staff payroll" (GitHub issue #22): on by default. Off, a bookkeeper's monthly report pages show the
+ * payroll section with its proofs as labels, not links to the files. The screen only. Owners change it; the access log
+ * says who.
+ */
+/**
+ * The owner's part in month end: what the workspace payroll match is, the way into it and to engagement staffing, and
+ * whether bookkeepers see staff payroll. Auditors read it and open the results.
+ */
+function MonthEnd({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promise<void> }) {
+  const api = useApi()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState<number | null>(null)
+  const owner = w.myRole === 'owner'
+  const on = w.bookkeepersSeeStaffPayroll !== false
+  const set = async (value: boolean) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.patch(`/workspaces/${w.id}/payroll`, { bookkeepersSeeStaffPayroll: value })
+      await onChange()
+      setSaved(Date.now())
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Card title="Your role in month end reporting">
+      <ErrorNote message={error} />
+      {owner && (
+        <div className="ad-me-setting">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={on}
+              disabled={busy}
+              onChange={(e) => void set(e.target.checked)}
+            />
+            <b>Bookkeepers see and process payroll</b>
+            <SavedMark at={saved}>Saved</SavedMark>
+          </label>
+          <small className="text-soft">
+            {on
+              ? "Bookkeepers match each engagement's payroll on its month. You can also do the whole workspace at once below."
+              : "Bookkeepers see the month's payroll, but not the files behind it. Month end waits on you."}
+          </small>
+        </div>
+      )}
+      <ol className="ad-me-steps">
+        <li>
+          <span className="ad-me-n">1</span>
+          <span>
+            <b>Tag your staff to their engagements</b>
+            <small>
+              Each person&apos;s timecard and pay go to the engagements they are tagged to.
+            </small>
+          </span>
+          <Link to={`/workspaces/${w.id}/staff`} className="ad-btn ad-btn-navy ad-btn-sm">
+            {owner ? 'Manage staff' : 'See staff'}
+          </Link>
+        </li>
+        <li>
+          <span className="ad-me-n">2</span>
+          <span>
+            <b>Upload the company&apos;s payroll once a month</b>
+            <small>
+              Filed to every engagement; participants&apos; pay is read from their pay stubs.
+            </small>
+          </span>
+          <Link to={`/workspaces/${w.id}/payroll`} className="ad-btn ad-btn-navy ad-btn-sm">
+            {owner ? 'Process month end' : 'See month end results'}
+          </Link>
+        </li>
+      </ol>
+    </Card>
+  )
+}

@@ -293,16 +293,25 @@ export function ReceiptsInbox({
   workspaceId,
   address,
   engagements,
+  onChange,
 }: {
   workspaceId: string
   /** The workspace's receipts email as the page has it, so a change shows here at once (the inbox's own is older). */
   address: string | null
   engagements: EngagementSummary[]
+  /** After a receipt is filed, dismissed or run again: the page's owner actions count it again. */
+  onChange?: () => void
 }) {
   const api = useApi()
-  const { data, error, setData } = useLoad<ReceiptsInboxDto>(
-    `/workspaces/${workspaceId}/receipts-inbox`
-  )
+  const {
+    data,
+    error,
+    setData: setInbox,
+  } = useLoad<ReceiptsInboxDto>(`/workspaces/${workspaceId}/receipts-inbox`)
+  const setData = (next: ReceiptsInboxDto) => {
+    setInbox(next)
+    onChange?.()
+  }
   const [busy, setBusy] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [filing, setFiling] = useState<InboundReceiptDto | null>(null)
@@ -395,9 +404,6 @@ export function ReceiptsInbox({
                             <Button size="sm" kind="navy" onClick={() => setFiling(r)}>
                               File it
                             </Button>
-                            <Button size="sm" kind="navy" onClick={() => setDismissing(r)}>
-                              Dismiss
-                            </Button>
                           </>
                         )}
                         {(r.status === 'failed' || r.status === 'unmatched') && (
@@ -408,6 +414,11 @@ export function ReceiptsInbox({
                             onClick={() => runAgain(r.id)}
                           >
                             Run again
+                          </Button>
+                        )}
+                        {(r.status === 'failed' || r.status === 'unmatched') && (
+                          <Button size="sm" kind="navy" onClick={() => setDismissing(r)}>
+                            Dismiss
                           </Button>
                         )}
                       </div>

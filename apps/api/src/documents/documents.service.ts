@@ -36,6 +36,7 @@ import {
   DOCUMENT_KINDS,
   DOCUMENT_SENSITIVITY,
   MONTH_PROOF_KINDS,
+  PAYROLL_DOCUMENT_KINDS,
   personalRolesFor,
   WRITE_ROLES,
   type DocumentDto,
@@ -57,6 +58,9 @@ import { documentDto, type UploadResult } from './document.dto'
 import { describe, StagedFile } from './staged-file'
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+/** A file's name as it is kept: letters, digits and a few signs, at most 200 characters. */
+export const storedFileName = (name: string) => name.replace(/[^\w.() -]+/g, '_').slice(0, 200)
 
 /** The first bytes each allowed type starts with; Office files are zip archives. */
 const SIGNATURES: Record<string, Buffer[]> = {
@@ -154,7 +158,7 @@ export class DocumentsService {
         ...where,
         kind: body.kind,
         sensitivity: DOCUMENT_SENSITIVITY[body.kind],
-        fileName: file.originalname.replace(/[^\w.() -]+/g, '_').slice(0, 200),
+        fileName: storedFileName(file.originalname),
         contentType: file.mimetype,
         size: file.size,
         sha256: createHash('sha256').update(file.buffer).digest('hex'),
@@ -443,13 +447,41 @@ export class DocumentsService {
   async remove(caller: Caller, id: string): Promise<void> {
     const doc = await this.prisma.document.findFirst({
       where: { id, ...tenantWhere(caller) },
-      include: { _count: { select: { expenses: true, participants: true, wexPayments: true } } },
+      include: {
+        _count: {
+          select: {
+            expenses: true,
+            participants: true,
+            wexPayments: true,
+            staffPayProofs: true,
+            payLines: true,
+          },
+        },
+      },
     })
     if (!doc) throw new NotFoundException()
     allow(
       workspaceRole(caller, doc.workspaceId, WRITE_ROLES),
       'Only an owner or bookkeeper removes'
     )
+    // A workspace payroll file (GitHub issue #22) is one of its month's set of payroll files, which the month's matching
+    // always comes from: it leaves the set on the Payroll page (an owner's "Remove a file"), which matches the month
+    // again, never here.
+    if (!doc.engagementId && (PAYROLL_DOCUMENT_KINDS as readonly string[]).includes(doc.kind)) {
+      allow(
+        workspaceRole(caller, doc.workspaceId, ['owner']),
+        'Only an owner removes a workspace payroll file'
+      )
+      throw new ConflictException(
+        "This is one of the month's payroll files: remove it from the month's payroll files on the Payroll page, so the month is matched again"
+      )
+    }
+    // The workspace payroll match may use a month's own file (the bookkeeper's copy) as staff payroll proof, or keep
+    // the pays it found in it; both go with the row (Cascade), so it leaves only through the Payroll page too.
+    if (doc._count.staffPayProofs + doc._count.payLines > 0)
+      throw new ConflictException(
+        "The workspace's payroll match uses this file as payroll proof: an owner matches the month again on the Payroll page without it first"
+      )
     const uses = doc._count.expenses + doc._count.participants + doc._count.wexPayments
     if (uses > 0)
       throw new ConflictException(
@@ -459,13 +491,28 @@ export class DocumentsService {
     if (!keyInWorkspace(doc)) throw new NotFoundException()
     await this.refuseLockedMonth(doc)
     await this.refuseSubmittedSigned(doc)
-    await this.log.change(caller, (tx) => tx.document.delete({ where: { id } }), {
-      workspaceId: doc.workspaceId,
-      resource: 'document',
-      subjectId: doc.id,
-      action: 'delete',
-      description: `Removed ${describe(doc)}`,
-    })
+    // A payroll upload not saved yet (a month's or the workspace's "Match payroll & timecards") may hold it, to be
+    // matched again; the database keeps it while one does (PayrollMatchFile -> Document, Restrict).
+    const held = () =>
+      new ConflictException(
+        'This file is in a payroll upload that is not saved yet: save or discard that upload first (an unsaved one goes by itself after a day)'
+      )
+    if (await this.prisma.payrollMatchFile.count({ where: { documentId: id } })) throw held()
+    try {
+      await this.log.change(caller, (tx) => tx.document.delete({ where: { id } }), {
+        workspaceId: doc.workspaceId,
+        resource: 'document',
+        subjectId: doc.id,
+        action: 'delete',
+        description: `Removed ${describe(doc)}`,
+      })
+    } catch (e) {
+      // An upload that took it in meanwhile: the foreign key refused the delete.
+      const err = e as { code?: string; message?: string }
+      if (err?.code === 'P2003' || /PayrollMatchFile_documentId_fkey/.test(err?.message ?? ''))
+        throw held()
+      throw e
+    }
     await this.dropStored(caller, doc)
   }
 

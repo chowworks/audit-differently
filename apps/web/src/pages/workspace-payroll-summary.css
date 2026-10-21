@@ -1,0 +1,277 @@
+/* The page after the match (WorkspacePayrollSummary.tsx). */
+.wps-card {
+  padding: 16px 18px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  border-top: 4px solid;
+  display: grid;
+  gap: 12px;
+}
+.wps-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.wps-name {
+  font-weight: 800;
+  color: var(--navy);
+  font-size: 16px;
+}
+.wps-over {
+  color: var(--danger);
+  font-weight: 700;
+}
+.wps-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+/* The month's payroll files table (WorkspacePayrollFiles.tsx, WorkspacePayrollReview.tsx). */
+.wpc-remove {
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 600;
+}
+.wpc-remove:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.wpc-remove:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The month's payroll files: a long set scrolls inside its card. */
+.wpc-files {
+  max-height: 360px;
+  overflow-y: auto;
+}
+.wpd-actions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+.wpd-actions li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+}
+.wpd-actions li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.wpd-actions a,
+.wpd-linkbtn {
+  white-space: nowrap;
+  font-weight: 600;
+}
+.wpd-action-sign {
+  font-size: 18px;
+  text-align: center;
+}
+.wpd-linkbtn {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--link, var(--navy));
+  cursor: pointer;
+  text-decoration: underline;
+}
+.wpd-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+  gap: 12px;
+}
+@media (max-width: 520px) {
+  .wpd-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.wpd-table td,
+.wpd-table th {
+  vertical-align: middle;
+}
+.wpd-table tfoot th {
+  border-top: 2px solid var(--line);
+  font-weight: 800;
+}
+.wpd-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+}
+.wpd-track {
+  position: relative;
+  flex: 1;
+  height: 10px;
+  border-radius: 999px;
+  background: #e8ecf1;
+  overflow: hidden;
+}
+.wpd-track i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+.wpd-before {
+  left: 0;
+  opacity: 0.45;
+}
+.wpd-key {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.wpd-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.wpd-key i {
+  width: 18px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--navy);
+}
+.wpd-key-before {
+  opacity: 0.45;
+}
+.wpd-pct {
+  width: 40px;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 700;
+}
+.wpd-more {
+  justify-self: start;
+  font-weight: 700;
+}
+.wpd-warn {
+  color: var(--warn);
+  font-weight: 600;
+}
+.wpd-tiles {
+  display: grid;
+  /* Six tiles on one row on a laptop; they wrap on a phone. */
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 10px;
+}
+.wpd-tilebtn {
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+/* Labels wrap to different heights: the numbers sit on one line at the tiles' foot. */
+.wpd-tilebtn .ad-tile-value {
+  margin-top: auto;
+}
+.wpd-tilebtn[aria-pressed='true'] {
+  outline: 3px solid var(--navy);
+  outline-offset: -1px;
+}
+
+.wpd-actions-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The red circle with the number of actions, as the month page's badge. */
+.wpd-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+.wpd-action-sub {
+  display: block;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.wpd-back {
+  margin-bottom: 12px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-weight: 700;
+  color: var(--navy);
+  cursor: pointer;
+}
+
+.wpd-stats-head {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.wpd-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+}
+.wpd-eng {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.ad-tile.wpd-tile-red {
+  border-top-color: var(--danger);
+}
+.ad-tile.wpd-tile-yellow {
+  border-top-color: #f2c200;
+}
+.wpd-filestats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+}
+/* One figure of the month's files, as a tinted pill. */
+.wpd-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.wpd-pill b {
+  font-size: 14px;
+}
+.wpd-pill-ok {
+  background: #e6f4ea;
+  border-color: #bfe3cb;
+  color: var(--ok);
+}
+.wpd-pill-bad {
+  background: #fdecec;
+  border-color: #f5c2c2;
+  color: var(--danger);
+}
+.wpd-pill-muted {
+  background: #f1f3f6;
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.ad-tile.wpd-tile-grey {
+  border-top-color: #9aa5b1;
+}

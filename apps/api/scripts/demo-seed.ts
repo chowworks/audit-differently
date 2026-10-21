@@ -1,13 +1,13 @@
 /**
- * Loads (or builds again) the fictional demo workspace, Riverbend Youth Services with its engagement DEMO-26IS-RYS, in
- * the environment it runs in, production included. The workspace marked Full demo, if there is one, is removed with its
- * records and files first (so a demo seeded by an older version comes back whole, not mixed), and then built; nothing
- * else is touched: no table is emptied, no other workspace's rows change, and it refuses (changing nothing) when the
- * marked workspace is not plainly the demo, or when the name or receipts address it uses belongs to a workspace that is
- * not (prisma/seed.ts, `demoWorkspace`). A person seated in the demo seats themself again. Its files go to the
- * environment's private bucket under the demo workspace's own prefix. Like every writing script it needs
- * --confirm-host, and in production it needs the owner's yes at the time (CLAUDE.md, "Database"); docs/dev-api.md has
- * how to run it there.
+ * Loads (or builds again) the fictional demo workspace, Riverbend Youth Services with its engagements DEMO-26IS-RYS and
+ * DEMO-26AT-RYS, in the environment it runs in, production included. The workspace marked Full demo, if there is
+ * one, is removed with its records and files first (so a demo seeded by an older version comes back whole, not mixed),
+ * and then built; nothing else is touched: no table is emptied, no other workspace's rows change, and it refuses
+ * (changing nothing) when the marked workspace is not plainly the demo, or when the name or receipts address it uses
+ * belongs to a workspace that is not (prisma/seed.ts, `demoWorkspace`). A person seated in the demo seats themself
+ * again. Its files go to the environment's private bucket under the demo workspace's own prefix. Like every writing
+ * script it needs --confirm-host, and in production it needs the owner's yes at the time (CLAUDE.md, "Database");
+ * docs/dev-api.md has how to run it there.
  *
  *   npm run demo:seed -w @ad/api -- --confirm-host <host of SCHEMA_DATABASE_URL>
  *

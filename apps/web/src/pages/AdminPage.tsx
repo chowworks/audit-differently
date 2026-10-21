@@ -39,20 +39,12 @@ const TOOLS: {
     how: "An email shows here when it reached no workspace (an unknown address, a sender who couldn't be verified, or a failure before anyone knew whose it was), or when a workspace's email was refused or failed. You see who sent it, to which address and its subject, never its attachments. Run again puts it back in the queue; the page checks what became of it for a minute. Emails are removed 30 days after they arrive. Mail sent to a previously used receipts address isn't listed here: it's counted on that address under Previously used addresses.",
   },
   {
-    to: '/admin/highlights',
-    icon: 'sliders',
-    title: 'Payroll proof highlighting',
-    text: 'Choose what the auditor sees highlighted on each payroll proof: the name, the pay period, the amount and more.',
-    sub: "Choose what's highlighted on each kind of payroll proof, for every workspace.",
-    how: "When a payroll item is matched to its proof, these words are highlighted on that item's own copy of the file, so the auditor sees exactly what proves it. The same choice holds for every workspace. Each tick saves at once and is kept, with who made it and when; a proof type never changed uses the defaults. What a matched file can't show is left out, never guessed.",
-  },
-  {
-    to: '/admin/match-stats',
+    to: '/admin/matching',
     icon: 'chart',
-    title: 'Matching statistics',
-    text: 'See how often the payroll and receipt matchers run, how long they take and how much they match.',
-    sub: 'How the matchers are running, across every workspace.',
-    how: "A row is kept each time a match ends: a payroll match when it is saved, discarded or left for a day, a receipt upload when it finishes or fails, and an emailed receipt each time it is filed or a try fails (a retry is a run of its own). It keeps who started it, the workspace, how many files were uploaded and how big, how long it took (and how much of that was reading), and how many were matched, guessed or missing. It never keeps a file's name, a person's or vendor's name, an amount or which record it was. Match rate is what was found sure out of everything that needed a match. Days are UTC.",
+    title: 'File Matching',
+    text: 'See how the payroll and receipt matchers run, and set how payroll files are read and what is highlighted on their proof.',
+    sub: 'How the matchers run, and how payroll files are read, for every workspace.',
+    how: 'Statistics count every payroll and receipt match. The configuration holds for every workspace, and every change is kept in its history.',
   },
 ]
 

@@ -1,8 +1,9 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import {
+  PAYROLL_PERSONAL_KINDS,
   DOCUMENT_KIND_LABELS,
   PAYROLL_DOCUMENT_KINDS,
-  PAYROLL_REPORT_LINES,
+  isPayrollLine,
   PAYROLL_SLOT_KIND,
   REPORT_LINE_LABELS,
   type AttachedDocument,
@@ -29,6 +30,23 @@ import { HandCard } from '@/components/HandCard'
 import './match-pairs.css'
 import { money, payPeriodWords, periodLabel, shortDate } from '@/lib/format'
 import { DocumentLink } from '@/components/DocumentLink'
+import {
+  MatchFooter,
+  ProofFoot,
+  ProvedCount,
+  LineCapNotes,
+  RemainingSection,
+  MatchedBy,
+  UnsavedNote,
+  WhyPanel,
+} from '@/components/payroll-match/MatchParts'
+import {
+  AiReadBox,
+  AiReadingNote,
+  useAiAfterUpload,
+  usePayrollAi,
+} from '@/components/payroll-match/AiReadBox'
+import { SLOT_LABEL, slotWhy } from '@/components/payroll-match/why'
 import {
   Button,
   Card,
@@ -81,12 +99,6 @@ const PURPOSE: Record<PayrollSlot, DocumentPurpose> = {
   register: 'register',
   stub: 'payment',
   bank: 'payment',
-}
-const SLOT_LABEL: Record<PayrollSlot, string> = {
-  timesheet: 'Timesheet',
-  register: 'Payroll register',
-  stub: 'Pay stub',
-  bank: 'Bank line',
 }
 const keyOf = (i: { target: string; id: string }) => `${i.target}-${i.id}`
 const slotsOf = (item: PayrollItem): PayrollSlot[] =>
@@ -169,8 +181,21 @@ export function PayrollProof({
     }
   }, [reportId, canEdit])
   const runId = run?.id
+  /** "Read the files with AI", ticked on the Upload step: unticked each time the wizard opens (#22). */
+  const [withAi, setWithAi] = useState(false)
+  const payrollAi = usePayrollAi()
   const waiting =
     !pollError && !!run?.files.some((f) => f.status === 'waiting' || f.status === 'reading')
+  // Once the server has read the files, AI reads them when ticked, then the match is shown.
+  const ai = useAiAfterUpload({
+    run,
+    ready: !!run && !waiting && !pollError,
+    on: withAi && r.can.edit,
+    read: (id, fileIds) =>
+      api.post<PayrollMatchRunDto>(`/payroll-match/${id}/ai-read`, { fileIds }),
+    onRun: setRun,
+  })
+  const atAi = step === 'Match' && !!run && !waiting && !pollError && ai.reading
   // Before the first poll, the run's own files say how far reading is.
   const shownProgress = progress ?? {
     total: run?.files.length ?? 0,
@@ -242,7 +267,7 @@ export function PayrollProof({
       : ds
   const items: PayrollItem[] = [
     ...r.expenses
-      .filter((e) => PAYROLL_REPORT_LINES.has(e.reportLine))
+      .filter((e) => isPayrollLine(e))
       .map((e) => ({
         target: 'expense' as const,
         kind: 'staff' as const,
@@ -274,6 +299,15 @@ export function PayrollProof({
         )
   const matchOf = (item: PayrollItem, slot: PayrollSlot) =>
     run?.slots.find((m) => m.target === item.target && m.id === item.id && m.slot === slot)
+  // Proof already attached that AI found too: the grid shows the saved proof, so the "Matched by" line counts these.
+  const aiOnFile = items.reduce(
+    (n, item) =>
+      n +
+      slotsOf(item).filter(
+        (slot) => has(item, slot) && matchOf(item, slot)?.candidates.some((c) => c.ai)
+      ).length,
+    0
+  )
   const [picks, setPicks] = useState<Record<string, Partial<Record<PayrollSlot, string>>>>({})
   const pick = (item: PayrollItem, slot: PayrollSlot) =>
     picks[keyOf(item)]?.[slot] ?? (has(item, slot) ? '' : (matchOf(item, slot)?.pick ?? ''))
@@ -292,22 +326,14 @@ export function PayrollProof({
   // Why each slot was filled or left empty, for "How Auto-Match decided".
   const whyOf = (item: PayrollItem, slot: PayrollSlot) => {
     const attached = has(item, slot)
-    if (attached) return { tone: 'ok', file: attached.document.fileName, text: 'Already attached.' }
-    const chosen = picks[keyOf(item)]?.[slot]
-    if (chosen === '') return { tone: 'missing', file: undefined, text: 'Cleared by you.' }
-    const m = matchOf(item, slot)
-    const id = chosen ?? m?.pick
-    const c = id ? candidate(item, slot, id) : undefined
-    if (id && noLine(item, slot, id))
-      return {
-        tone: 'next',
-        file: fileOf(id)?.fileName,
-        text: 'No line for this payment was found on it: find it under Unmatched payments.',
-      }
-    if (chosen)
-      return { tone: 'ok', file: fileOf(chosen)?.fileName, text: `Chosen by you. ${c?.why ?? ''}` }
-    if (!c) return { tone: 'missing', file: undefined, text: m?.why ?? 'Nothing read yet.' }
-    return { tone: c.sure ? 'ok' : 'guess', file: fileOf(c.fileId)?.fileName, text: c.why }
+    return slotWhy({
+      attached: attached ? { file: attached.document.fileName } : null,
+      chosen: picks[keyOf(item)]?.[slot],
+      match: matchOf(item, slot),
+      fileName: (id) => fileOf(id)?.fileName,
+      noLine: (id) => noLine(item, slot, id),
+      noLineText: 'No line for this payment was found on it: find it under Unmatched payments.',
+    })
   }
   const [search, setSearch] = useState('')
   const [chosen, setChosen] = useState<Set<string>>(new Set())
@@ -470,7 +496,7 @@ export function PayrollProof({
         <>
           <Chip tone="ok" fill title={attached.document.fileName}>
             {attached.document.sensitivity === 'personal' &&
-            attached.document.kind !== 'paystub' &&
+            !PAYROLL_PERSONAL_KINDS.includes(attached.document.kind) &&
             !r.can.readPersonal ? (
               <>✓ {word}</>
             ) : (
@@ -518,46 +544,41 @@ export function PayrollProof({
             </option>
           ))}
         </select>
-        <span className="ad-match-foot">
-          {state === 'missing' ? (
-            <small className="ad-match-note-missing">✕ Missing</small>
-          ) : state === 'noline' ? (
-            <small className="ad-match-note-guess">⚠️ No line found: next step</small>
-          ) : state === 'guess' ? (
-            <small className="ad-match-note-guess">⚠️ ⚡ Best guess: check it</small>
-          ) : (
-            <small className="ad-match-note-ok">
-              ✓ {auto ? `⚡ Found${c?.mark ? `, page ${c.mark.page}` : ''}` : 'Chosen'}
-            </small>
-          )}
-          {value && (c?.marks.length || c?.mark) && (
-            <button type="button" className="ad-match-show" onClick={() => show(item, slot, value)}>
-              Show
-            </button>
-          )}
-        </span>
+        <ProofFoot
+          state={state === 'noline' ? 'guess' : state}
+          text={
+            state === 'missing'
+              ? undefined
+              : state === 'noline'
+                ? '⚠️ No line found: next step'
+                : state === 'guess'
+                  ? '⚠️ ⚡ Best guess: check it'
+                  : `✓ ${auto ? `${c?.ai ? '✨ Found by AI' : '⚡ Found'}${c?.mark ? `, page ${c.mark.page}` : ''}` : 'Chosen'}`
+          }
+          onShow={value && (c?.marks.length || c?.mark) ? () => show(item, slot, value) : undefined}
+        />
       </>
     )
   }
 
   // Back and Save on the Match step, with or without payroll items: the zip's files are filed either way.
   const matchActions = (
-    <>
-      <ErrorNote message={discardError} />
-      <div className="ad-actions justify-between">
-        <span className="flex gap-2">
-          <Button kind="ghost" onClick={() => setStep('Upload')}>
-            Back: upload
-          </Button>
-          {run && (
-            <Button kind="ghost" onClick={() => void discard()} disabled={saving}>
-              Discard this upload
-            </Button>
-          )}
-        </span>
-        <Button
-          kind="primary"
-          onClick={async () => {
+    <MatchFooter
+      error={discardError}
+      onBack={() => setStep('Upload')}
+      onDiscard={run ? () => void discard() : undefined}
+      saving={saving}
+      save={{
+        label: saving
+          ? 'Saving…'
+          : waiting
+            ? 'Reading the files…'
+            : run
+              ? 'Save and continue'
+              : 'Next',
+        disabled: saving || waiting || !!pollError,
+        onClick: () =>
+          void (async () => {
             // Staff lines still without a bank line after this save go on to Unmatched payments.
             const left = staffItems
               .filter(
@@ -567,26 +588,16 @@ export function PayrollProof({
             if (!(await saveAll())) return
             setUnmatched(left)
             setStep(left.length ? 'Unmatched payments' : 'Done')
-          }}
-          disabled={saving || waiting || !!pollError}
-        >
-          {saving ? 'Saving…' : waiting ? 'Reading the files…' : run ? 'Save and continue' : 'Next'}
-        </Button>
-      </div>
-    </>
+          })(),
+      }}
+    />
   )
 
   return (
     <Card
       className="mt-4"
       title="Payroll proof"
-      aside={
-        <>
-          <span className="text-xs text-soft">
-            {proved} of {items.length} payroll item{items.length === 1 ? '' : 's'} fully proved
-          </span>
-        </>
-      }
+      aside={<ProvedCount proved={proved} total={items.length} />}
     >
       <Stepper steps={STEPS} current={step} />
       {run && step === 'Match' && waiting && (
@@ -624,13 +635,7 @@ export function PayrollProof({
         </>
       )}
       {run && step === 'Match' && !waiting && !pollError && (
-        <p className="ad-replacing" role="status">
-          Nothing is saved until you press Save
-          {run.replace && r.payrollDocuments.length
-            ? `, which also removes the ${r.payrollDocuments.length} earlier payroll ${r.payrollDocuments.length === 1 ? 'file' : 'files'}`
-            : ''}
-          . Close any time: this upload waits here for a day.
-        </p>
+        <UnsavedNote removing={run.replace ? r.payrollDocuments.length : 0} />
       )}
       {step === 'Unmatched payments' && <ErrorNote message={saveError} />}
       {step === 'Upload' && (
@@ -668,6 +673,15 @@ export function PayrollProof({
           {r.can.edit ? (
             <>
               <ErrorNote message={runError} />
+              {payrollAi && (
+                <AiReadBox
+                  available={payrollAi.available}
+                  beta={payrollAi.beta}
+                  names="the names of this month's participants"
+                  checked={withAi}
+                  onChange={setWithAi}
+                />
+              )}
               <UploadPanel
                 existing={r.payrollDocuments.length}
                 busy={reading}
@@ -685,22 +699,31 @@ export function PayrollProof({
         </div>
       )}
 
-      {step === 'Match' && !waiting && !pollError && items.length === 0 && (
+      {atAi && <AiReadingNote progress={ai.progress} error={null} />}
+      {step === 'Match' && !waiting && !pollError && !atAi && run && (
+        <>
+          {ai.error && <AiReadingNote progress={null} error={ai.error} />}
+          <LineCapNotes files={run.files.filter((f) => f.overLineCap)} />
+          {aiOnFile > 0 && (
+            <p className="text-sm">
+              ✨ AI also found {aiOnFile} {aiOnFile === 1 ? 'proof' : 'proofs'} already on file.
+            </p>
+          )}
+        </>
+      )}
+      {step === 'Match' && !waiting && !pollError && !atAi && items.length === 0 && (
         <>
           <Empty>No payroll lines or work-experience payments this month.</Empty>
           <ErrorNote message={saveError} />
           {matchActions}
         </>
       )}
-      {step === 'Match' && !waiting && !pollError && items.length > 0 && (
+      {step === 'Match' && !waiting && !pollError && !atAi && items.length > 0 && (
         <>
           {openItems.length === 0 ? (
             <Empty>Auto-Match proved every payroll item this month.</Empty>
           ) : (
-            <section className="mx-work" aria-label="To match">
-              <h3 className="mx-work-title">
-                Remaining to match: <span className="mx-count">{openItems.length}</span>
-              </h3>
+            <RemainingSection count={openItems.length}>
               {r.can.edit && (
                 <div className="ad-bulkbar">
                   <label className="ad-search">
@@ -836,104 +859,24 @@ export function PayrollProof({
                   </tbody>
                 </table>
               </div>
-            </section>
+            </RemainingSection>
           )}
           <ErrorNote message={saveError} />
           {openItems.length > 0 && (
-            <section className="mx-panel" aria-label="How Auto-Match decided">
-              <details>
-                <summary>
-                  <span className="mx-chevron" aria-hidden="true">
-                    ▸
-                  </span>
-                  <span className="mx-panel-title">How Auto-Match decided</span>
-                  <span className="text-sm text-soft">
-                    Why each file was matched, or why nothing was.
-                  </span>
-                  <span className="mx-toggle" aria-hidden="true">
-                    <span className="mx-toggle-show">Show</span>
-                    <span className="mx-toggle-hide">Hide</span>
-                  </span>
-                </summary>
-                <p className="mx-why-intro">
-                  Auto-Match opens every file in your zip and looks for each person&apos;s name, pay
-                  and pay period. Below, for every item, you see which file it picked for each proof
-                  and what it found there, or why it found nothing. Show, on the grid, opens that
-                  file with those words highlighted.
-                </p>
-                <div className="mx-why-list">
-                  {openItems.map((item) => (
-                    <div key={keyOf(item)} className="mx-why">
-                      <div className="mx-why-head">
-                        <b>{item.title}</b>
-                        <span className="text-soft">
-                          {item.paid} · {money(item.amount)}
-                        </span>
-                      </div>
-                      <table className="mx-why-table">
-                        <tbody>
-                          {[
-                            ...slotsOf(item).map((slot) => ({
-                              label: SLOT_LABEL[slot],
-                              ...whyOf(item, slot),
-                            })),
-                          ].map((row) => (
-                            <tr key={row.label} className={`mx-why-${row.tone}`}>
-                              <th scope="row">{row.label}</th>
-                              <td className="mx-why-result">
-                                {row.tone === 'ok'
-                                  ? '✓ Matched'
-                                  : row.tone === 'guess'
-                                    ? '⚠️ Best guess'
-                                    : row.tone === 'next'
-                                      ? '→ Next step'
-                                      : '✕ Not matched'}
-                              </td>
-                              <td className="mx-why-file" title={row.file}>
-                                {row.file ?? '—'}
-                              </td>
-                              <td>{row.text}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            </section>
-          )}
-          {doneItems.length > 0 && (
-            <section className="mx-panel" aria-label="Fully proved">
-              <details>
-                <summary>
-                  <span className="mx-chevron" aria-hidden="true">
-                    ▸
-                  </span>
-                  <span className="mx-panel-title">Review the {doneItems.length} fully proved</span>
-                  <span className="text-sm text-soft">Each item with its three proofs.</span>
-                  <span className="mx-toggle" aria-hidden="true">
-                    <span className="mx-toggle-show">Show</span>
-                    <span className="mx-toggle-hide">Hide</span>
-                  </span>
-                </summary>
-                <ul className="mx-list">
-                  {doneItems.map((item) => (
-                    <li key={keyOf(item)} className="mx-row">
-                      <span>
-                        <b>{item.title}</b> · {money(item.amount)}
-                        <span className="ad-table-sub">{item.sub}</span>
-                      </span>
-                      <span className="flex flex-wrap gap-1">
-                        {docSelect(item, 'timesheet')}
-                        {docSelect(item, 'register')}
-                        {docSelect(item, item.kind === 'participant' ? 'stub' : 'bank')}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            </section>
+            <WhyPanel
+              source={run && <MatchedBy run={run} />}
+              blocks={[
+                ...openItems.map((item) => ({
+                  key: keyOf(item),
+                  title: item.title,
+                  sub: `${item.paid} · ${money(item.amount)}`,
+                  rows: slotsOf(item).map((slot) => ({
+                    label: SLOT_LABEL[slot],
+                    ...whyOf(item, slot),
+                  })),
+                })),
+              ]}
+            />
           )}
           {matchActions}
         </>
@@ -1129,7 +1072,12 @@ export function PayrollProof({
             )}
             {viewing.fileName}
           </p>
-          <StatementViewer doc={viewing.doc} src={viewing.src} page={viewing.page} />
+          <StatementViewer
+            doc={viewing.doc}
+            src={viewing.src}
+            page={viewing.page}
+            downloadName={viewing.fileName}
+          />
         </Modal>
       )}
     </Card>
@@ -1140,7 +1088,7 @@ export function PayrollProof({
 const ZIP_MAX_BYTES = 250 * 1024 * 1024
 const ZIP_MAX_FILES = 200
 /** The server's limit for one file (MAX_UPLOAD_BYTES in the API). */
-const FILE_MAX_BYTES = 25 * 1024 * 1024
+export const FILE_MAX_BYTES = 25 * 1024 * 1024
 const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`
 
 /**
@@ -1148,11 +1096,14 @@ const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`
  * browser. Each folder sets its files' type; a zip laid out any other way is refused, with every problem at once.
  * The files then go up to the server, 20 at a time, to be read and matched; nothing is filed until Save.
  */
-function UploadPanel({
+export function UploadPanel({
   existing,
   busy,
   onReady,
   onSkip,
+  maxFiles = ZIP_MAX_FILES,
+  action = 'Upload zip and match',
+  kind = 'primary',
 }: {
   /** Reading the files on the server: what to say on the button meanwhile. */
   busy: string | null
@@ -1162,6 +1113,12 @@ function UploadPanel({
   onReady: (files: { file: File; kind: PayrollFolderKind }[], replace: boolean) => void
   /** Already uploaded this month: match those files again without uploading more. */
   onSkip?: () => void
+  /** How many files the zip may hold (a workspace month's set holds more than one engagement's month). */
+  maxFiles?: number
+  /** The upload button's words. */
+  action?: string
+  /** The upload button's colour: navy where it is a step's Next (the workspace payroll page), green otherwise. */
+  kind?: 'primary' | 'navy'
 }) {
   const [zipName, setZipName] = useState<string | null>(null)
   const [files, setFiles] = useState<{ file: File; kind: PayrollFolderKind; folder: string }[]>([])
@@ -1189,9 +1146,9 @@ function UploadPanel({
       const opened = await filesFromZip(zip)
       const sorted = sortPayrollZip(opened.files, opened.skipped)
       const big = sorted.files.filter((f) => f.file.size > FILE_MAX_BYTES)
-      if (sorted.files.length > ZIP_MAX_FILES)
+      if (sorted.files.length > maxFiles)
         setTooBig(
-          `This zip has ${sorted.files.length} files; the limit is ${ZIP_MAX_FILES}. Split it into two zips with the same four folders.`
+          `This zip has ${sorted.files.length.toLocaleString('en-US')} files; the limit is ${maxFiles.toLocaleString('en-US')}. Split it into two zips with the same four folders.`
         )
       else if (big.length)
         setTooBig(
@@ -1221,9 +1178,9 @@ function UploadPanel({
         </p>
       )}
       <Field
-        label="One zip with four folders: Timesheets, Payroll registers, Pay stubs and Bank statements, as in the sample above."
+        label="One zip with four folders: Timesheets, Payroll registers, Pay stubs and Bank statements (and Payroll details, when you have it), as in the sample above."
         required
-        hint={`Up to ${mb(ZIP_MAX_BYTES)} and ${ZIP_MAX_FILES} files; each file up to ${mb(FILE_MAX_BYTES)}.`}
+        hint={`Up to ${mb(ZIP_MAX_BYTES)} and ${maxFiles.toLocaleString('en-US')} files; each file up to ${mb(FILE_MAX_BYTES)}.`}
       >
         <input
           type="file"
@@ -1281,11 +1238,11 @@ function UploadPanel({
           </Button>
         )}
         <Button
-          kind="primary"
+          kind={kind}
           onClick={() => onReady(files, replace)}
           disabled={!files.length || problems.length > 0 || !!tooBig || !!busy}
         >
-          {busy ?? 'Upload zip and match'}
+          {busy ?? action}
         </Button>
       </div>
     </div>

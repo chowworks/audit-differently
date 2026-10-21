@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import {
+  PAYROLL_BUDGET_KINDS,
+  PAYROLL_BUDGET_KIND_LABELS,
   REPORT_LINES,
   REPORT_LINE_LABELS,
   type BudgetChange,
   type EngagementDetail,
+  type PayrollBudgetKind,
   type ReportLine,
 } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
@@ -59,6 +62,11 @@ export function BudgetLineModal({
   const [name, setName] = useState(line?.name ?? '')
   const [amount, setAmount] = useState<number | null>(line ? line.amount : null)
   const [narrative, setNarrative] = useState(line?.narrative ?? '')
+  // A new line left as it is takes its report line's payroll by default (the server's); ticked, it is sent.
+  const [payroll, setPayroll] = useState<PayrollBudgetKind[] | null>(line ? line.payroll : null)
+  /** The other line holding each kind now: ticking it here moves it. */
+  const heldBy = (k: PayrollBudgetKind) =>
+    c.budgetLines.find((b) => b.id !== line?.id && b.payroll.includes(k))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const warning = recheckWarning(c)
@@ -84,11 +92,12 @@ export function BudgetLineModal({
     }
   }
   const base = `/engagements/${c.id}/budget-lines`
+  const body = { name, reportLine, amount, narrative, ...(payroll ? { payroll } : {}) }
   const save = () =>
     run(() =>
       line
-        ? api.patch<BudgetChange>(`${base}/${line.id}`, { name, reportLine, amount, narrative })
-        : api.post<BudgetChange>(base, { name, reportLine, amount, narrative })
+        ? api.patch<BudgetChange>(`${base}/${line.id}`, body)
+        : api.post<BudgetChange>(base, body)
     )
   const remove = () => {
     if (!line || !confirm(`Remove ${line.name} from the approved budget?`)) return
@@ -134,6 +143,44 @@ export function BudgetLineModal({
         >
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
           <NameSuggestions names={suggestions} typed={name} onPick={setName} />
+        </Field>
+        <Field
+          label="Payroll from the match on this line"
+          hint={
+            payroll === null
+              ? 'Left as it is, the line takes the payroll its report line holds, if no other line does.'
+              : 'What Save puts here from the month’s payroll match. Each kind is on one line only.'
+          }
+        >
+          <span className="grid gap-1 sm:grid-cols-2">
+            {PAYROLL_BUDGET_KINDS.map((k) => {
+              const other = heldBy(k)
+              const on = (payroll ?? []).includes(k)
+              return (
+                <label key={k} className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={(e) =>
+                      setPayroll(
+                        PAYROLL_BUDGET_KINDS.filter((x) =>
+                          x === k ? e.target.checked : (payroll ?? []).includes(x)
+                        )
+                      )
+                    }
+                  />
+                  <span>
+                    {PAYROLL_BUDGET_KIND_LABELS[k]}
+                    {other && (
+                      <small className="block text-soft">
+                        {on ? `Moves here from ${other.name}` : `On ${other.name}`}
+                      </small>
+                    )}
+                  </span>
+                </label>
+              )
+            })}
+          </span>
         </Field>
         <Field label="Note">
           <input

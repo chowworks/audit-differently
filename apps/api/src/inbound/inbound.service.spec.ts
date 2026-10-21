@@ -1084,12 +1084,12 @@ describe('emailed receipts', () => {
       await asRequest('u-owner', (c) => t.s.dismiss(c, row.id, 'personal'))
       expect(row).toMatchObject({
         status: 'dismissed',
-        rejectReason: 'personal, not for this grant',
+        rejectReason: 'not applicable to this workspace',
       })
       expect(t.log.entries.at(-1)).toMatchObject({
         workspaceId: W,
         description:
-          'Dismissed an emailed receipt from the receipts inbox: personal, not for this grant',
+          'Dismissed an emailed receipt from the receipts inbox: not applicable to this workspace',
         changes: [{ field: 'Status', before: 'unmatched', after: 'dismissed' }],
       })
       // Dealt with: it is not dismissed twice, nor run again.
@@ -1099,6 +1099,23 @@ describe('emailed receipts', () => {
       await expect(asRequest('u-owner', (c) => t.s.runAgain(c, row.id))).rejects.toThrow(
         ConflictException
       )
+    })
+
+    it('dismisses a failed receipt too, with its reason, but never a refused one', async () => {
+      const t = ready()
+      t.engagements[1]!.status = 'active'
+      const row = await t.receive('Lunch receipt')
+      row.status = 'failed'
+      await asRequest('u-owner', (c) => t.s.dismiss(c, row.id, 'duplicate'))
+      expect(row.status).toBe('dismissed')
+      expect(t.log.entries.at(-1)).toMatchObject({
+        changes: [{ field: 'Status', before: 'failed', after: 'dismissed' }],
+      })
+      const refused = await t.receive('Another receipt')
+      refused.status = 'rejected'
+      await expect(
+        asRequest('u-owner', (c) => t.s.dismiss(c, refused.id, 'duplicate'))
+      ).rejects.toThrow(ConflictException)
     })
 
     it('files an unmatched receipt where the person says, as that person', async () => {

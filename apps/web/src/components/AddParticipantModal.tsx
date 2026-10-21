@@ -11,13 +11,29 @@ import { TagPicker, typesFor } from '@/components/Tags'
 export function AddParticipantModal({
   engagementId,
   tagTypes,
+  engagements,
+  name,
+  submit,
   participant,
   onClose,
   onAdded,
   onRemoved,
 }: {
+  /** The engagement to add to; empty with `engagements`, where the person picks it. */
   engagementId: string
+  /** Engagements to pick from (adding someone a pay stub names, on the workspace payroll page). */
+  engagements?: { id: string; name: string }[]
+  /** The name to start from (as a pay stub prints it). */
+  name?: string
   tagTypes: TagType[]
+  /**
+   * Sends a new participant somewhere else than the engagement's own route (the workspace payroll match, which answers
+   * the match as it now stands); `onAdded` is then not called.
+   */
+  submit?: (
+    engagementId: string,
+    body: { participantId: string; displayName: string; enrollmentStatus: string; tags: string[] }
+  ) => Promise<void>
   /** The participant to correct; none to add one. */
   participant?: ParticipantDto
   onClose: () => void
@@ -26,7 +42,8 @@ export function AddParticipantModal({
 }) {
   const api = useApi()
   const [participantId, setParticipantId] = useState(participant?.participantId ?? '')
-  const [displayName, setDisplayName] = useState(participant?.displayName ?? '')
+  const [engagement, setEngagement] = useState(engagementId)
+  const [displayName, setDisplayName] = useState(participant?.displayName ?? name ?? '')
   const [enrollmentStatus, setEnrollmentStatus] = useState<'new' | 'carryover'>(
     participant?.enrollmentStatus === 'carryover' ? 'carryover' : 'new'
   )
@@ -38,13 +55,17 @@ export function AddParticipantModal({
     setBusy(true)
     setError(null)
     try {
+      if (submit && !participant) {
+        await submit(engagement, { participantId, displayName, enrollmentStatus, tags })
+        return
+      }
       const saved = participant
         ? await api.patch<ParticipantDto>(`/participants/${participant.id}`, {
             participantId,
             displayName,
             enrollmentStatus,
           })
-        : await api.post<ParticipantDto>(`/engagements/${engagementId}/participants`, {
+        : await api.post<ParticipantDto>(`/engagements/${engagement}/participants`, {
             participantId,
             displayName,
             enrollmentStatus,
@@ -75,13 +96,30 @@ export function AddParticipantModal({
     >
       <form onSubmit={save} className="grid gap-4">
         <ErrorNote message={error} />
+        {engagements && (
+          <Field label="Engagement" required>
+            <select
+              className={inputClass}
+              value={engagement}
+              onChange={(e) => setEngagement(e.target.value)}
+              required
+            >
+              <option value="">Choose an engagement</option>
+              {engagements.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <Field label="Name" required hint="As it appears on the enrollment form">
           <input
             className={inputClass}
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
             required
-            autoFocus
+            autoFocus={!engagements}
           />
         </Field>
         <Field label="Participant id" required hint="The funder's id for this person">

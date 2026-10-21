@@ -43,6 +43,20 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   'HighlightSetting',
   // No workspace data: every receipts address used (migration 20261017000400). Its policies read app.admin and app.system.
   'ReceiptsAddress',
+  // The workspace payroll match's person-pays, for its reconciliation (migration 20261017000500).
+  'PayrollPayLine',
+  // The staff list, its engagement tags and what the payroll match found of each person (migration 20261018000100):
+  // owners and auditors read them, owners change them.
+  'StaffMember',
+  'StaffAssignment',
+  'StaffPayProof',
+  // Owners' decisions dropped because their file changed or left a month's payroll files (migration 20261018000400).
+  'PayrollDroppedDecision',
+  // No workspace: the payroll matchers' reading words a platform admin set (migration 20261019000400). Its insert
+  // policy reads app.admin and app.user_id.
+  'PayrollReadingSetting',
+  // What AI read from a payroll file, kept by its contents (migration 20261019000500).
+  'PayrollFileAiReading',
 ])
 
 type Fields = Map<string, string> // relation field name -> the model it points at

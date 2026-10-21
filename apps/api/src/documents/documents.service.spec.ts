@@ -21,7 +21,13 @@ const row = (
   id: string,
   kind: string,
   sensitivity: string,
-  extra: { engagementId?: string; uses?: number; storageKey?: string; period?: string } = {}
+  extra: {
+    engagementId?: string
+    uses?: number
+    storageKey?: string
+    period?: string
+    staffProofs?: number
+  } = {}
 ) => ({
   id,
   workspaceId: W,
@@ -36,7 +42,13 @@ const row = (
   storageKey:
     extra.storageKey ??
     `${W}/${extra.engagementId ?? 'workspace'}/${extra.period ?? 'general'}/${id}.pdf`,
-  _count: { expenses: extra.uses ?? 0, participants: 0, wexPayments: 0 },
+  _count: {
+    expenses: extra.uses ?? 0,
+    participants: 0,
+    wexPayments: 0,
+    staffPayProofs: extra.staffProofs ?? 0,
+    payLines: 0,
+  },
 })
 const invoice = row('d-inv', 'invoice', 'financial')
 const birthCertificate = row('d-age', 'eligibility-record', 'personal')
@@ -126,6 +138,8 @@ function service() {
     wexPayment: scoped({ id: 'wx-1', workspaceId: W, monthlyReport: { period: '2026-09' } }),
     expenseDocument: { findFirst: jest.fn().mockResolvedValue(null), deleteMany: jest.fn() },
     wexPaymentDocument: { findFirst: jest.fn().mockResolvedValue(null), deleteMany: jest.fn() },
+    // No payroll upload holds a document unless a test says so.
+    payrollMatchFile: { count: jest.fn().mockResolvedValue(0) },
   }
   const log = fakeLog(prisma)
   const storage = {
@@ -633,6 +647,22 @@ describe('DocumentsService', () => {
     ])
   })
 
+  it('refuses, in plain words, to remove a file a payroll upload not saved yet still holds', async () => {
+    const { service: s, prisma, log, storage } = service()
+    prisma.payrollMatchFile.count.mockResolvedValueOnce(1)
+    await expect(s.remove(member('owner'), 'd-inv')).rejects.toThrow(
+      'This file is in a payroll upload that is not saved yet: save or discard that upload first (an unsaved one goes by itself after a day)'
+    )
+    expect(prisma.payrollMatchFile.count).toHaveBeenCalledWith({ where: { documentId: 'd-inv' } })
+    expect(prisma.document.delete).not.toHaveBeenCalled()
+    expect(storage.delete).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
+    // An upload that took it in after that check: the foreign key's refusal is the same 409, never a 500.
+    prisma.document.delete.mockRejectedValueOnce(Object.assign(new Error('fk'), { code: 'P2003' }))
+    await expect(s.remove(member('owner'), 'd-inv')).rejects.toThrow(ConflictException)
+    expect(storage.delete).not.toHaveBeenCalled()
+  })
+
   it('refuses a removal whose key names another workspace: nothing deleted, nothing logged', async () => {
     const { service: s, prisma, log, storage } = service()
     await expect(s.remove(member('owner'), 'd-bad')).rejects.toThrow(NotFoundException)
@@ -696,5 +726,36 @@ describe('DocumentsService', () => {
     expect(again.prisma.document.delete).toHaveBeenCalledWith({ where: { id: 'd-sep' } })
     expect(again.storage.delete).toHaveBeenCalledWith(september.storageKey)
     expect(again.log.entries.map((e) => e.action)).toEqual(['delete'])
+  })
+})
+
+describe('DocumentsService: a workspace payroll file (GitHub issue #22)', () => {
+  it("is never removed here: it leaves its month's set on the Payroll page, which matches the month again", async () => {
+    const register = row('d-ws-reg', 'payroll-register', 'financial', { period: '2026-09' })
+    const { service: s, prisma } = service()
+    prisma.document.findFirst.mockResolvedValue(register as never)
+    await expect(s.remove(member('bookkeeper'), 'd-ws-reg')).rejects.toThrow(
+      /Only an owner removes a workspace payroll file/
+    )
+    await expect(s.remove(member('owner'), 'd-ws-reg')).rejects.toThrow(
+      /remove it from the month's payroll files on the Payroll page/
+    )
+    expect(prisma.document.delete).not.toHaveBeenCalled()
+  })
+
+  it("refuses to remove a month's own file the workspace match uses as staff payroll proof, in plain words", async () => {
+    const register = row('d-copy-reg', 'payroll-register', 'financial', {
+      engagementId: 'e-1',
+      period: '2026-09',
+      staffProofs: 2,
+    })
+    const { service: s, prisma, log, storage } = service()
+    prisma.document.findFirst.mockResolvedValue(register as never)
+    await expect(s.remove(member('bookkeeper'), 'd-copy-reg')).rejects.toThrow(
+      "The workspace's payroll match uses this file as payroll proof: an owner matches the month again on the Payroll page without it first"
+    )
+    expect(prisma.document.delete).not.toHaveBeenCalled()
+    expect(storage.delete).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
   })
 })

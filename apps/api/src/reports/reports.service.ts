@@ -17,6 +17,7 @@ import {
   type ExpenseDto,
   type LoggedChange,
   type ExpenseInput,
+  type PayrollBudgetKind,
   type ClosingInput,
   type ReportDetail,
   type ReportStatus,
@@ -37,7 +38,14 @@ import { documentDto } from '../documents/document.dto'
 import { linkDocument, NothingChanged, unlessUnchanged } from '../documents/link'
 import type { StagedFile } from '../documents/staged-file'
 import { PrismaService } from '../prisma/prisma.service'
-import { computeBudgetLines, computeLines } from './report-lines'
+import {
+  computeBudgetLines,
+  computeLines,
+  countsOnBudget,
+  holdsPayroll,
+  participantPaySpend,
+  payrollCovers,
+} from './report-lines'
 import { recordReopening, REOPENED, REPORT_FIELDS } from './back-to-draft'
 import { currentSignedCopy } from './reopenings'
 import { matchingOf, receiptsInclude, receiptsWhere } from '../receipts/receipt.dto'
@@ -82,7 +90,7 @@ const expenseFields = (
 })
 
 /** A work-experience payment is a participant's pay: every field by name alone. */
-const WEX_FIELDS: Fields = {
+export const WEX_FIELDS: Fields = {
   participantId: { label: 'Participant' },
   payPeriodStart: { label: 'Pay period start' },
   payPeriodEnd: { label: 'Pay period end' },
@@ -188,10 +196,51 @@ export class ReportsService {
   }
 
   private async detail(caller: Caller, r: ReportRow): Promise<ReportDetail> {
-    const earlier = await this.prisma.expense.findMany({
-      where: { engagementId: r.engagementId, monthlyReport: { period: { lt: r.period } } },
-      select: { reportLine: true, budgetLineId: true, allocatedAmount: true },
-    })
+    const [spentBefore, wexBefore] = await Promise.all([
+      this.prisma.expense.findMany({
+        where: { engagementId: r.engagementId, monthlyReport: { period: { lt: r.period } } },
+        select: {
+          reportLine: true,
+          budgetLineId: true,
+          allocatedAmount: true,
+          monthlyReportId: true,
+          payrollKey: true,
+          payrollKind: true,
+          account: true,
+          memo: true,
+        },
+      }),
+      this.prisma.wexPayment.groupBy({
+        by: ['monthlyReportId'],
+        where: { monthlyReport: { engagementId: r.engagementId, period: { lt: r.period } } },
+        _sum: { grossAmount: true },
+        _count: { _all: true },
+      }),
+    ])
+    // A books' payroll transaction stops counting once the match covers its kind of payroll on its month; the
+    // participants' pay counts on the line that holds it, this month's and the earlier months'.
+    const covers = payrollCovers(
+      [...spentBefore, ...r.expenses.map((e) => ({ ...e, monthlyReportId: r.id }))],
+      new Map([
+        ...wexBefore.map((g) => [g.monthlyReportId, g._count._all] as const),
+        [r.id, r.wexPayments.length] as const,
+      ]),
+      () => holdsPayroll(r.engagement.budgetLines, 'participant-pay')
+    )
+    const earlier = [
+      ...spentBefore.filter((e) => countsOnBudget(e, covers.get(e.monthlyReportId))),
+      ...participantPaySpend(
+        r.engagement.budgetLines,
+        wexBefore.reduce((t, g) => t + Number(g._sum.grossAmount ?? 0), 0)
+      ),
+    ]
+    const spentNow = [
+      ...r.expenses.filter((e) => countsOnBudget(e, covers.get(r.id))),
+      ...participantPaySpend(
+        r.engagement.budgetLines,
+        r.wexPayments.reduce((t, w) => t + Number(w.grossAmount), 0)
+      ),
+    ]
     const lineNames = new Map(r.engagement.budgetLines.map((b) => [b.id, b.name]))
     const documents = await this.prisma.document.findMany({
       where: { workspaceId: r.workspaceId! },
@@ -205,9 +254,21 @@ export class ReportsService {
     })
     const payroll = await this.prisma.document.findMany({
       where: {
-        engagementId: r.engagementId,
         period: r.period,
         kind: { in: [...PAYROLL_DOCUMENT_KINDS] },
+        OR: [
+          { engagementId: r.engagementId },
+          // A workspace payroll file (the workspace payroll match, migration 20261017000500) that proves this month's
+          // items: shown with the month's own, as if it had been matched here.
+          {
+            workspaceId: r.workspaceId!,
+            engagementId: null,
+            OR: [
+              { expenses: { some: { expense: { monthlyReportId: r.id } } } },
+              { wexPayments: { some: { wexPayment: { monthlyReportId: r.id } } } },
+            ],
+          },
+        ],
       },
       orderBy: { uploadedAt: 'asc' },
     })
@@ -268,6 +329,7 @@ export class ReportsService {
           id: c.workspace.id,
           name: c.workspace.name,
           featuredDemo: c.workspace.featuredDemo,
+          bookkeepersSeeStaffPayroll: c.workspace.bookkeepersSeeStaffPayroll,
         },
         eligibilityItems: eligibilityItemsOf(c),
         reportTo: c.reportTo,
@@ -279,14 +341,16 @@ export class ReportsService {
       lines: computeLines(
         c.budgetLines.map((b) => ({ reportLine: b.reportLine, amount: Number(b.amount) })),
         earlier.map((e) => ({ reportLine: e.reportLine, amount: Number(e.allocatedAmount) })),
-        r.expenses.map((e) => ({ reportLine: e.reportLine, amount: Number(e.allocatedAmount) }))
+        spentNow.map((e) => ({ reportLine: e.reportLine, amount: Number(e.allocatedAmount) }))
       ),
       budgetLines: computeBudgetLines(
         [...r.engagement.budgetLines].sort((a, b) => a.sortOrder - b.sortOrder),
         earlier,
-        r.expenses
+        spentNow
       ),
-      expenses: r.expenses.map((e) => expenseDto(e, lineNames)),
+      expenses: r.expenses.map((e) =>
+        expenseDto(e, lineNames, countsOnBudget(e, covers.get(r.id)))
+      ),
       wexPayments: r.wexPayments.map(wexDto),
       checks: [...r.checks]
         .sort(
@@ -308,7 +372,7 @@ export class ReportsService {
       payrollDocuments: payroll
         .filter(
           (d) =>
-            d.engagementId === r.engagementId &&
+            (d.engagementId === r.engagementId || d.engagementId === null) &&
             d.period === r.period &&
             (PAYROLL_DOCUMENT_KINDS as readonly string[]).includes(d.kind)
         )
@@ -323,6 +387,11 @@ export class ReportsService {
         attachSigned: writer && !signed,
         readPersonal: workspaceRole(caller, c.workspaceId, [...PERSONAL_DOCUMENT_ROLES]),
         deleteMonth: empty && workspaceRole(caller, c.workspaceId, ['owner']),
+        // "Bookkeepers see staff payroll" off: the page shows a bookkeeper the payroll proofs as labels, not links to the
+        // files. The screen only: the same data is answered.
+        seeStaffPayroll:
+          c.workspace.bookkeepersSeeStaffPayroll !== false ||
+          !workspaceRole(caller, c.workspaceId, ['bookkeeper']),
       },
     }
   }
@@ -746,23 +815,27 @@ export class ReportsService {
   ): Promise<void> {
     await this.log.change(
       caller,
-      async (tx) => {
-        const before = await tx.monthlyReport.findFirst({ where: { id: r.id } })
-        if (!before) throw new NotFoundException()
-        if (!from.includes(before.status))
-          throw new ConflictException(`The ${r.period} report is ${before.status}`)
-        if (also) await also.write(tx, before)
-        await tx.monthlyReport.update({ where: { id: r.id }, data })
-        return before
-      },
-      (before) => ({
-        workspaceId: r.workspaceId!,
-        resource: 'report',
-        subjectId: r.id,
-        ...entry,
-        changes: [...changesOf(before, data, REPORT_FIELDS), ...(also?.changes ?? [])],
-      })
+      (tx) => changeMonthRow(tx, r, from, data, also),
+      (before) => reportLine(r, before, data, entry, also)
     )
+  }
+
+  /**
+   * The same change as `changeReport`, written on a transaction the caller already holds, with its line on it: for a
+   * save that reopens months on the way (the workspace payroll match, GitHub issue #22), so a failure later in that
+   * save leaves every month as it was.
+   */
+  private async changeReportIn(
+    tx: Prisma.TransactionClient,
+    caller: Caller,
+    r: ReportRow,
+    from: string[],
+    data: Record<string, unknown>,
+    entry: { action: 'submit' | 'review'; description: string },
+    also?: Parameters<typeof changeMonthRow>[4]
+  ): Promise<void> {
+    const before = await changeMonthRow(tx, r, from, data, also)
+    await this.log.also(tx, caller, reportLine(r, before, data, entry, also))
   }
 
   /** Refreshes the month's checks and refuses, in plain words, while a blocking one is open. */
@@ -834,6 +907,26 @@ export class ReportsService {
 
   /** Records the month-end closing as sent back, with the reason: the month is a draft again, to be corrected. */
   async sendBack(caller: Caller, reportId: string, reason: string): Promise<ReportDetail> {
+    const { r, data, entry } = await this.sendingBack(caller, reportId, reason)
+    await this.changeReport(caller, r, ['closed'], data, entry)
+    await this.checks.refresh(r.id)
+    return this.fresh(caller, r.id)
+  }
+
+  /**
+   * `sendBack`, checked now and written later on the caller's transaction (the workspace payroll match's save):
+   * the same refusals, the same row and the same line. The caller refreshes the month's checks after its commit.
+   */
+  async sendBackWith(
+    caller: Caller,
+    reportId: string,
+    reason: string
+  ): Promise<(tx: Prisma.TransactionClient) => Promise<void>> {
+    const { r, data, entry } = await this.sendingBack(caller, reportId, reason)
+    return (tx) => this.changeReportIn(tx, caller, r, ['closed'], data, entry)
+  }
+
+  private async sendingBack(caller: Caller, reportId: string, reason: string) {
     const r = await this.load(caller, reportId)
     allow(
       workspaceRole(caller, r.engagement.workspaceId, WRITE_ROLES),
@@ -847,26 +940,20 @@ export class ReportsService {
     if (!why) throw new BadRequestException('Say why the month-end closing was sent back')
     if (why.length > 2000)
       throw new BadRequestException('The reason must be at most 2,000 characters')
-    await this.changeReport(
-      caller,
-      r,
-      ['closed'],
-      {
-        status: 'draft',
-        authorizedByName: null,
-        authorizedAt: null,
-        closingNote: null,
-        sentBackReason: why,
-        sentBackAt: new Date(),
-        sentBackByEmail: staffName(caller),
-      },
-      {
-        action: 'review',
-        description: `Sent back the month-end closing of ${monthName(r.period)} for ${r.engagement.name}`,
-      }
-    )
-    await this.checks.refresh(r.id)
-    return this.fresh(caller, r.id)
+    const data = {
+      status: 'draft',
+      authorizedByName: null,
+      authorizedAt: null,
+      closingNote: null,
+      sentBackReason: why,
+      sentBackAt: new Date(),
+      sentBackByEmail: staffName(caller),
+    }
+    const entry = {
+      action: 'review' as const,
+      description: `Sent back the month-end closing of ${monthName(r.period)} for ${r.engagement.name}`,
+    }
+    return { r, data, entry }
   }
 
   /**
@@ -963,6 +1050,27 @@ export class ReportsService {
   }
 
   async reopen(caller: Caller, reportId: string, reason: string): Promise<ReportDetail> {
+    const { r, entry, also } = await this.reopening(caller, reportId, reason)
+    await this.changeReport(caller, r, ['submitted'], REOPENED, entry, also)
+    await this.checks.refresh(r.id)
+    return this.fresh(caller, r.id)
+  }
+
+  /**
+   * `reopen`, checked now and written later on the caller's transaction (the workspace payroll match's save): the
+   * same refusals, the same ReportReopening row and the same line. The caller refreshes the month's checks after its
+   * commit.
+   */
+  async reopenWith(
+    caller: Caller,
+    reportId: string,
+    reason: string
+  ): Promise<(tx: Prisma.TransactionClient) => Promise<void>> {
+    const { r, entry, also } = await this.reopening(caller, reportId, reason)
+    return (tx) => this.changeReportIn(tx, caller, r, ['submitted'], REOPENED, entry, also)
+  }
+
+  private async reopening(caller: Caller, reportId: string, reason: string) {
     const r = await this.load(caller, reportId)
     allow(
       workspaceRole(caller, r.engagement.workspaceId, WRITE_ROLES),
@@ -975,23 +1083,17 @@ export class ReportsService {
     const why = typeof reason === 'string' ? reason.trim() : ''
     if (!why) throw new BadRequestException('Say why the month is reopened')
     if (why.length > 500) throw new BadRequestException('The reason must be at most 500 characters')
-    await this.changeReport(
-      caller,
-      r,
-      ['submitted'],
-      REOPENED,
-      {
-        action: 'review',
-        description: `Reopened ${monthName(r.period)} of ${r.engagement.name} to correct it`,
-      },
-      {
-        write: (tx, before) => recordReopening(tx, before, caller, why),
-        // The reason and the approver are on the month's page; the line names the fields alone.
-        changes: [{ field: 'Why it was reopened' }],
-      }
-    )
-    await this.checks.refresh(r.id)
-    return this.fresh(caller, r.id)
+    const entry = {
+      action: 'review' as const,
+      description: `Reopened ${monthName(r.period)} of ${r.engagement.name} to correct it`,
+    }
+    const also = {
+      write: (tx: Prisma.TransactionClient, before: MonthlyReport) =>
+        recordReopening(tx, before, caller, why),
+      // The reason and the approver are on the month's page; the line names the fields alone.
+      changes: [{ field: 'Why it was reopened' }],
+    }
+    return { r, entry, also }
   }
 
   /** Submits the month to the funder; its month-end closing must be approved first. */
@@ -1023,6 +1125,48 @@ export class ReportsService {
   }
 }
 
+/**
+ * The month's own row changed from `from` statuses, read as it stands inside the transaction so the logged before is
+ * the real one, with any other write the change carries. Answers the row as it was.
+ */
+async function changeMonthRow(
+  tx: Prisma.TransactionClient,
+  r: ReportRow,
+  from: string[],
+  data: Record<string, unknown>,
+  also?: {
+    /** Another write in the same transaction, given the month's row as it stood before. */
+    write: (tx: Prisma.TransactionClient, before: MonthlyReport) => Promise<unknown>
+    /** The fields it touched, for the line (by name alone). */
+    changes: LoggedChange[]
+  }
+): Promise<MonthlyReport> {
+  const before = await tx.monthlyReport.findFirst({ where: { id: r.id } })
+  if (!before) throw new NotFoundException()
+  if (!from.includes(before.status))
+    throw new ConflictException(`The ${r.period} report is ${before.status}`)
+  if (also) await also.write(tx, before)
+  await tx.monthlyReport.update({ where: { id: r.id }, data })
+  return before
+}
+
+/** The line of a change to the month's own row. */
+function reportLine(
+  r: ReportRow,
+  before: MonthlyReport,
+  data: Record<string, unknown>,
+  entry: { action: 'submit' | 'review'; description: string },
+  also?: { changes: LoggedChange[] }
+) {
+  return {
+    workspaceId: r.workspaceId!,
+    resource: 'report' as const,
+    subjectId: r.id,
+    ...entry,
+    changes: [...changesOf(before, data, REPORT_FIELDS), ...(also?.changes ?? [])],
+  }
+}
+
 export function expenseDto(
   e: {
     id: string
@@ -1038,6 +1182,8 @@ export function expenseDto(
     reportLine: string
     budgetLineId: string | null
     tags: string[]
+    payrollKey?: string | null
+    payrollKind?: string | null
     documents: {
       purpose: string
       mark?: unknown
@@ -1046,7 +1192,9 @@ export function expenseDto(
     }[]
   },
   /** The engagement's budget line names, by id. */
-  lineNames: Map<string, string>
+  lineNames: Map<string, string>,
+  /** Whether it counts on the budget now (a books' payroll transaction stops once the match covers it). */
+  counts = true
 ): ExpenseDto {
   return {
     id: e.id,
@@ -1063,6 +1211,9 @@ export function expenseDto(
     budgetLineId: e.budgetLineId,
     budgetLineName: (e.budgetLineId && lineNames.get(e.budgetLineId)) ?? null,
     tags: e.tags,
+    fromPayroll: !!e.payrollKey,
+    payrollKind: (e.payrollKind as PayrollBudgetKind | null) ?? null,
+    counts,
     documents: e.documents.map((d) => ({
       purpose: d.purpose as DocumentPurpose,
       document: documentDto(d.document),
