@@ -415,9 +415,10 @@ export async function payrollDetailsXlsx(): Promise<Buffer> {
   sheet.addRow([])
   sheet.addRow([SAMPLE_FOOTER])
   // The library stamps each part of the file with the time it was written: repacked at a fixed time, so the same sample
-  // always makes the same bytes.
+  // always makes the same bytes. A zip stores local clock time, so the time is given in local terms: the same bytes in
+  // every time zone (CI runs in UTC).
   const parts = unzipSync(new Uint8Array(await book.xlsx.writeBuffer()))
-  const at = new Date('2026-10-01T12:00:00Z')
+  const at = new Date(2026, 9, 1, 12, 0, 0)
   return Buffer.from(
     zipSync(Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, [v, { mtime: at }]])))
   )
