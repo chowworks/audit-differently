@@ -28,5 +28,10 @@
   "optionalDependencies": {
     "@esbuild/linux-x64": "0.21.5",
     "@rollup/rollup-linux-x64-gnu": "4.64.5"
+  },
+  "overrides": {
+    "multer": "2.5.0",
+    "joi": "18.3.1",
+    "undici": "8.12.3"
   }
 }
