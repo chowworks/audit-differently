@@ -21,7 +21,8 @@ Migrations are hand-written SQL under `apps/api/prisma/migrations/` and applied 
 (`docs/tenant-isolation.md`). The dev database is reached only from Railway's private network, so you never run
 them from your machine: every `apps/api/scripts/deploy-dev.sh` applies the migrations, keeps the restricted role
 in step and loads the seed. Scripts that need the database (`role:grant`, `demo:reset`) run in a shell on the
-service, `railway ssh -e dev -s api-dev` (docs/dev-api.md, "Every day").
+service, `railway ssh -e dev -s api-dev` (docs/dev-api.md, "Every day"). A cloud session deploys dev the same way,
+with a dev-only project token (docs/dev-api.md, "From a cloud session").
 
 ### Start everything
 

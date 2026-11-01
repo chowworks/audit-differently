@@ -79,6 +79,29 @@ npm run demo:reset -w @ad/api -- --confirm-host <the host it printed>
 stay). The dev database is shared, so say so before you run it. To look at the data, `railway ssh` the same way and
 use `psql "$SCHEMA_DATABASE_URL"` there if the image has it, or a Prisma script.
 
+## From a cloud session (Claude Code on the web)
+
+A cloud session deploys `api-dev` the same way a laptop does, with a token that can reach nothing but dev.
+
+- **The token:** a Railway **project token** for this project, environment `dev` (project settings, Tokens), saved
+  as `RAILWAY_TOKEN` in the cloud environment's variables. A project token is tied to one environment: with it,
+  `railway status` shows only `dev`, `railway status -e production` answers "Environment "production" not found",
+  and account commands (`railway whoami`, `railway list`) answer "Unauthorized". It can read and change dev's
+  variables, so it is a dev secret, never a production one. Never give a cloud session an account token.
+- **The tools:** the environment's setup script installs the CLI and `rsync` that `deploy-dev.sh` uses:
+
+  ```bash
+  command -v rsync >/dev/null || (apt-get update -qq && apt-get install -y -qq rsync)
+  command -v railway >/dev/null || npm i -g @railway/cli
+  ```
+
+- **Deploy:** `apps/api/scripts/deploy-dev.sh`, unchanged. No `railway link` is needed: with a project token
+  `railway status` reports this project and `dev`, which is what the script's guard checks.
+- **Migrations:** a cloud session can't reach the dev database either. `api-dev` starts with `deploy:start:dev`
+  (`.railway/railway.ts`), which applies the migrations, runs `role:ensure` and loads the seed before the API
+  starts, so a deploy applies a branch's migrations. A migration that fails stops the start: check the deploy log
+  (`railway logs -e dev -s api-dev`) and `curl https://<api-dev domain>/api/health`.
+
 ## The demo people
 
 The seed makes two fictional workspaces. Sign in as one of these people (they exist in the dev Clerk instance
