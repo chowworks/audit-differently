@@ -156,8 +156,8 @@ development included.
 At startup the API checks which role it connected as and turns the per-query context on only for the
 restricted role. Connected as the owner or a superuser (tests, tooling) it is the plain client and says so in
 the log. `REQUIRE_TENANT_RLS=on` makes startup fail instead of running without it; every environment sets it. There is
-no local database: a laptop connects to the `dev` database on Railway (`docs/dev-api.md`), set up with the steps
-below, over TLS. The role may execute only the functions listed in `src/core/app-role-grants.ts`;
+no local database, and no database has a public address: a laptop reaches the `dev` database only through
+`api-dev` (`docs/dev-api.md`), set up with the steps below, over TLS. The role may execute only the functions listed in `src/core/app-role-grants.ts`;
 `scripts/create-app-role.ts` creates it, grants exactly that, and prints the URL.
 
 ## Setting up a database (in order)

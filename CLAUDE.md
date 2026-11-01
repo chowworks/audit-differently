@@ -342,10 +342,12 @@ of two.
 
 ## Local development and the demo
 
-- **No local database and no demo sign-in.** A laptop runs the API and the web app against the shared `dev`
-  environment on Railway (fictional seed only) and signs in through the dev Clerk instance, exactly as the
-  deployed API does. Setup and the daily commands are in `docs/dev-api.md`; the demo people and story are in
-  `docs/dev-api.md`. The owner's reason: no real record and no production credential ever sits on a laptop.
+- **No local database, no local API and no demo sign-in.** A laptop runs the web app against `api-dev` in the
+  shared `dev` environment on Railway (fictional seed only) and signs in through the dev Clerk instance. No
+  Postgres has a public TCP proxy, dev's included: scripts that need the database run in a shell on `api-dev`
+  (`railway ssh`), and an API change is tried by deploying it (`apps/api/scripts/deploy-dev.sh`). Setup and the
+  daily commands are in `docs/dev-api.md`; the demo people and story are in `docs/dev-api.md`. The owner's reason:
+  no real record and no production credential ever sits on a laptop.
 - Railway is declared in code, `.railway/railway.ts` (same pattern as Learn Differently), applied by CI on a push
   to `main` once the project exists. Secrets are `preserve()` there and set by hand in Railway; the dev service's
   are copied from a local `.env` by `apps/api/scripts/railway-dev-vars.sh`.
@@ -510,7 +512,7 @@ read-only subagents, one per area of the diff, before merging:
 Before a feature is committed, the owner sees it working, screen by screen (owner's decision, 2026-10-17):
 
 1. **Deploy it to dev.** Say which migrations it applies to the shared database and get a yes, then deploy with
-   `apps/api/scripts/deploy-dev.sh` and point the local app at it (restart the local API).
+   `apps/api/scripts/deploy-dev.sh` (the local web app already points at it).
 2. **Give a guided tour.** Drive the browser pane yourself, one screen at a time, on the fictional seed. For each
    screen, narrate in plain words: where we are, what each part does, what is new, and anything that looks wrong.
    Go slowly, one screen per message, so the owner can take notes as you narrate. Stop at the end of each section and wait for "next", so the owner can take notes. Do the real actions (save,
@@ -526,7 +528,7 @@ Before a feature is committed, the owner sees it working, screen by screen (owne
 
 Only when the user asks for screenshots on an issue or PR:
 
-1. Start dev servers via the Preview MCP using `.claude/launch.json` (`web` on 5273, `api` on 3100, so they run beside the other Differently products).
+1. Start dev servers via the Preview MCP using `.claude/launch.json` (`web` on 5273, beside the other Differently products, against `api-dev`).
 2. For auth-gated pages do NOT try to bypass auth. Ask the user to sign in via the Preview MCP browser.
 3. Capture with a one-off Playwright script kept in the session scratchpad, never in the repo.
 4. Save PNGs to `docs/screenshots/<feature>/`, named after the feature, never a phase. Seed data only.

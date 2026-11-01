@@ -3,10 +3,8 @@
   "configurations": [
     {
       "name": "web",
-      "runtimeExecutable": "env",
+      "runtimeExecutable": "npm",
       "runtimeArgs": [
-        "VITE_API_URL=http://localhost:3100",
-        "npm",
         "run",
         "dev",
         "--workspace",
@@ -17,20 +15,6 @@
         "--strictPort"
       ],
       "port": 5273
-    },
-    {
-      "name": "api",
-      "runtimeExecutable": "env",
-      "runtimeArgs": [
-        "PORT=3100",
-        "FRONTEND_URL=http://localhost:5273",
-        "npm",
-        "run",
-        "dev",
-        "--workspace",
-        "@ad/api"
-      ],
-      "port": 3100
     }
   ]
 }

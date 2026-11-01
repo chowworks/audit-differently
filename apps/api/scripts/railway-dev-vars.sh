@@ -6,11 +6,12 @@
 #   apps/api/scripts/railway-dev-vars.sh --apply    # set them
 #
 # What it sets (the values the security rules require; .railway/railway.ts declares the same names):
-#   DATABASE_URL         the restricted role `ad_app` from your .env, moved onto Railway's private host, with
-#                        sslmode=require (the API connects with it, so row-level security applies)
+#   DATABASE_URL         the restricted role `ad_app` and its password from your .env, on Railway's private host, with
+#                        sslmode=require (the API connects with it, so row-level security applies; the dev database
+#                        has no public address, so your .env's copy is only where the password is kept)
 #   SCHEMA_DATABASE_URL  a reference to the dev Postgres service (the owner; migrations and the seed), with TLS
 #   REQUIRE_TENANT_RLS   on
-#   NODE_ENV             development; TRUST_PROXY 1; FRONTEND_URL your local web app
+#   NODE_ENV             development; TRUST_PROXY 1; FRONTEND_URL your local web app (ports 5173 and 5273)
 #   CLERK_SECRET_KEY     the dev instance's sk_test_ key from your .env (a live key stops the script)
 #   R2_*                 the dev document bucket from your .env (required: a deployed API refuses local-disk storage)
 #   ANTHROPIC_API_KEY    optional, from your .env when set (Claude reads for imports and receipts)
@@ -43,20 +44,6 @@ PY
 
 # Never a live Clerk key on the dev service.
 if grep -qE '^CLERK_SECRET_KEY="?sk_live' apps/api/.env; then echo "CLERK_SECRET_KEY in apps/api/.env is a live key. Stopping." >&2; exit 1; fi
-
-# Refuse a database that is not the dev one: the owner URL in your local .env must be the dev Postgres's public
-# address according to Railway itself (its TCP proxy domain and port; nothing about the host is written down here).
-host_of() { python3 -c "import sys; from urllib.parse import urlsplit; print(urlsplit(sys.argv[1]).netloc.split('@')[-1])" "$1"; }
-DEV_HOST="$(railway variables -s Postgres -e "$ENVIRONMENT" --json 2>/dev/null | python3 -c "
-import sys, json
-v = json.load(sys.stdin)
-u = v.get('DATABASE_PUBLIC_URL', '')
-print(u.split('@')[-1].split('/')[0] if u else (v['RAILWAY_TCP_PROXY_DOMAIN'] + ':' + v['RAILWAY_TCP_PROXY_PORT'] if v.get('RAILWAY_TCP_PROXY_DOMAIN') else ''))
-")"
-LOCAL_URL="$(get SCHEMA_DATABASE_URL apps/api/.env || true)"
-if [ -z "$DEV_HOST" ] || [ -z "$LOCAL_URL" ] || [ "$DEV_HOST" != "$(host_of "$LOCAL_URL")" ]; then
-  echo "SCHEMA_DATABASE_URL in apps/api/.env (host $(host_of "${LOCAL_URL:-//}")) is not the dev database ($ENVIRONMENT's Postgres at ${DEV_HOST:-no proxy found}). Stopping." >&2; exit 1
-fi
 
 set_var() { # NAME VALUE
   if [ "$APPLY" = 1 ]; then
@@ -107,7 +94,7 @@ set_var SCHEMA_DATABASE_URL '${{Postgres.DATABASE_URL}}?sslmode=require'
 set_var REQUIRE_TENANT_RLS on
 set_var NODE_ENV development
 set_var TRUST_PROXY 1
-set_var FRONTEND_URL "http://localhost:5173"
+set_var FRONTEND_URL "http://localhost:5173,http://localhost:5273"
 
 echo
 if [ ${#missing[@]} -gt 0 ]; then echo "Not in your local .env, so left unset (the API will refuse to start without the R2 ones): ${missing[*]}"; fi

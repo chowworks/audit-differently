@@ -1,19 +1,20 @@
 # The shared dev environment
 
-There is no local database and no demo sign-in. A laptop develops against the `dev` environment on Railway, which
-holds the fictional seed and nothing else, and signs in through the dev Clerk instance. That is how the deployed
-API runs too, so what works on a laptop works deployed, and no real record ever sits on a laptop: production's
-database has no public address and production's keys are never in a local `.env` (CLAUDE.md, "Data rules").
+There is no local database, no local API and no demo sign-in. A laptop runs the web app against `api-dev`, the API
+in Railway's `dev` environment, which holds the fictional seed and nothing else, and signs in through the dev Clerk
+instance. No database has a public address, dev's included, so a leaked database password reaches nothing from the
+internet; and no real record ever sits on a laptop: production's keys are never in a local `.env` (CLAUDE.md, "Data
+rules").
 
 ## What it is
 
-- **`Postgres` in Railway's `dev` environment**, declared in `.railway/railway.ts`, with a public TCP proxy so
-  laptops can reach it. It is set up like production: the owner runs migrations and the seed, the API connects as
-  the restricted role `ad_app`, and every connection uses TLS (`sslmode=require`; the API refuses to start
-  otherwise, `apps/api/src/startup-checks.ts`).
-- **`api-dev`**, an API beside it on Railway's private network, with a public domain. Nothing deploys it
-  automatically (no GitHub source). You deploy the working tree you are on, uncommitted changes included:
-  `apps/api/scripts/deploy-dev.sh`.
+- **`Postgres` in Railway's `dev` environment**, declared in `.railway/railway.ts`, on Railway's private network
+  only (no TCP proxy), like production. The owner runs migrations and the seed, the API connects as the restricted
+  role `ad_app`, and every connection uses TLS (`sslmode=require`; the API refuses to start otherwise,
+  `apps/api/src/startup-checks.ts`).
+- **`api-dev`**, an API beside it on the private network, with a public domain: the one way in from a laptop.
+  Nothing deploys it automatically (no GitHub source). You deploy the working tree you are on, uncommitted changes
+  included: `apps/api/scripts/deploy-dev.sh`. It is shared, so the last deploy wins.
 - **Dev keys only**: the dev Clerk instance (`sk_test_`) and a dev R2 bucket. Never a live key and never the
   production bucket.
 
@@ -22,17 +23,18 @@ database has no public address and production's keys are never in a local `.env`
 1. Create the Railway project and the `dev` environment (`railway environment new dev`), then apply the
    declaration: `railway config plan` and `railway config apply` from the repository root (needs `npm install`,
    which brings the `railway` SDK). No backups on dev: it holds a fictional seed that `db:seed` recreates.
-2. Fill `apps/api/.env` from `railway variables -s Postgres -e dev` (the TCP proxy domain and port, the Postgres password): both URLs on that host, both with
-   `sslmode=require`, the owner in `SCHEMA_DATABASE_URL`. Then, as the owner: `npm run db:migrate -w @ad/api`,
-   `APP_ROLE_PASSWORD=<24+ chars> npm run role:create -w @ad/api -- --confirm-host <host:port>`, put the URL it
-   prints in `DATABASE_URL`, `npm run db:seed -w @ad/api`.
+2. In `apps/api/.env`, set `DATABASE_URL` to the restricted role on the private host with a password you choose
+   (24+ characters): `postgresql://ad_app:<password>@postgres.railway.internal:5432/railway?sslmode=require`. You
+   don't run the migrations, the role or the seed yourself: every `api-dev` deploy runs `deploy:start:dev`, which
+   applies the migrations, creates `ad_app` with that password (`role:ensure`) and loads the seed.
 3. Create a dev Clerk instance for this product; put its `sk_test_` key in `apps/api/.env` and its `pk_test_` key
    in `apps/web/.env.local`. Create the four demo people in it with the seed's emails (listed under "The demo people" below); their
    first sign-in takes over the seeded memberships.
 4. Create a dev R2 bucket (private, no public access) and put its keys in `apps/api/.env`. Add the lifecycle rule
    below to it.
 5. `apps/api/scripts/railway-dev-vars.sh --apply` copies the dev keys to `api-dev` and sets the database URLs on
-   the private host; then `apps/api/scripts/deploy-dev.sh`. Check `curl https://<domain>/api/health`.
+   the private host; then `apps/api/scripts/deploy-dev.sh`. Check `curl https://<domain>/api/health`, and put that
+   domain in `apps/web/.env.local` as `VITE_API_URL`.
 6. Emailed receipts (optional; off until all three are set). Dev uses **its own Resend account**, never production's:
    a Full access key reads every email its account received, and this key sits in a `.env`. In the dev account, add
    the dev receipts subdomain (a `receipts-dev` subdomain, receiving on) and its MX record at the DNS host, add a
@@ -42,8 +44,7 @@ database has no public address and production's keys are never in a local `.env`
    answers 401 to an unsigned request once it is on. Mail the demo address (`riverbend-youth@<dev receipts
 subdomain>`) from a demo person's verified address to try it.
    Other developers leave the three blank in their own `.env`: emailed receipts are rows in the shared dev database,
-   so they see them anyway, and a local API with them blank runs no inbound worker. A worker only ever claims mail
-   sent to its own `RECEIPTS_DOMAIN`, so a laptop set up otherwise never takes dev's mail.
+   so they see them anyway. A worker only ever claims mail sent to its own `RECEIPTS_DOMAIN`.
 
 ## The one manual bucket step: expire retained copies
 
@@ -61,10 +62,22 @@ The retained copy is the one key outside the `<workspaceId>/...` layout, on purp
 
 ## Every day
 
-`npm run dev` runs the API and the web app on your machine against the dev database. The dev database is shared:
-`npm run demo:reset -w @ad/api -- --confirm-host <host:port>` removes the demo workspaces and reseeds them (people, their
-Terms acceptances and other workspaces stay), so say so before you run it.
-Migrations are shared the same way: `db:migrate` applies yours for everyone.
+`npm run dev -w @ad/web` runs the web app on your machine against `api-dev`. An API change is tried by deploying it:
+`apps/api/scripts/deploy-dev.sh` (a few minutes), which also applies its migrations for everyone, since the database
+is shared.
+
+Scripts that need the database (`demo:reset`, `role:grant`, `db:seed`) run in a shell on `api-dev`, which has its
+variables and reaches the private host, the same way production's do:
+
+```bash
+railway ssh -e dev -s api-dev
+cd /app && npm run demo:reset -w @ad/api        # prints the database host and stops
+npm run demo:reset -w @ad/api -- --confirm-host <the host it printed>
+```
+
+`demo:reset` removes the demo workspaces and reseeds them (people, their Terms acceptances and other workspaces
+stay). The dev database is shared, so say so before you run it. To look at the data, `railway ssh` the same way and
+use `psql "$SCHEMA_DATABASE_URL"` there if the image has it, or a Prisma script.
 
 ## The demo people
 
@@ -146,7 +159,8 @@ pays on no engagement are Taylor's two register rows, Alex's register row and Al
 Reset the demo to its starting state (the dev database is shared, so say so first):
 
 ```bash
-npm run demo:reset -w @ad/api -- --confirm-host <host:port of SCHEMA_DATABASE_URL>
+railway ssh -e dev -s api-dev
+cd /app && npm run demo:reset -w @ad/api -- --confirm-host <host:port of SCHEMA_DATABASE_URL>
 ```
 
 ## Production
