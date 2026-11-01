@@ -3,46 +3,32 @@
 ## Local development
 
 **Prerequisites:** Node 22 (`.nvmrc`), access to the Railway project and the dev Clerk instance. There is no
-local database and no demo sign-in: your API and web app run on your machine against the shared `dev`
-environment on Railway (fictional seed only) and sign in through the dev Clerk instance, the way the deployed
-API does. The one-time setup of that environment, and the daily commands, are in
+local database, no local API and no demo sign-in: your web app runs on your machine against `api-dev`, the API in
+the shared `dev` environment on Railway (fictional seed only), and signs in through the dev Clerk instance. The dev
+database has no public address. The one-time setup of that environment, and the daily commands, are in
 [docs/dev-api.md](docs/dev-api.md).
 
 ```bash
 npm install
-cp apps/api/.env.example apps/api/.env       # fill in the dev database URLs (sslmode=require) and the dev Clerk key
-cp apps/web/.env.example apps/web/.env.local # fill in the dev Clerk publishable key
+cp apps/api/.env.example apps/api/.env       # the dev keys railway-dev-vars.sh copies to api-dev (docs/dev-api.md)
+cp apps/web/.env.example apps/web/.env.local # api-dev's domain and the dev Clerk publishable key
 ```
 
 ### Database
 
 Migrations are hand-written SQL under `apps/api/prisma/migrations/` and applied with `migrate deploy`
 (see `CLAUDE.md`, "Database"). The first two create the tables and the tenant isolation
-(`docs/tenant-isolation.md`). Against the dev database, as the owner (`SCHEMA_DATABASE_URL`):
-
-```bash
-cd apps/api
-npx prisma generate        # the client, needed before typecheck
-npm run db:migrate         # prisma migrate deploy, as the owner
-npm run db:seed            # two fictional workspaces, their people, engagements, months and participants
-# Then, once per database: the restricted role the API connects as, and the first owner of a new workspace.
-APP_ROLE_PASSWORD=<24+ chars> npm run role:create -- --confirm-host <host:port>
-npm run role:grant -- --user <clerk user id> --workspace "<name>" --role owner --confirm-host <host:port>
-cd ../..
-```
-
-Put the URL `role:create` prints in `DATABASE_URL`; `SCHEMA_DATABASE_URL` stays the owner. Both carry
-`sslmode=require`. With `REQUIRE_TENANT_RLS=on` the API refuses to start until the role exists, and
-`src/startup-checks.ts` refuses a database off this machine without TLS.
+(`docs/tenant-isolation.md`). The dev database is reached only from Railway's private network, so you never run
+them from your machine: every `apps/api/scripts/deploy-dev.sh` applies the migrations, keeps the restricted role
+in step and loads the seed. Scripts that need the database (`role:grant`, `demo:reset`) run in a shell on the
+service, `railway ssh -e dev -s api-dev` (docs/dev-api.md, "Every day").
 
 ### Start everything
 
 ```bash
-npm run dev                # API on http://localhost:3000/api/health, web on http://localhost:5173
+npx prisma generate --schema apps/api/prisma/schema.prisma   # the client, needed before typecheck
+npm run dev -w @ad/web     # web on http://localhost:5173, against api-dev
 ```
-
-Or one at a time with `npm run dev --workspace @ad/api` and `npm run dev --workspace @ad/web`
-(`.claude/launch.json` has the same two).
 
 ## The demo
 
