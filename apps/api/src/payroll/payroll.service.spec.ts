@@ -11,7 +11,7 @@ import { member, stranger, W } from '../core/testing/callers'
 import { expectNoneOf, fakeLog } from '../core/testing/log'
 import { DocumentsService } from '../documents/documents.service'
 import { ReportsService } from '../reports/reports.service'
-import { PayrollService } from './payroll.service'
+import { cleanMark, MARK_TEXT_MAX, markText, PayrollService } from './payroll.service'
 
 /**
  * Payroll proof: many documents uploaded to a month at once, each with its kind; a payroll item's line found on the
@@ -514,7 +514,6 @@ describe('PayrollService', () => {
     [{ ...LINE, height: -4 }, 'width and height'],
     [{ ...LINE, x: 500 }, 'on the page'],
     [{ ...LINE, y: Number.NaN }, 'must be a number'],
-    [{ ...LINE, text: 'x'.repeat(301) }, 'at most 300'],
   ])('refuses a mark that is not on the statement: %j', async (mark, message) => {
     const { s, writes, log } = setup('draft', [doc('d-stmt')])
     await expect(
@@ -601,4 +600,47 @@ describe('PayrollService', () => {
       expect(log.entries).toEqual([])
     }
   )
+})
+
+describe('a mark on a wide export row (a payroll journal of 59 columns)', () => {
+  // Fictional: a journal row as a CSV reads it, cells joined by " | ", most of them zero.
+  const row = [
+    'Morgan Lee',
+    '1042',
+    'Demo Youth Program (2026)',
+    'Programs',
+    'Remote',
+    '1,250.00',
+    ...Array.from({ length: 45 }, () => '0.00'),
+    '',
+    '$0.00',
+    '-',
+    '38.75',
+    '77.50',
+    '18.13',
+    'Paid in two parts',
+  ].join(' | ')
+
+  it('keeps the cells that say something, so a long row still saves', () => {
+    expect(row.length).toBeGreaterThan(MARK_TEXT_MAX)
+    expect(markText(row)).toBe(
+      'Morgan Lee | 1042 | Demo Youth Program (2026) | Programs | Remote | 1,250.00 | 38.75 | 77.50 | 18.13 | Paid in two parts'
+    )
+    const mark = cleanMark({ page: 1, x: 0, y: 7, width: 1, height: 1, text: row })
+    expect(mark.text!.length).toBeLessThanOrEqual(MARK_TEXT_MAX)
+  })
+
+  it('ends a row still too long in "…", within what the database holds', () => {
+    const long = Array.from({ length: 80 }, (_, i) => `Note ${i + 1}`).join(' | ')
+    const text = markText(long)
+    expect(text.length).toBeLessThanOrEqual(MARK_TEXT_MAX)
+    expect(text.endsWith('…')).toBe(true)
+    expect(text.startsWith('Note 1 | Note 2')).toBe(true)
+    expect(markText('x'.repeat(301))).toHaveLength(MARK_TEXT_MAX)
+  })
+
+  it('leaves a line that fits as it is', () => {
+    expect(markText('  09/17  ACH PAYROLL   1,640.22 ')).toBe('09/17 ACH PAYROLL 1,640.22')
+    expect(markText('Morgan Lee | 0.00 | 20.0')).toBe('Morgan Lee | 0.00 | 20.0')
+  })
 })

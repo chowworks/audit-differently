@@ -62,6 +62,27 @@ const isKind = (k: unknown): k is PayrollDocumentKind =>
 
 const round = (n: number) => Math.round(n * 100) / 100
 
+/** The most words a mark keeps (the database holds a mark's text to 300 characters). */
+export const MARK_TEXT_MAX = 300
+
+/** A cell that says nothing: empty, a dash, or a zero amount (0, 0.00, $0.00). */
+const EMPTY_CELL = /^(?:-|\$?-?0+(?:\.0+)?)?$/
+
+/**
+ * A line's words as a mark keeps them. A wide export (a payroll journal with 59 columns) prints rows far longer than a
+ * mark holds: its empty and zero cells go first, and what is still too long ends in "…". The full row stays in the
+ * file; the mark only shows where it is.
+ */
+export function markText(raw: string): string {
+  const text = raw.replace(/\s+/g, ' ').trim()
+  if (text.length <= MARK_TEXT_MAX) return text
+  const kept = text
+    .split(/ ?\| ?/)
+    .filter((c) => !EMPTY_CELL.test(c.trim()))
+    .join(' | ')
+  return kept.length <= MARK_TEXT_MAX ? kept : `${kept.slice(0, MARK_TEXT_MAX - 1).trimEnd()}…`
+}
+
 /** A mark as the person confirmed it, checked for shape: a whole page from 1 and a box of positive size. */
 export function cleanMark(input: unknown): StatementMark {
   const m = (input ?? {}) as Record<string, unknown>
@@ -91,9 +112,7 @@ export function cleanMark(input: unknown): StatementMark {
   }
   if (m.text != null) {
     if (typeof m.text !== 'string') throw new BadRequestException('The line text must be text')
-    const text = m.text.replace(/\s+/g, ' ').trim()
-    if (text.length > 300)
-      throw new BadRequestException('The line text must be at most 300 characters')
+    const text = markText(m.text)
     if (text) out.text = text
   }
   return out
