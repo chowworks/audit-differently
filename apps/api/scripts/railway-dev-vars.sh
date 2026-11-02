@@ -12,6 +12,7 @@
 #   SCHEMA_DATABASE_URL  a reference to the dev Postgres service (the owner; migrations and the seed), with TLS
 #   REQUIRE_TENANT_RLS   on
 #   NODE_ENV             development; TRUST_PROXY 1; FRONTEND_URL your local web app (ports 5173 and 5273)
+#                        and every Vercel branch preview (src/cors.ts)
 #   CLERK_SECRET_KEY     the dev instance's sk_test_ key from your .env (a live key stops the script)
 #   R2_*                 the dev document bucket from your .env (required: a deployed API refuses local-disk storage)
 #   ANTHROPIC_API_KEY    optional, from your .env when set (Claude reads for imports and receipts)
@@ -94,7 +95,7 @@ set_var SCHEMA_DATABASE_URL '${{Postgres.DATABASE_URL}}?sslmode=require'
 set_var REQUIRE_TENANT_RLS on
 set_var NODE_ENV development
 set_var TRUST_PROXY 1
-set_var FRONTEND_URL "http://localhost:5173,http://localhost:5273"
+set_var FRONTEND_URL "http://localhost:5173,http://localhost:5273,https://audit-differently-git-*-ludakhris-projects.vercel.app"
 
 echo
 if [ ${#missing[@]} -gt 0 ]; then echo "Not in your local .env, so left unset (the API will refuse to start without the R2 ones): ${missing[*]}"; fi

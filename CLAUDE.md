@@ -249,7 +249,9 @@ general>/<uuid>.<ext>` (a database trigger refuses any other key, migrations `20
   csv must be UTF-8 with no NUL byte; no row of it goes to AI (an AI guess sees real column names alone).
 - The API sets security headers on every response (helmet in `main.ts`: no-script CSP, HSTS, nosniff, no
   framing), rate-limits every client (`ThrottlerModule`, tighter on uploads, signed links and `/me`), and
-  accepts a Clerk session only when its token names one of `FRONTEND_URL`'s origins (`authorizedParties`).
+  accepts a Clerk session only when its token's `azp` is one of `FRONTEND_URL`'s origins, the list CORS answers
+  (`src/cors.ts`; dev also lists `https://audit-differently-git-*-ludakhris-projects.vercel.app` so Vercel's branch
+  previews reach `api-dev`; a `*` only in the first label of an https address, and production refuses one).
   The web app's own headers are in `apps/web/vercel.json`. The access log is read by owners and auditors.
 
 ## AI in the app

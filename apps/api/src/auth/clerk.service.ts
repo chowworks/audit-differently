@@ -1,5 +1,6 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { createClerkClient, verifyToken, type ClerkClient, type User } from '@clerk/backend'
+import { frontendOriginCheck } from '../cors'
 
 /**
  * The address an account may act under: the primary one if verified, else the first verified one, else none.
@@ -25,12 +26,13 @@ const clerkStatus = (err: unknown): number | undefined => {
   return typeof status === 'number' ? status : undefined
 }
 
-/** The browser origins a session token may come from: the comma-separated FRONTEND_URL list. */
-export function authorizedParties(frontendUrl: string | undefined): string[] {
-  return (frontendUrl ?? 'http://localhost:5173')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean)
+/**
+ * Whether a session token's azp claim (the browser origin it was made on; Clerk calls these authorized parties) is
+ * one of FRONTEND_URL's addresses or patterns, the same list CORS answers. A token without one fails, as it does in
+ * Clerk's own authorizedParties check.
+ */
+export function authorizedParty(azp: unknown, frontendUrl: string | undefined): boolean {
+  return typeof azp === 'string' && azp !== '' && frontendOriginCheck(frontendUrl)(azp)
 }
 
 /**
@@ -57,12 +59,16 @@ export class ClerkService {
   async verifyBearerToken(token: string): Promise<string | null> {
     if (!this.secretKey) return null
     try {
-      // The session must have been created by this product's web app: the token's azp claim must be one of
-      // the browser origins FRONTEND_URL names (Clerk calls these authorized parties).
-      const payload = await verifyToken(token, {
-        secretKey: this.secretKey,
-        authorizedParties: authorizedParties(process.env.FRONTEND_URL),
-      })
+      const payload = await verifyToken(token, { secretKey: this.secretKey })
+      // The session must have been created by this product's web app: the token's azp claim must be one of the
+      // browser origins FRONTEND_URL names. Checked here, not by Clerk's authorizedParties, which takes exact
+      // addresses only and so can't follow dev's pattern for Vercel's branch previews.
+      if (!authorizedParty(payload.azp, process.env.FRONTEND_URL)) {
+        this.logger.debug(
+          `Token verification failed: azp ${String(payload.azp)} is not a FRONTEND_URL origin`
+        )
+        return null
+      }
       return payload.sub ?? null
     } catch (err) {
       this.logger.debug(
