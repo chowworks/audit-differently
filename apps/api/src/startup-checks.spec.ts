@@ -110,6 +110,26 @@ describe('startup checks', () => {
     ).toEqual([])
   })
 
+  it('refuses a FRONTEND_URL pattern in production, and a malformed one anywhere', () => {
+    const prod = {
+      ...remote,
+      NODE_ENV: 'production',
+      TRUST_PROXY: '1',
+      CLERK_SECRET_KEY: 'sk_live_x',
+    }
+    const preview = 'https://audit-differently-git-*-ludakhris-projects.vercel.app'
+    expect(
+      configProblems({ ...prod, FRONTEND_URL: `https://app.example.test,${preview}` })
+    ).toEqual(['FRONTEND_URL has a * pattern: production lists its own addresses only'])
+    expect(configProblems({ ...prod, FRONTEND_URL: 'https://app.example.test' })).toEqual([])
+    expect(
+      configProblems({ ...remote, RAILWAY_ENVIRONMENT_NAME: 'dev', FRONTEND_URL: preview })
+    ).toEqual([])
+    expect(configProblems({ ...local, FRONTEND_URL: 'https://app.*.vercel.app' })).toEqual([
+      'FRONTEND_URL: a * may only stand in the first part of an https address: https://app.*.vercel.app',
+    ])
+  })
+
   it('refuses a leftover DEMO_AUTH anywhere', () => {
     expect(configProblems({ ...local, DEMO_AUTH: 'on' })).toEqual([
       'DEMO_AUTH is set, but demo personas no longer exist: remove it',

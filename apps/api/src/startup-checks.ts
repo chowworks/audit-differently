@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { findTermsFile, termsWording } from './auth/terms-fingerprint'
+import { frontendOrigins } from './cors'
 
 /**
  * Checks the configuration before the API starts, so a deployed API can never run the way the security rules
@@ -9,7 +10,8 @@ import { findTermsFile, termsWording } from './auth/terms-fingerprint'
  *   - any database that is not on this machine is reached over TLS (sslmode=require or stricter), and then
  *     documents go to the private bucket, never to this disk (a laptop against the dev database included);
  *   - on Railway, or with NODE_ENV=production: a Clerk key;
- *   - in production: NODE_ENV=production and TRUST_PROXY set;
+ *   - in production: NODE_ENV=production and TRUST_PROXY set, and FRONTEND_URL with no * pattern;
+ *   - anywhere: a FRONTEND_URL pattern only in the first part of an https address;
  *   - docs/terms/index.html, with its #terms section, is there: the version everyone accepts is the fingerprint of
  *     that wording, computed from it at startup;
  *   - on Railway, email in receipts is all set up or not at all: RESEND_RECEIVING_API_KEY, RESEND_WEBHOOK_SECRET and
@@ -70,6 +72,13 @@ export function configProblems(
     for (const name of ['RESEND_RECEIVING_API_KEY', 'RESEND_WEBHOOK_SECRET', 'RECEIPTS_DOMAIN'])
       if (!env[name]?.trim())
         problems.push(`${name} is not set: email in receipts needs all three of its settings`)
+  }
+  try {
+    const patterned = frontendOrigins(env.FRONTEND_URL).some((o) => typeof o !== 'string')
+    if (production && patterned)
+      problems.push('FRONTEND_URL has a * pattern: production lists its own addresses only')
+  } catch (err) {
+    problems.push((err as Error).message)
   }
   if (railway === 'production' && !production)
     problems.push('NODE_ENV must be "production" in the production environment')
