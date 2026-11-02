@@ -689,7 +689,7 @@ export class PayrollMatchService {
         where: { monthlyReportId: reportId },
         include: { participant: true },
       }),
-      // The month: a pay belongs to the month it was paid in (owner's decision, 2026-10-19).
+      // The month: a pay belongs to the month its work was done (`payMonthOf`, owner's decision, 2026-11-01).
       this.prisma.monthlyReport.findFirst({
         where: { id: reportId },
         select: { period: true, engagementId: true },

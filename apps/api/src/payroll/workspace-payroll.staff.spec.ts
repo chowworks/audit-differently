@@ -297,6 +297,7 @@ function setup(
     },
     payrollPayLine: { findMany: jest.fn(async () => payLines) },
     staffMember: { findMany: jest.fn(async () => staff) },
+    workspace: { findFirst: jest.fn(async () => ({ programNames: [] })) },
     staffPayProof: { findMany: jest.fn(async () => proofs) },
     wexPayment: { findMany: jest.fn().mockResolvedValue([]) },
     participant: {
@@ -881,24 +882,25 @@ describe('WorkspacePayrollService by the lists', () => {
     })
   })
 
-  describe('a pay belongs to the month it was paid in', () => {
-    it("files April's run as another month's: its register rows and its bank debit say so, in the reconciliation too", async () => {
+  describe('a pay belongs to the month its work was done in', () => {
+    it("files April's run (its period in April) as another month's: its register rows and its bank debit say so, in the reconciliation too", async () => {
       const s = setup({
         files: [
+          // Paid in April for work in April: April's, though a March statement could show the debit.
           file('f-reg', 'payroll-register', [
-            'Pay period 03/15/2027 - 03/28/2027',
-            'Pay date 04/02/2027',
+            'Pay period 04/01/2027 - 04/14/2027',
+            'Pay date 04/18/2027',
             'Name Gross Net',
             'Morgan Lee 2,000.00 1,640.22',
             'Total direct deposits 1,640.22',
           ]),
-          file('f-bank', 'bank-statement', ['04/01/2027 ACH DEBIT PAYPEOPLE PAYROLL 1,640.22']),
+          file('f-bank', 'bank-statement', ['04/17/2027 ACH DEBIT PAYPEOPLE PAYROLL 1,640.22']),
         ],
       })
       const open = await s.service.get(owner, 'run-ws')
       const flagsOf = (text: string) => open.pays.find((p) => p.mark?.text.startsWith(text))!.flags
       expect(flagsOf('Morgan Lee')).toContain('other-month')
-      expect(flagsOf('04/01/2027')).toContain('other-month')
+      expect(flagsOf('04/17/2027')).toContain('other-month')
       // March's staff lines get nothing of April's run.
       expect(open.plan.proof).toEqual([])
       await s.service.save(owner, 'run-ws', { links: [] })
@@ -915,7 +917,7 @@ describe('WorkspacePayrollService by the lists', () => {
         documentId: 'd-bank',
         period: '2027-03',
         kind: 'bank-statement',
-        mark: at('04/01/2027 ACH DEBIT PAYPEOPLE PAYROLL 1,640.22', 0),
+        mark: at('04/17/2027 ACH DEBIT PAYPEOPLE PAYROLL 1,640.22', 0),
         flags: ['other-month'],
         document: { fileName: 'bank.pdf', sha256: 'sha-bank' },
       })

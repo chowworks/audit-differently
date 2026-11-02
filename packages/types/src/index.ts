@@ -305,7 +305,10 @@ export const ALLOWED_UPLOAD_TYPES: Record<string, string> = {
   'image/jpeg': 'jpg',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'text/csv': 'csv',
 }
+/** The kinds a CSV may be uploaded as: the payroll company's journals, job reports and per-person exports. */
+export const CSV_DOCUMENT_KINDS = ['timesheet', 'payroll-register', 'payroll-details'] as const
 
 // ── Reports, checks, roles ──────────────────────────────────────────────────
 
@@ -1603,11 +1606,12 @@ export type PayrollReadingDays = Exclude<keyof PayrollReading, PayrollReadingLis
 
 /** The defaults until a platform admin changes them. */
 export const DEFAULT_PAYROLL_READING: PayrollReading = {
-  payDateLabels: ['pay date', 'check date'],
+  payDateLabels: ['pay date', 'payment date', 'check date'],
   periodLabels: ['period'],
   debitTotalLabels: [
     'total direct deposits',
     'total direct deposit',
+    'employee net pay',
     'total net pay',
     'net pay total',
     'total payroll debit',
@@ -2149,8 +2153,8 @@ export interface PayLineLinkInput {
 /**
  * What a pay in the files is flagged for (GitHub issue #22): nothing is changed by a flag, an owner looks at it.
  * A pay stub: its pay or pay period could not be read, it names nobody on an engagement's participant list, it names
- * someone on more than one, the participant's engagement has no month for the period, it was paid in another month
- * (a pay belongs to the month of its pay date, owner's decision, 2026-10-19), or its pay is not what the
+ * someone on more than one, the participant's engagement has no month for the period, it is another month's pay
+ * (a pay belongs to the month its work was done, by its pay period, owner's decision, 2026-11-01), or its pay is not what the
  * payroll register pays them (a bank statement shows one debit per pay run, never a line per person). A register row or bank line: the person is on the staff list but on no engagement, or on no list at all.
  */
 export const PAY_LINE_FLAGS = [
@@ -2356,6 +2360,8 @@ export interface StubPayDto {
   register: ProofSpotDto | null
   /** The name the stub prints, when it can be read (a stub naming someone on no list shows it). */
   named: string | null
+  /** A staff member's own pay stub: Save links it to their payroll lines of its run, never makes a payment. */
+  staff: { id: string; name: string } | null
 }
 
 /** One file of the month's set after Save, and the engagements its proof links reach: none, it is matched to nothing. */
@@ -2518,3 +2524,101 @@ export interface WorkspacePayrollOutputDto {
    */
   sharedStaffOvercharged: { engagements: { id: string; name: string }[] }[]
 }
+
+// ── Program names ──────────────────────────────────────────────────────────
+
+/**
+ * One program's names across the files a workspace's payroll comes in (owner's decision, 2026-11-01): the books call it
+ * by a class ("Youth - Riverbend Board (In-School Youth)"), the payroll company by a project or job ("Riverbend Board
+ * (In-School Youth 2026)"). A workspace keeps a list of them (`Workspace.programNames`), read from a mapping file in the
+ * payroll zip's "Program names" folder (each row the same program's names) and merged with every new one. A group is
+ * the engagement's when one of its names is the engagement's name, or when an owner links it.
+ */
+export interface ProgramNames {
+  names: string[]
+  /** The engagement an owner linked; null: the one of its name, if any; NOT_OURS: an owner said none of ours. */
+  engagementId: string | null
+}
+
+/** A program an owner marked as none of the workspace's engagements, even when its name is one's. */
+export const NOT_OURS = 'none'
+
+/** At most this many programs, this many names each, this long each. */
+export const MAX_PROGRAMS = 500
+export const MAX_PROGRAM_NAMES = 20
+export const MAX_PROGRAM_NAME_LENGTH = 200
+
+/** A name as it is compared: lower case, letters and digits, single spaces ("Board/WIB (In-School…" → "board wib in school…"). */
+export const programKey = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+
+/**
+ * The list with new rows merged in: a row's names join the program that has any of them (two programs a row names both
+ * of become one, keeping the engagement either is linked to), and a row naming none is a new program. A row that would
+ * join two programs linked to different engagements is left out and returned in `conflicts`, so no engagement's names
+ * move to another. Nothing already in the list is dropped. Each name is looked up once (an index by its key).
+ */
+export function mergeProgramNames(
+  had: ProgramNames[],
+  rows: string[][]
+): { programs: ProgramNames[]; conflicts: string[][] } {
+  const programs = had.map((g) => ({ names: [...g.names], engagementId: g.engagementId }))
+  const index = new Map<string, (typeof programs)[number]>()
+  for (const g of programs) for (const n of g.names) index.set(programKey(n), g)
+  const conflicts: string[][] = []
+  for (const row of rows) {
+    const names = [...new Set(row.map((n) => n.trim()).filter((n) => programKey(n)))]
+    if (!names.length) continue
+    const hits = [
+      ...new Set(names.map((n) => index.get(programKey(n))).filter((g) => !!g)),
+    ] as typeof programs
+    const linked = new Set(hits.map((g) => g.engagementId).filter((e) => e !== null))
+    if (linked.size > 1) {
+      conflicts.push(names)
+      continue
+    }
+    const into = hits[0] ?? { names: [], engagementId: null }
+    if (!hits.length) programs.push(into)
+    into.engagementId = into.engagementId ?? [...linked][0] ?? null
+    const add = (n: string) => {
+      const k = programKey(n)
+      if (index.get(k) === into) return
+      into.names.push(n)
+      index.set(k, into)
+    }
+    for (const g of hits.slice(1)) {
+      programs.splice(programs.indexOf(g), 1)
+      for (const n of g.names) add(n)
+    }
+    for (const n of names) add(n)
+  }
+  return { programs, conflicts }
+}
+
+/** The program an engagement is: the one linked to it, else the one of its name; null when none. */
+export function programOf(
+  list: ProgramNames[],
+  engagement: { id: string; name: string }
+): ProgramNames | null {
+  const linked = list.find((g) => g.engagementId === engagement.id)
+  if (linked) return linked
+  const key = programKey(engagement.name)
+  return list.find((g) => !g.engagementId && g.names.some((n) => programKey(n) === key)) ?? null
+}
+
+/** The workspace's program names, with its engagements to link them to. */
+export interface ProgramNamesDto {
+  programs: ProgramNames[]
+  engagements: { id: string; name: string }[]
+  /** A file's rows left out: each would join programs linked to different engagements. */
+  conflicts?: string[][]
+}
+
+/** Every name an engagement goes by in payroll files: its own, and its program's. */
+export const namesOfEngagement = (
+  list: ProgramNames[],
+  engagement: { id: string; name: string }
+): string[] => [engagement.name, ...(programOf(list, engagement)?.names ?? [])]

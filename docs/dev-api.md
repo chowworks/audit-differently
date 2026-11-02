@@ -156,7 +156,7 @@ The workspace payroll sample zip (`apps/web/public/samples/payroll-workspace-sam
 Payroll, each with its own time report, register, a pay stub per participant, and its own two bank debits.
 
 - **Run 1:** pay period 08/24/2026 to 09/06/2026, paid 09/11/2026 (its period starts in August, but a pay belongs to
-  the month it was paid in, so it is September's). Morgan Lee $1,200.00, Priya Shah $855.00, Sam Ortiz $1,000.00,
+  the month its work was done, by its period's end, so it is September's). Morgan Lee $1,200.00, Priya Shah $855.00, Sam Ortiz $1,000.00,
   Taylor Brooks $400.00, Jordan Sample $140.00, Riley Example $112.00, Casey Demo $140.00. Totals: $3,847.00 gross,
   $790.09 withheld, $3,056.91 net. Bank, 09/10/2026: one $3,056.91 net pay debit and one $1,084.39 tax debit.
 - **Run 2:** pay period 09/07/2026 to 09/20/2026, paid 09/25/2026. Morgan $1,200.00, Priya $945.00, Sam $1,000.00,

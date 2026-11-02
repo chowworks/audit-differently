@@ -22,6 +22,8 @@ import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/services/api'
 import {
   PAYROLL_FOLDERS,
+  OPTIONAL_FOLDERS,
+  PROGRAM_NAMES_FOLDER,
   filesFromZip,
   sortPayrollZip,
   type PayrollFolderKind,
@@ -647,8 +649,8 @@ export function PayrollProof({
           >
             <ol className="ad-hand-steps">
               <li>
-                Upload the month&apos;s payroll zip, in the sample&apos;s four folders. Its files
-                join what&apos;s already here.
+                Upload the month&apos;s payroll zip, in the sample&apos;s folders. Its files join
+                what&apos;s already here.
               </li>
               <li>
                 Auto-Match reads every file and finds the line where each person&apos;s name and pay
@@ -1087,12 +1089,14 @@ export function PayrollProof({
 /** What one payroll zip may hold: the zip is opened in the browser, and its files go up 20 at a time. */
 const ZIP_MAX_BYTES = 250 * 1024 * 1024
 const ZIP_MAX_FILES = 200
+/** The server's limit for a program names file (MAX_IMPORT_BYTES in the API). */
+const NAMES_MAX_BYTES = 5 * 1024 * 1024
 /** The server's limit for one file (MAX_UPLOAD_BYTES in the API). */
 export const FILE_MAX_BYTES = 25 * 1024 * 1024
 const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`
 
 /**
- * Step 1: one zip with the four folders (Timesheets, Payroll registers, Pay stubs, Bank statements), opened in the
+ * Step 1: one zip with the sample's folders (Timesheets, Payroll registers, Bank statements; Pay stubs, Payroll details and Program names when the team has them), opened in the
  * browser. Each folder sets its files' type; a zip laid out any other way is refused, with every problem at once.
  * The files then go up to the server, 20 at a time, to be read and matched; nothing is filed until Save.
  */
@@ -1104,13 +1108,26 @@ export function UploadPanel({
   maxFiles = ZIP_MAX_FILES,
   action = 'Upload zip and match',
   kind = 'primary',
+  takesNames = false,
 }: {
+  /**
+   * Whether this screen reads a Program names folder (the owner's workspace match); elsewhere the zip's names files are
+   * said to be read there, and are not sent.
+   */
+  takesNames?: boolean
   /** Reading the files on the server: what to say on the button meanwhile. */
   busy: string | null
   /** How many payroll files the month already has: "Replace them" is offered when there are any. */
   existing: number
-  /** The zip checked and sorted: send it to be read and matched. */
-  onReady: (files: { file: File; kind: PayrollFolderKind }[], replace: boolean) => void
+  /**
+   * The zip checked and sorted: send it to be read and matched. `names`: its "Program names" files, which are not proof
+   * (the workspace's program names, merged from them).
+   */
+  onReady: (
+    files: { file: File; kind: PayrollFolderKind }[],
+    replace: boolean,
+    names: File[]
+  ) => void
   /** Already uploaded this month: match those files again without uploading more. */
   onSkip?: () => void
   /** How many files the zip may hold (a workspace month's set holds more than one engagement's month). */
@@ -1122,24 +1139,26 @@ export function UploadPanel({
 }) {
   const [zipName, setZipName] = useState<string | null>(null)
   const [files, setFiles] = useState<{ file: File; kind: PayrollFolderKind; folder: string }[]>([])
+  const [names, setNames] = useState<File[]>([])
   const [problems, setProblems] = useState<string[]>([])
   // Too big to take: the zip, the number of files, or one file over the server's limit. Said as it is, not as a layout problem.
   const [tooBig, setTooBig] = useState<string | null>(null)
   const [replace, setReplace] = useState(false)
   const choose = async (zip: File | undefined) => {
     setFiles([])
+    setNames([])
     setProblems([])
     setTooBig(null)
     setZipName(zip?.name ?? null)
     if (!zip) return
     if (zip.size > ZIP_MAX_BYTES) {
       setTooBig(
-        `This zip is ${mb(zip.size)}; the limit is ${mb(ZIP_MAX_BYTES)}. Split the month into two zips with the same four folders.`
+        `This zip is ${mb(zip.size)}; the limit is ${mb(ZIP_MAX_BYTES)}. Split the month into two zips with the same folders.`
       )
       return
     }
     if (!/\.zip$/i.test(zip.name)) {
-      setProblems(['Choose a .zip file with the four folders.'])
+      setProblems(["Choose a .zip file with the sample's folders."])
       return
     }
     try {
@@ -1148,7 +1167,7 @@ export function UploadPanel({
       const big = sorted.files.filter((f) => f.file.size > FILE_MAX_BYTES)
       if (sorted.files.length > maxFiles)
         setTooBig(
-          `This zip has ${sorted.files.length.toLocaleString('en-US')} files; the limit is ${maxFiles.toLocaleString('en-US')}. Split it into two zips with the same four folders.`
+          `This zip has ${sorted.files.length.toLocaleString('en-US')} files; the limit is ${maxFiles.toLocaleString('en-US')}. Split it into two zips with the same folders.`
         )
       else if (big.length)
         setTooBig(
@@ -1157,7 +1176,13 @@ export function UploadPanel({
             .map((f) => f.file.name)
             .join(', ')}${big.length > 3 ? ', …' : ''}.`
         )
+      const bigNames = takesNames ? sorted.names.filter((f) => f.size > NAMES_MAX_BYTES) : []
+      if (bigNames.length)
+        setTooBig(
+          `${PROGRAM_NAMES_FOLDER}/${bigNames[0]!.name} is over ${mb(NAMES_MAX_BYTES)}: a program names file is read in memory, up to ${mb(NAMES_MAX_BYTES)}.`
+        )
       setFiles(sorted.files)
+      setNames(sorted.names)
       setProblems(sorted.problems)
     } catch (e) {
       setProblems([(e as Error).message])
@@ -1173,12 +1198,11 @@ export function UploadPanel({
       )}
       {!tooBig && problems.length > 0 && (
         <p className="ad-field-error-sum" role="status">
-          Choose a .zip file with the four folders, matching the structure and folders of the sample
-          (zip) above.
+          Choose a .zip file matching the structure and folders of the sample (zip) above.
         </p>
       )}
       <Field
-        label="One zip with four folders: Timesheets, Payroll registers, Pay stubs and Bank statements (and Payroll details, when you have it), as in the sample above."
+        label="One zip with the folders Timesheets, Payroll registers and Bank statements (and Pay stubs, Payroll details and Program names, when you have them), as in the sample above. Files as your payroll company and books export them: PDF, XLSX or CSV, and a zip of pay stubs as it comes."
         required
         hint={`Up to ${mb(ZIP_MAX_BYTES)} and ${maxFiles.toLocaleString('en-US')} files; each file up to ${mb(FILE_MAX_BYTES)}.`}
       >
@@ -1203,14 +1227,30 @@ export function UploadPanel({
             {PAYROLL_FOLDERS.map(([name]) => {
               const n = files.filter((f) => f.folder === name).length
               return (
-                <div key={name} className={`ad-tile ${n ? 'ad-tile-ok' : 'ad-tile-warn'}`}>
+                <div
+                  key={name}
+                  className={`ad-tile ${n ? 'ad-tile-ok' : OPTIONAL_FOLDERS.has(name) ? '' : 'ad-tile-warn'}`}
+                >
                   <span className="ad-tile-label">{name}</span>
                   <span className="ad-tile-value">{n}</span>
                   <span className="ad-tile-note">{n === 1 ? 'file' : 'files'}</span>
                 </div>
               )
             })}
+            {names.length > 0 && takesNames && (
+              <div className="ad-tile ad-tile-ok">
+                <span className="ad-tile-label">{PROGRAM_NAMES_FOLDER}</span>
+                <span className="ad-tile-value">{names.length}</span>
+                <span className="ad-tile-note">{names.length === 1 ? 'file' : 'files'}</span>
+              </div>
+            )}
           </div>
+          {names.length > 0 && !takesNames && (
+            <p className="text-sm text-soft">
+              The {PROGRAM_NAMES_FOLDER} folder is read only when an owner uploads the zip on Month
+              End Payroll Processing; here it is left out.
+            </p>
+          )}
         </>
       )}
       {existing > 0 && (
@@ -1239,7 +1279,7 @@ export function UploadPanel({
         )}
         <Button
           kind={kind}
-          onClick={() => onReady(files, replace)}
+          onClick={() => onReady(files, replace, takesNames ? names : [])}
           disabled={!files.length || problems.length > 0 || !!tooBig || !!busy}
         >
           {busy ?? action}

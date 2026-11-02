@@ -21,4 +21,11 @@ describe('looksLike', () => {
     expect(looksLike(Buffer.from(''), 'application/pdf')).toBe(false)
     expect(looksLike(Buffer.from('%PDF-'), 'text/html')).toBe(false)
   })
+
+  it('takes a CSV as UTF-8 text with no NUL byte: it has no signature', () => {
+    expect(looksLike(Buffer.from('Employee,Hours\nMorgan Lee,80\n'), 'text/csv')).toBe(true)
+    expect(looksLike(Buffer.from([0x45, 0x00, 0x46]), 'text/csv')).toBe(false)
+    expect(looksLike(Buffer.from([0xff, 0xfe, 0x41]), 'text/csv')).toBe(false)
+    expect(looksLike(Buffer.from(''), 'text/csv')).toBe(false)
+  })
 })

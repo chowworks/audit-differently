@@ -1,4 +1,5 @@
 import {
+  programKey,
   STAFF_REPORT_LINES,
   type AiFileFacts,
   type HighlightField,
@@ -14,6 +15,8 @@ import { datesOf, personIn } from './match-proof'
 import {
   chargedPayOf,
   chargesOf,
+  engagementOfCharge,
+  programIn,
   sheetMarks,
   type ChargedPay,
   type PayrollCharge,
@@ -52,6 +55,44 @@ export { amountsOn, registerLayout, type RegisterLayout } from './pay-runs'
  * (owner's decision, 2026-10-18): two people of one name are one line's "several people", never told apart by a guess.
  */
 
+/** Text as program names are compared: lower case, letters and digits, a space on each side. */
+const programText = (t: string) => ` ${programKey(t)} `
+/** Whether a line names one of the programs. */
+const namesProgram = (text: string, names: readonly string[]) => {
+  const t = programText(text)
+  return names.some((n) => programKey(n) && t.includes(programText(n)))
+}
+
+/** Between cells of a spreadsheet or CSV row read as a line (`sheetLines`, `csvLines`). */
+const CELL = ' | '
+/** The header words of a timesheet's program column: the payroll company's project, job or class. */
+const PROGRAM_HEADERS = [
+  'client projects',
+  'client project',
+  'project',
+  'projects',
+  'program',
+  'job',
+  'class',
+  'class full name',
+]
+
+/**
+ * A spreadsheet timesheet's program column: the cell its header row names as the project or program, when some row
+ * fills it; -1 for a PDF, a sheet without one, or one never filled (a time report with no split by program).
+ */
+export function programColumnOf(lines: StatementLine[]): number {
+  for (const [i, l] of lines.entries()) {
+    if (!l.text.includes(CELL)) continue
+    const keys = l.text.split(CELL).map((c) => c.trim().toLowerCase().replace(/\s+/g, ' '))
+    const col = keys.findIndex((k) => PROGRAM_HEADERS.includes(k))
+    if (col < 0) continue
+    const used = lines.slice(i + 1).some((r) => (r.text.split(CELL)[col] ?? '').trim() !== '')
+    return used ? col : -1
+  }
+  return -1
+}
+
 /** A file as the match reads it: a file of the run, with the document it is (or will be) once saved. */
 export interface MatchFile {
   id: string
@@ -88,8 +129,14 @@ export interface MatchMonth {
   engagementId: string
   engagementName: string
   status: ReportStatus
-  /** Its staff payroll lines, each with its date: the runs that paid it are the ones paid on that date (`runsOfLine`). */
-  staffItems: { id: string; date?: string }[]
+  /** Every name its program goes by in payroll files (`namesOfEngagement`): its own name when left out. */
+  names?: string[]
+  /**
+   * Its staff payroll lines, each with its date: the runs that paid it are the ones paid on that date (`runsOfLine`). A
+   * line Save wrote from payroll details also says whose pay it is and which run's (its period's end): only that
+   * person's proofs of that run reach it.
+   */
+  staffItems: { id: string; date?: string; staffId?: string | null; end?: string | null }[]
 }
 
 /** A work-experience payment already in one of the months. */
@@ -118,6 +165,10 @@ export interface PersonLine {
   source?: 'ai' | 'details'
   /** Payroll details: every row of theirs in the run (pay, taxes, benefits), which their copy highlights. */
   lines?: StatementLine[]
+  /** The end of the pay period it is of (payroll details' row, a time report's period), when it has no run. */
+  end?: string | null
+  /** Payroll details: the engagement whose program the rows charge; its proof on that engagement's lines only. */
+  engagementId?: string
 }
 
 export interface StaffFound {
@@ -244,7 +295,9 @@ export function findStaff(
   staff: StaffRow[],
   files: MatchFile[],
   participants: ParticipantRow[] = [],
-  runs: PayRun[] = payRunsOf(files)
+  runs: PayRun[] = payRunsOf(files),
+  /** Every program name known (the engagements' and the workspace's program names). */
+  programs: readonly string[] = []
 ): StaffFound[] {
   const rows = registerRows(files)
   const { owner } = rowOwners(staff, rows, participants)
@@ -269,14 +322,22 @@ export function findStaff(
     }))
     const timesheet: PersonLine[] = []
     for (const f of files.filter((x) => x.kind === 'timesheet')) {
-      // One line per payroll run the timesheet shows them in (a report of the whole month prints each run's pay date).
+      // One line per payroll run the timesheet shows them in (a report of the whole month prints each run's pay date),
+      // and per program, when it splits their time by program (a job report: a row per project).
       const seen = new Set<string>()
       for (const line of f.lines.filter((l) => only(l.text))) {
         const runId = runOfLine(runs, f, line)?.fileId
-        const key = runId ?? ''
+        const program = programs.find((n) => namesProgram(line.text, [n])) ?? ''
+        const key = `${runId ?? ''}|${programKey(program)}`
         if (seen.has(key)) continue
         seen.add(key)
-        timesheet.push({ fileId: f.id, line, amount: null, ...(runId ? { runId } : {}) })
+        timesheet.push({
+          fileId: f.id,
+          line,
+          amount: null,
+          end: periodOn(f)?.end ?? null,
+          ...(runId ? { runId } : {}),
+        })
       }
     }
     // The amounts a bank line may show for them: each row's net and gross (by the heading), else its two largest.
@@ -365,7 +426,7 @@ export function payUnclearLines(file: MatchFile): Set<StatementLine> {
 export interface StubReading {
   start: string | null
   end: string | null
-  /** The pay date it prints, yyyy-mm-dd: the month it is paid in is its month (owner's decision, 2026-10-19). */
+  /** The pay date it prints, yyyy-mm-dd: its month when it prints no pay period (`payMonthOf`, owner, 2026-11-01). */
   payDate: string | null
   gross: number | null
   net: number | null
@@ -499,6 +560,8 @@ export interface StubPlan {
   register: PersonLine | null
   /** The name the stub prints for whom it pays ("Employee: Alex Rivera"), when it can be read; never a guess. */
   named: string | null
+  /** A staff member's own pay stub (it names one person on the staff list and no participant): proof of their pay. */
+  staff: StaffRow | null
 }
 
 export interface Plan {
@@ -540,12 +603,17 @@ export function stubName(lines: StatementLine[]): string | null {
   for (let i = 0; i < lines.length; i++) {
     const m = label.exec(lines[i]!.text)
     if (!m) continue
-    // The name beside the label, else on the line under it ("PAID TO:", then the name).
+    // The name beside the label, else on the line under it ("PAID TO:", then the name). Beside it may stand another
+    // label of a second column ("PAID TO: … NET PAY:"): then the name is under it, before that column's amount.
     const beside = lines[i]!.text.slice(m[0].length).trim()
-    if (beside) return registerPerson(beside)?.name ?? null
-    // On its own line under the label, the whole line is the name.
+    const besideName = /\b(?:pay|date|period|amount|total)\b/i.test(beside)
+      ? null
+      : (registerPerson(beside)?.name ?? null)
+    if (besideName || (beside && !/\b(?:pay|date|period|amount|total)\b/i.test(beside)))
+      return besideName
+    // On its own line under the label, the whole line is the name (an amount beside it left out).
     const below = lines[i + 1]?.page === lines[i]!.page ? lines[i + 1]!.text.trim() : ''
-    return below || null
+    return below.replace(/\s*\$?\d[\d,]*\.\d{2}.*$/, '').trim() || null
   }
   return null
 }
@@ -585,9 +653,9 @@ function personMarks(
  * the set (or by another stub of this plan) is a `duplicate`, and nothing is changed for it. One whose stub leaves the
  * set in this change is taken over too, so a stub uploaded again changes its payment rather than making a second one.
  *
- * Each pay belongs to the month it was paid in, by its pay date (owner's decision, 2026-10-19; the period's end only
- * when no pay date is printed): a run or a pay stub paid in another month than `period` is not this month's, and is
- * flagged (`other-month`). Matching is per run: a staff line gets the register row, timesheet and debit of the run that
+ * Each pay belongs to the month its work was done, by its pay period's end (owner's decision, 2026-11-01; the pay date
+ * only when no period is printed, `payMonthOf`): a run or a pay stub of another month's work than `period` is not this
+ * month's, and is flagged (`other-month`). Matching is per run: a staff line gets the register row, timesheet and debit of the run that
  * paid it (`runsOfLine`), and a payment those of its pay stub's run.
  */
 export function planMatch(input: {
@@ -599,6 +667,8 @@ export function planMatch(input: {
   months: MatchMonth[]
   wex: MatchWex[]
   highlight: Record<PayrollDocumentKind, readonly HighlightField[]>
+  /** Every program name the workspace knows (`ProgramNames`), besides the months' own. */
+  programs?: string[]
 }): Plan {
   const { files, highlight } = input
   const fileById = new Map(files.map((f) => [f.id, f]))
@@ -628,11 +698,35 @@ export function planMatch(input: {
     allRuns.filter((r) => period && payMonthOf(r) && payMonthOf(r) !== period).map((r) => r.fileId)
   )
   const runs = allRuns.filter((r) => !away.has(r.fileId))
+  // Each engagement's names, and every other program the workspace knows (whose rows are no engagement's here).
+  const engagementPrograms = input.months.map((m) => ({
+    id: m.engagementId,
+    names: [m.engagementName, ...(m.names ?? [])],
+  }))
+  const held = new Set(engagementPrograms.flatMap((p) => p.names.map(programKey)))
+  const knownPrograms: { id: string; names: string[] }[] = [
+    ...engagementPrograms,
+    ...(input.programs ?? [])
+      .filter((n) => !held.has(programKey(n)))
+      .map((n, i) => ({ id: `program:${i}`, names: [n] })),
+  ]
+  const columns = new Map<string, number>()
+  const programColumn = (f: MatchFile) => {
+    if (!columns.has(f.id)) columns.set(f.id, programColumnOf(f.lines))
+    return columns.get(f.id)!
+  }
+  const programs = [
+    ...new Set([
+      ...(input.programs ?? []),
+      ...input.months.flatMap((m) => [m.engagementName, ...(m.names ?? [])]),
+    ]),
+  ].filter((n) => programKey(n))
   const staff = findStaff(
     input.staff,
     files.filter((f) => !away.has(f.id)),
     input.participants,
-    runs
+    runs,
+    programs
   )
   // What AI read, when a person asked: each staff member's lines on a timesheet or register, with their pay.
   for (const found of staff) {
@@ -675,10 +769,14 @@ export function planMatch(input: {
     chargesOf(file.lines).map((charge) => ({ file, charge }))
   )
   // By the rules where the export's wording is known; else what AI read of its rows, when the person ticked it (✨).
-  const chargedFor = (name: string) =>
+  // A charge of this month (`payMonthOf`) only; `keep` narrows it further (to one engagement's program).
+  const thisMonth = (c: PayrollCharge) =>
+    !period || payMonthOf({ payDate: c.date, end: c.end }) === period
+  const chargedFor = (name: string, keep: (c: PayrollCharge) => boolean = () => true) =>
     details.flatMap((file) => {
-      const known = charges.filter((c) => c.file === file).map((c) => c.charge)
-      if (known.length) return chargedPayOf(known, name).map((c) => ({ ...c, file, ai: false }))
+      const all = charges.filter((c) => c.file === file).map((c) => c.charge)
+      const known = all.filter((c) => thisMonth(c) && keep(c))
+      if (all.length) return chargedPayOf(known, name).map((c) => ({ ...c, file, ai: false }))
       const byRun = new Map<string, ChargedPay>()
       for (const fact of file.ai?.people ?? []) {
         if (fact.gross === null || !personIn(fact.name, name)) continue
@@ -699,8 +797,19 @@ export function planMatch(input: {
       }
       return [...byRun.values()].map((c) => ({ ...c, file, ai: true }))
     })
+  const engagementNames = new Map(
+    input.months.map((m) => [m.engagementId, [m.engagementName, ...(m.names ?? [])]])
+  )
   for (const found of staff) {
-    const mine = chargedFor(printedName(found.staff.name))
+    // Per engagement of theirs: the charges of its program (as Save writes its lines), so a proof never adds in pay
+    // charged to another program.
+    const ids = found.staff.engagementIds
+    const mine = ids.flatMap((engagementId) =>
+      chargedFor(
+        printedName(found.staff.name),
+        (c) => engagementOfCharge(c, ids, engagementNames).id === engagementId
+      ).map((c) => ({ ...c, engagementId }))
+    )
     found.charged = mine.map(({ start, end, amount }) => ({ start, end, amount }))
     if (mine.length && found.pay === null) found.pay = round(mine.reduce((t, c) => t + c.amount, 0))
     for (const c of mine) {
@@ -711,6 +820,8 @@ export function planMatch(input: {
         lines: c.lines,
         amount: c.amount,
         source: c.ai ? 'ai' : 'details',
+        end: c.end,
+        engagementId: c.engagementId,
         ...(run ? { runId: run.fileId } : {}),
       })
       if (run?.debit && !found.bank.some((x) => x.line === run.debit!.line))
@@ -752,8 +863,20 @@ export function planMatch(input: {
     for (const engagementId of found.staff.engagementIds) {
       const month = monthOf.get(engagementId)
       if (!month) continue
+      // A timesheet with a program column (a job report: a row per person and project) proves this engagement by the
+      // rows whose program is its own only: a row of another program, or a person's total (no program), is not this
+      // program's time. One without (a time report with a row per person) proves it by the person's row, as before.
+      const sheetFor = (p: PersonLine) => {
+        const file = fileById.get(p.fileId)
+        if (file?.kind !== 'timesheet' || !p.line) return true
+        const col = programColumn(file)
+        return (
+          col < 0 || programIn(p.line.text.split(CELL)[col] ?? '', knownPrograms) === engagementId
+        )
+      }
       for (const [kind, slot, key] of proofs)
         for (const p of found[key] as PersonLine[]) {
+          if (!sheetFor(p) || (p.engagementId && p.engagementId !== engagementId)) continue
           // A spreadsheet (payroll details) is never marked: its row is quoted on the screen instead.
           // Payroll details (a spreadsheet): their rows of the run, by its own highlights in force.
           const sheet = fileById.get(p.fileId)?.kind === 'payroll-details'
@@ -773,9 +896,18 @@ export function planMatch(input: {
                 p.line
               )
           for (const item of month.staffItems) {
-            // The run that paid the line: its own register row, timesheet and debit only.
-            const paid = item.date ? runsOfLine(runs, item.date, period).map((r) => r.fileId) : null
+            // A line of one person's pay (written from payroll details) takes that person's proofs only.
+            if (item.staffId && item.staffId !== found.staff.id) continue
+            // The run that paid the line: its own register row, timesheet and debit only. A line of a known run (its
+            // period's end) takes that run's; another line, the run paid on its date, else every run of the month.
+            const paid = item.end
+              ? runs.filter((r) => r.end === item.end).map((r) => r.fileId)
+              : item.date
+                ? runsOfLine(runs, item.date, period).map((r) => r.fileId)
+                : null
             if (paid && p.runId && !paid.includes(p.runId)) continue
+            // A proof of no run reaches a line of a known run only when it is of that run's period.
+            if (item.end && !p.runId && p.end !== item.end) continue
             add({
               target: 'expense',
               itemId: item.id,
@@ -812,12 +944,19 @@ export function planMatch(input: {
         flag = 'named-by-ai'
       }
     }
+    // Naming no participant but one person on the staff list: their own pay stub, proof of their pay, not a payment.
+    const printed = stubName(f.lines)
+    const staffNamed =
+      !participant && flag === 'no-participant' && printed
+        ? input.staff.filter((x) => personIn(printed, printedName(x.name)))
+        : []
+    const staffOf = staffNamed.length === 1 ? staffNamed[0]! : null
     if (reading.gross === null || reading.start === null) flags.push('stub-unreadable')
-    if (flag) flags.push(flag)
+    if (flag && !staffOf) flags.push(flag)
     const month = participant ? (monthOf.get(participant.engagementId) ?? null) : null
     if (participant && !month) flags.push('no-month')
-    // Paid in another month (by its pay date, else its period's end): not this month's pay.
-    const paidIn = (reading.payDate ?? reading.end)?.slice(0, 7) ?? null
+    // Of another month (the month its work was done, `payMonthOf`): not this month's pay.
+    const paidIn = payMonthOf(reading)
     if (period && paidIn && paidIn !== period) flags.push('other-month')
     // Flagged only: the stub's pay is not what the register pays them (its gross, else its net).
     if (participant && registerDisagrees(reading, rows, owned, participant.displayName))
@@ -882,9 +1021,42 @@ export function planMatch(input: {
       debit,
       timesheet: null,
       register: null,
-      named: participant ? participant.displayName : stubName(f.lines),
+      named: participant
+        ? participant.displayName
+        : staffOf
+          ? printedName(staffOf.name)
+          : stubName(f.lines),
+      staff: staffOf,
     })
     const plan = stubs[stubs.length - 1]!
+    // A staff member's stub of a run of this month: on their lines of that run (its period's end).
+    if (staffOf && !flags.includes('other-month') && reading.end)
+      for (const engagementId of staffOf.engagementIds) {
+        const month = monthOf.get(engagementId)
+        if (!month) continue
+        for (const item of month.staffItems) {
+          if (item.staffId !== staffOf.id || item.end !== reading.end) continue
+          add({
+            target: 'expense',
+            itemId: item.id,
+            stubFileId: null,
+            fileId: f.id,
+            purpose: 'payment',
+            slot: 'stub',
+            mark: reading.payLine,
+            marks: personMarks(
+              f,
+              printedName(staffOf.name),
+              reading.gross,
+              reading.start ?? '',
+              reading.end,
+              highlight.paystub,
+              reading.payLine
+            ),
+            reportId: month.reportId,
+          })
+        }
+      }
     if (action === 'none' || !participant || !month) continue
     const name = participant.displayName
     const item = {

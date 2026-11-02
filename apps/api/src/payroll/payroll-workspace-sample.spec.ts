@@ -1,8 +1,9 @@
-import { DEFAULT_HIGHLIGHTS } from '@ad/types'
+import { DEFAULT_HIGHLIGHTS, mergeProgramNames, namesOfEngagement, NOT_OURS } from '@ad/types'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   PARTICIPANTS,
+  PROGRAM_NAMES,
   RUNS,
   sampleFiles,
   STAFF,
@@ -14,6 +15,7 @@ import {
 } from '../../prisma/payroll-workspace-sample'
 import { dbTestsEnabled } from '../core/testing/tenant-db'
 import { payLinesOf } from './pay-lines'
+import { programNameRows } from './program-names'
 import { payMonthOf, payRunsOf } from './pay-runs'
 import {
   findStaff,
@@ -57,6 +59,7 @@ const septemberGross = (name: string) =>
 suite('the workspace payroll sample', () => {
   let files: MatchFile[]
   let details: StatementLine[] = []
+  let namesFile: Buffer | null = null
   const staff: StaffRow[] = STAFF.map((s, i) => ({
     id: `s-${i}`,
     name: s.name,
@@ -107,6 +110,11 @@ suite('the workspace payroll sample', () => {
       // The committed files are what the generator makes now (run `npm run sample:payroll -w @ad/api` after a change).
       expect(committed.equals(f.bytes)).toBe(true)
       // Payroll details is a sheet, read on its own below; the match tests here run on the PDFs.
+      // Program names is a mapping file, read on its own below: no proof of anyone's pay.
+      if (f.folder === 'Program names') {
+        namesFile = committed
+        continue
+      }
       if (f.folder === 'Payroll details') {
         details = await sheetLines(committed)
         continue
@@ -139,6 +147,7 @@ suite('the workspace payroll sample', () => {
       'Pay stub Alex Rivera 09.25.2026.pdf',
       'Lakeside Community Bank statement 2026-09.pdf',
     ])
+    expect(namesFile).not.toBeNull()
     for (const f of files)
       expect(f.lines.map((l) => l.text)).toContain(
         'SAMPLE - fictional data for trying Audit Differently'
@@ -275,6 +284,34 @@ suite('the workspace payroll sample', () => {
     )
   })
 
+  it("reads its program names file as written, and matches the same with the names linked to the demo's engagements", async () => {
+    const rows = await programNameRows(namesFile!, 'Program names.csv')
+    expect(rows).toEqual(PROGRAM_NAMES)
+    const { programs, conflicts } = mergeProgramNames([], rows)
+    expect(conflicts).toEqual([])
+    const linked = programs.map((g, i) => ({
+      ...g,
+      engagementId: ['e-isy', 'e-ait', NOT_OURS][i]!,
+    }))
+    const withNames = planMatch({
+      files,
+      period: '2026-09',
+      staff,
+      participants,
+      wex: [],
+      highlight: DEFAULT_HIGHLIGHTS,
+      programs: linked.flatMap((g) => g.names),
+      months: months.map((m) => ({
+        ...m,
+        names: namesOfEngagement(linked, { id: m.engagementId, name: m.engagementName }),
+      })),
+    })
+    const links = (p: ReturnType<typeof plan>) =>
+      p.links.map((l) => `${l.itemId}|${l.slot}|${l.fileId}`).sort()
+    expect(links(withNames)).toEqual(links(plan()))
+    expect(withNames.stubs.map((x) => x.flags)).toEqual(plan().stubs.map((x) => x.flags))
+  })
+
   it("makes one payment per participant and run from its pay stub, with its own run's proofs and debit", () => {
     const p = plan()
     const runs = payRunsOf(files)
@@ -320,9 +357,9 @@ suite('the workspace payroll sample', () => {
     }
   })
 
-  it("places a pay by the month it was paid in: as August's, run 1 (paid 09/11) is another month's", () => {
+  it("places a pay by the month its work was done: as August's, run 1 (worked through 09/06) is another month's", () => {
     const p = plan('2026-08')
-    // Every pay stub was paid in September: none is August's.
+    // Every pay stub is of September's work: none is August's.
     expect(p.stubs.every((s) => s.flags.includes('other-month') && s.action === 'none')).toBe(true)
     // No register of September counts for August's staff.
     expect(p.staff.every((f) => !f.register.length && !f.bank.length)).toBe(true)

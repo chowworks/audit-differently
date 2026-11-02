@@ -50,6 +50,9 @@ model Workspace {
   // "Bookkeepers see staff payroll" (migrations 20261017000500, renamed in 20261018000300): the owners' setting, on by
   // default. Off, a bookkeeper's month page shows the payroll proofs as labels, not links; the screen only.
   bookkeepersSeeStaffPayroll Boolean                  @default(true)
+  // Program names (migration 20261101000100): each program's names in the books and the payroll company's files
+  // ({ names, engagementId }[], ProgramNames in packages/types), merged from the payroll zip's "Program names" folder.
+  programNames               Json                     @default("[]")
   staffMembers               StaffMember[]
   droppedPayrollDecisions    PayrollDroppedDecision[]
   payrollFileAiReadings      PayrollFileAiReading[]

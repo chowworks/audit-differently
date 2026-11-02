@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common'
 import {
   MAX_PAY_LINES,
+  mergeProgramNames,
+  namesOfEngagement,
   PAYROLL_BUDGET_KIND_LABELS,
   DOCUMENT_SENSITIVITY,
   MAX_WORKSPACE_PAYROLL_FILES,
@@ -49,6 +51,8 @@ import {
   type WorkspacePayrollRunDto,
   type WorkspacePayrollSaveInput,
   type WorkspacePayrollStartInput,
+  type ProgramNames,
+  type ProgramNamesDto,
 } from '@ad/types'
 import type { Document, Prisma } from '@prisma/client'
 import { ChecksService } from '../checks/checks.service'
@@ -115,6 +119,7 @@ import {
 } from './staff-match'
 import { amountsOn, payDateOn, payMonthOf, payRunsOf, runOfLine, suggestedRuns } from './pay-runs'
 import { chargesOf } from './payroll-details'
+import { cleanProgramNames, programNameRows, programNamesIn } from './program-names'
 import {
   payrollItemNumber,
   payrollLinesOf,
@@ -122,7 +127,13 @@ import {
   type PayrollLineWrite,
 } from './payroll-lines'
 import { readStatement, type PageItem } from './statement-lines'
-import { proved, slotOfLink, workspaceItems, type WorkspaceItem } from './workspace-items'
+import {
+  lineOfKey,
+  proved,
+  slotOfLink,
+  workspaceItems,
+  type WorkspaceItem,
+} from './workspace-items'
 
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
 /** A file's sha256, as staging records it: how a file sent again is known. */
@@ -380,7 +391,7 @@ export class WorkspacePayrollService {
    * Read as the caller: an owner reads both (an auditor never runs a match).
    */
   private async lists(workspaceId: string) {
-    const [staff, participants] = await Promise.all([
+    const [staff, participants, workspace] = await Promise.all([
       this.prisma.staffMember.findMany({
         where: { workspaceId },
         orderBy: { name: 'asc' },
@@ -389,6 +400,10 @@ export class WorkspacePayrollService {
       this.prisma.participant.findMany({
         where: { workspaceId },
         select: { id: true, engagementId: true, displayName: true, participantId: true },
+      }),
+      this.prisma.workspace.findFirst({
+        where: { id: workspaceId },
+        select: { programNames: true },
       }),
     ])
     const rows: StaffRow[] = staff.map((s) => ({
@@ -399,7 +414,12 @@ export class WorkspacePayrollService {
     const engagementNames = new Map(
       staff.flatMap((s) => s.assignments.map((a) => [a.engagement.id, a.engagement.name] as const))
     )
-    return { staff: rows, participants: participants as ParticipantRow[], engagementNames }
+    return {
+      staff: rows,
+      participants: participants as ParticipantRow[],
+      engagementNames,
+      programs: programNamesIn(workspace?.programNames),
+    }
   }
 
   /**
@@ -430,7 +450,7 @@ export class WorkspacePayrollService {
     items: WorkspaceItem[],
     months: WorkspacePayrollMonthDto[]
   ) {
-    const [{ staff, participants, engagementNames }, highlight, set] = await Promise.all([
+    const [{ staff, participants, engagementNames, programs }, highlight, set] = await Promise.all([
       this.lists(run.workspaceId),
       this.highlights.current(),
       this.setOf(run.workspaceId, run.period),
@@ -443,12 +463,13 @@ export class WorkspacePayrollService {
     }))
     const matchMonths: MatchMonth[] = months.map((m) => ({
       ...m,
+      names: namesOfEngagement(programs, { id: m.engagementId, name: m.engagementName }),
       staffItems: items
         .filter(
           (i) =>
             i.target === 'expense' && i.month.reportId === m.reportId && isStaffLine(i.reportLine)
         )
-        .map((i) => ({ id: i.id, date: i.proof.start })),
+        .map((i) => ({ id: i.id, date: i.proof.start, ...lineOfKey(i.payrollKey) })),
     }))
     const wexItems = items.filter((i) => i.target === 'wex' && i.wex)
     const wex: MatchWex[] = wexItems.map((i) => ({
@@ -469,6 +490,7 @@ export class WorkspacePayrollService {
       months: matchMonths,
       wex,
       highlight,
+      programs: programs.flatMap((g) => g.names),
     })
     const docOf = new Map(change.matching.map((f) => [f.id, f.documentId]))
     const byKey = new Map(items.map((i) => [`${i.target}-${i.id}`, i]))
@@ -712,8 +734,9 @@ export class WorkspacePayrollService {
       plan,
       staff,
       participants,
-      months,
-      paidMonths
+      matchMonths,
+      paidMonths,
+      run.period
     )
     // The files proving the payroll lines reach those lines' months, as a link to any other item does.
     const asFile = new Map(files.map((f) => [f.id, f.id] as const))
@@ -957,6 +980,7 @@ export class WorkspacePayrollService {
         timesheet: x.timesheet ? spot(x.timesheet) : null,
         register: x.register ? spot(x.register) : null,
         named: x.named,
+        staff: x.staff ? { id: x.staff.id, name: x.staff.name } : null,
       })),
       links: p.creates.length + p.updates.length + p.fresh.length,
       unlinks: p.deletes.length + p.leavingLinks.length,
@@ -2071,9 +2095,11 @@ export class WorkspacePayrollService {
     plan: Plan,
     staff: StaffRow[],
     participants: ParticipantRow[],
-    months: WorkspacePayrollMonthDto[],
+    months: (WorkspacePayrollMonthDto & { names?: string[] })[],
     /** The months that have participants' payments once Save is done (kept or made from stubs). */
-    paidMonths: Set<string>
+    paidMonths: Set<string>,
+    /** The month matched: a charge of another month's run is not this month's line. */
+    period: string
   ) {
     const charges = files
       .filter((f) => f.kind === 'payroll-details')
@@ -2118,6 +2144,7 @@ export class WorkspacePayrollService {
       reportId: m.reportId,
       engagementId: m.engagementId,
       engagementName: m.engagementName,
+      names: m.names,
       lines: lines.filter((l) => l.engagementId === m.engagementId),
       enteredStaffDates: onMonths
         .filter(
@@ -2131,7 +2158,7 @@ export class WorkspacePayrollService {
         .map((e) => e.date.toISOString().slice(0, 10)),
     }))
     const { writes, skipped } = charges.length
-      ? payrollLinesOf({ charges, staff, participants, months: lineMonths })
+      ? payrollLinesOf({ charges, staff, participants, months: lineMonths, period })
       : { writes: [], skipped: [] }
     const had = onMonths.filter((e) => e.payrollKey)
     const keyOfRow = (reportId: string, key: string) => `${reportId}|${key}`
@@ -3409,6 +3436,133 @@ export class WorkspacePayrollService {
     )
     return data
   }
+
+  /** The workspace's program names (owners and auditors read them), with its engagements to link them to. */
+  async programNames(caller: Caller, workspaceId: string): Promise<ProgramNamesDto> {
+    const { programs, engagements } = await this.readProgramNames(caller, workspaceId)
+    return { programs, engagements }
+  }
+
+  /** The list as an owner sees it, and as stored (a later write is made over that value only). */
+  private async readProgramNames(caller: Caller, workspaceId: string) {
+    if (!caller.workspaceIds.includes(workspaceId)) throw new NotFoundException()
+    allow(
+      workspaceRole(caller, workspaceId, ['owner', 'auditor']),
+      "Only an owner or auditor reads the workspace's program names"
+    )
+    const [w, engagements] = await Promise.all([
+      this.prisma.workspace.findFirst({
+        where: { id: workspaceId },
+        select: { programNames: true },
+      }),
+      this.prisma.engagement.findMany({
+        where: { workspaceId },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+    ])
+    if (!w) throw new NotFoundException()
+    const ids = new Set(engagements.map((e) => e.id))
+    return { programs: programNamesIn(w.programNames, ids), engagements, stored: w.programNames }
+  }
+
+  /**
+   * A program names file merged into the list (owners): each row the same program's names, joined to the program that
+   * has any of them, else a new one. Read in memory, never stored.
+   */
+  async addProgramNames(
+    caller: Caller,
+    workspaceId: string,
+    file: { buffer: Buffer; originalname: string } | undefined
+  ): Promise<ProgramNamesDto> {
+    this.ownerOfNames(caller, workspaceId)
+    if (!file) throw new BadRequestException('Choose the program names file')
+    const rows = await programNameRows(file.buffer, file.originalname)
+    const now = await this.readProgramNames(caller, workspaceId)
+    const { programs, conflicts } = mergeProgramNames(now.programs, rows)
+    // The merged list keeps the limits an owner's own list does.
+    cleanProgramNames(programs, new Set(now.engagements.map((e) => e.id)))
+    const out = await this.writeProgramNames(
+      caller,
+      workspaceId,
+      now,
+      programs,
+      'Added program names from a file'
+    )
+    return { ...out, conflicts }
+  }
+
+  /** The list as an owner left it: names changed, programs linked to engagements or removed. */
+  async setProgramNames(
+    caller: Caller,
+    workspaceId: string,
+    given: unknown
+  ): Promise<ProgramNamesDto> {
+    this.ownerOfNames(caller, workspaceId)
+    const now = await this.readProgramNames(caller, workspaceId)
+    const programs = cleanProgramNames(given, new Set(now.engagements.map((e) => e.id)))
+    return this.writeProgramNames(caller, workspaceId, now, programs, 'Changed the program names')
+  }
+
+  private ownerOfNames(caller: Caller, workspaceId: string) {
+    if (!caller.workspaceIds.includes(workspaceId)) throw new NotFoundException()
+    allow(
+      !caller.admin && workspaceRole(caller, workspaceId, ['owner']),
+      "Only an owner changes the workspace's program names"
+    )
+  }
+
+  private async writeProgramNames(
+    caller: Caller,
+    workspaceId: string,
+    now: ProgramNamesDto & { stored: Prisma.JsonValue },
+    programs: ProgramNames[],
+    description: string
+  ): Promise<ProgramNamesDto> {
+    if (JSON.stringify(programs) === JSON.stringify(now.stored))
+      return { programs, engagements: now.engagements }
+    const data = { programNames: programs as unknown as Prisma.InputJsonValue }
+    const summary = (list: ProgramNames[]) => ({
+      programNames: list.length,
+      programLinks: list
+        .map((g) => g.engagementId)
+        .filter((e): e is string => !!e)
+        .sort()
+        .join(', '),
+    })
+    await this.log.change(
+      caller,
+      async (tx) => {
+        // Written only over the list it was worked out from: two owners' changes at once never lose one.
+        const done = await tx.workspace.updateMany({
+          where: {
+            id: workspaceId,
+            programNames: { equals: now.stored as Prisma.InputJsonValue },
+          },
+          data,
+        })
+        if (done.count !== 1)
+          throw new ConflictException(
+            'The program names changed meanwhile: open the page again and redo your change'
+          )
+      },
+      {
+        workspaceId,
+        resource: 'workspace',
+        subjectId: workspaceId,
+        action: 'update',
+        description,
+        changes: changesOf(summary(now.programs), summary(programs), PROGRAM_NAMES_FIELDS),
+      }
+    )
+    return { programs, engagements: now.engagements }
+  }
+}
+
+/** The program names are logged by their count and the engagements linked (ids), never the names. */
+const PROGRAM_NAMES_FIELDS: Fields = {
+  programNames: { label: 'Programs in the program names', show: 'text' },
+  programLinks: { label: 'Engagements linked to a program', show: 'text' },
 }
 
 /** Said when another unsaved change of the month holds a file this one removes. */

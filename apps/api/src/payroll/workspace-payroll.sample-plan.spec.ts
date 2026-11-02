@@ -1,5 +1,5 @@
-import { DEFAULT_HIGHLIGHTS, DEFAULT_PAYROLL_READING } from '@ad/types'
-import { sampleFiles } from '../../prisma/payroll-workspace-sample'
+import { DEFAULT_HIGHLIGHTS, DEFAULT_PAYROLL_READING, NOT_OURS } from '@ad/types'
+import { PROGRAM_NAMES, sampleFiles } from '../../prisma/payroll-workspace-sample'
 import { member, W } from '../core/testing/callers'
 import { dbTestsEnabled } from '../core/testing/tenant-db'
 import { MatchStatsService } from '../core/match-stats.service'
@@ -93,6 +93,8 @@ suite("the workspace payroll plan for the September sample, on the demo seed's S
   beforeAll(async () => {
     const files = []
     for (const [i, f] of (await sampleFiles()).entries()) {
+      // Program names is the workspace's list (its own upload), never a file of the run.
+      if (f.folder === 'Program names') continue
       const kind = KIND[f.folder]!
       // Payroll details is a sheet: its rows are its lines, as the worker reads it.
       const sheet = kind === 'payroll-details'
@@ -264,6 +266,15 @@ suite("the workspace payroll plan for the September sample, on the demo seed's S
         ),
       },
       payrollPayLine: { findMany: jest.fn(async () => []) },
+      // The sample's Program names file, as the workspace keeps it once an owner links each to an engagement.
+      workspace: {
+        findFirst: jest.fn(async () => ({
+          programNames: PROGRAM_NAMES.map((names, i) => ({
+            names,
+            engagementId: [ISY.id, AIT.id, NOT_OURS][i]!,
+          })),
+        })),
+      },
       staffMember: {
         findMany: jest.fn(async () => [
           tagged('s-morgan', 'Morgan Lee', [ISY, AIT]),

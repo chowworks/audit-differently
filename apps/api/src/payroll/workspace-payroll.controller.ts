@@ -11,16 +11,19 @@ import {
   Post,
   Query,
   Res,
+  Put,
+  UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common'
-import { FilesInterceptor } from '@nestjs/platform-express'
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express'
 import type { Response } from 'express'
 import type {
   PayLineLinkInput,
   PayrollMatchProgress,
   PayrollReconciliationDto,
+  ProgramNamesDto,
   StaffListDto,
   StaffSuggestionDto,
   WorkspacePayrollFilesDto,
@@ -74,6 +77,34 @@ export class WorkspacePayrollController {
       id,
       body?.bookkeepersSeeStaffPayroll
     )
+  }
+
+  /** The workspace's program names: each program's names in the books and the payroll company's files. */
+  @Get('workspaces/:id/program-names')
+  async programNames(@UserId() userId: string, @Param('id') id: string): Promise<ProgramNamesDto> {
+    return this.payroll.programNames(await this.callers.load(userId), id)
+  }
+
+  /** A program names file (the payroll zip's "Program names" folder) merged into the list; read, never stored. */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post('workspaces/:id/program-names')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
+  async addProgramNames(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File | undefined
+  ): Promise<ProgramNamesDto> {
+    return this.payroll.addProgramNames(await this.callers.load(userId), id, file)
+  }
+
+  /** The list as an owner left it. */
+  @Put('workspaces/:id/program-names')
+  async setProgramNames(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Body() body: { programs?: unknown }
+  ): Promise<ProgramNamesDto> {
+    return this.payroll.setProgramNames(await this.callers.load(userId), id, body?.programs)
   }
 
   @Get('workspaces/:id/payroll/:period/reconciliation')
