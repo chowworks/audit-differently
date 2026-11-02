@@ -1,7 +1,7 @@
 /**
  * Writes the workspace payroll sample (GitHub issue #22): fictional text-layer PDFs for one September 2026 pay run of
  * Riverbend Youth Services (prisma/payroll-workspace-sample.ts) into docs/samples/payroll-2026-09-workspace/, in the
- * five folders the workspace payroll upload reads (Payroll details included), and zips them as apps/web/public/samples/payroll-workspace-sample.zip
+ * six folders the workspace payroll upload reads (Payroll details and Program names included), and zips them as apps/web/public/samples/payroll-workspace-sample.zip
  * (the workspace payroll page's "Download a sample (zip)"). Touches no database and no storage: files on this disk only.
  * The per-engagement wizard's payroll-sample.zip is left as it is.
  *

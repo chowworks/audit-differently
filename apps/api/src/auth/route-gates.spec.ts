@@ -212,6 +212,9 @@ const GATED = [
   // The workspace payroll match and its reconciliation (GitHub issue #22): owners run it, owners and auditors read.
   'GET /api/workspaces/:id/payroll',
   'PATCH /api/workspaces/:id/payroll',
+  'GET /api/workspaces/:id/program-names',
+  'POST /api/workspaces/:id/program-names',
+  'PUT /api/workspaces/:id/program-names',
   'GET /api/workspaces/:id/payroll/:period/reconciliation',
   'POST /api/workspaces/:id/payroll/:period/match',
   'GET /api/workspaces/:id/payroll/:period/match',

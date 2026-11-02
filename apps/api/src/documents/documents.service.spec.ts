@@ -315,6 +315,20 @@ describe('DocumentsService', () => {
     ])
   })
 
+  it('takes a CSV as a payroll file only, never as a receipt or invoice', async () => {
+    const { service: s, storage } = service()
+    const csv = {
+      ...file,
+      originalname: 'jobs.csv',
+      mimetype: 'text/csv',
+      buffer: Buffer.from('a,b\n'),
+    }
+    await expect(s.upload(member('owner'), csv, upload('invoice'))).rejects.toThrow(
+      'A CSV is taken as a timesheet, payroll register or payroll details file only'
+    )
+    expect(storage.upload).not.toHaveBeenCalled()
+  })
+
   it('refuses bytes that are not what the browser claims before storing anything', async () => {
     const { service: s, storage, log } = service()
     await expect(

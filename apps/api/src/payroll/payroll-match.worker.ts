@@ -4,13 +4,14 @@ import { hostname } from 'node:os'
 import { runAsSystem } from '../core/tenant-context'
 import { PrismaService } from '../prisma/prisma.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
-import { sheetLines } from './payroll-details'
+import { csvLines, sheetLines } from './payroll-details'
 import { readStatement } from './statement-lines'
 
 /** How often the worker looks for payroll files waiting to be read, when nothing woke it sooner. */
 export const PAYROLL_TICK_MS = 5_000
 /** Payroll details come as a spreadsheet. */
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+const CSV = 'text/csv'
 /** Tries per file before it is given up as failed. */
 export const MAX_READ_ATTEMPTS = 3
 /** Files claimed per pass: read one after another, so a pass stays short and other runs get a turn. */
@@ -145,9 +146,10 @@ export class PayrollMatchWorker implements OnModuleInit, OnModuleDestroy {
       // Every object lives under its own workspace: a row that says otherwise is not read.
       if (!f.storageKey.startsWith(`${f.workspaceId}/`))
         throw new Error('key outside its workspace')
-      if (f.contentType === XLSX) {
-        // A spreadsheet (payroll details): each row one line, its cells' own words.
-        const lines = await sheetLines(Buffer.from(await this.storage.read(f.storageKey)))
+      if (f.contentType === XLSX || f.contentType === CSV) {
+        // A spreadsheet or CSV (payroll details, a job report): each row one line, its cells' own words.
+        const bytes = Buffer.from(await this.storage.read(f.storageKey))
+        const lines = f.contentType === CSV ? csvLines(bytes) : await sheetLines(bytes)
         data = {
           status: 'read',
           pages: new Set(lines.map((l) => l.page)).size,

@@ -40,6 +40,11 @@ export interface WorkspaceItem {
   dto: WorkspacePayrollItemDto
   /** An expense line's report line; null for a work-experience payment. */
   reportLine: string | null
+  /**
+   * The key of a payroll line Save wrote from payroll details (`staff:<staff id>:<run end>:pay|taxes`): whose pay, of
+   * which run. Null for any other item.
+   */
+  payrollKey: string | null
   /** A work-experience payment's participant (the row's id), the pay stub it was made from, and whether it was typed by hand first. */
   wex: { participantRowId: string; stubDocumentId: string | null; stubTookOver: boolean } | null
 }
@@ -171,6 +176,7 @@ export async function workspaceItems(
         month,
         links,
         reportLine: e.reportLine,
+        payrollKey: e.payrollKey ?? null,
         wex: null,
         dto: {
           ...base,
@@ -206,6 +212,7 @@ export async function workspaceItems(
         month,
         links,
         reportLine: null,
+        payrollKey: null,
         wex: {
           participantRowId: w.participant.id,
           stubDocumentId: w.stubDocumentId,
@@ -227,4 +234,10 @@ export async function workspaceItems(
     }
   }
   return { items, months }
+}
+
+/** Whose pay and which run a payroll line Save wrote is, from its key; nulls for a line a person entered. */
+export function lineOfKey(key: string | null): { staffId: string | null; end: string | null } {
+  const m = /^staff:(.+):(\d{4}-\d{2}-\d{2}):(?:pay|taxes)$/.exec(key ?? '')
+  return { staffId: m?.[1] ?? null, end: m?.[2] ?? null }
 }

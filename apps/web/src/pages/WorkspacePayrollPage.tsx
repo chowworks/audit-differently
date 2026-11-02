@@ -24,6 +24,7 @@ import {
   type WorkspacePayrollMonthDto,
   type WorkspacePayrollPeriodDto,
   type WorkspacePayrollRunDto,
+  type ProgramNamesDto,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { ApiError } from '@/services/api'
@@ -543,11 +544,25 @@ function WorkspaceMatch({
   const upload = async (
     mode: 'replace' | 'add',
     list: PayrollUpload,
-    where: 'files' | 'match'
+    where: 'files' | 'match',
+    /** The zip's "Program names" files: merged into the workspace's program names first, so the match reads by them. */
+    names: File[] = []
   ): Promise<boolean> => {
     clearErrors()
     const fail = where === 'files' ? setFileError : setRunError
     try {
+      for (const file of names) {
+        setBusy(`Reading the program names in ${file.name}…`)
+        const form = new FormData()
+        form.append('file', file)
+        try {
+          await api.upload<ProgramNamesDto>(`/workspaces/${workspaceId}/program-names`, form)
+        } catch (e) {
+          // Nothing of the payroll files was sent yet: nothing to start again.
+          fail(`Program names/${file.name}: ${(e as Error).message}`)
+          return false
+        }
+      }
       let expected: number | undefined
       if (mode === 'replace') {
         setBusy('Counting the files…')
@@ -939,7 +954,7 @@ function WorkspaceMatch({
           busy,
           error: fileError,
           changeOpen: !!run,
-          onReplace: (zip) => upload('replace', zip, 'files'),
+          onReplace: (zip, names) => upload('replace', zip, 'files', names),
           onAdd: (added) => upload('add', added, 'files'),
           onRemove: removeFile,
         }}
@@ -957,7 +972,7 @@ function WorkspaceMatch({
             busy,
             error: fileError,
             changeOpen: !!run,
-            onReplace: (zip) => upload('replace', zip, 'files'),
+            onReplace: (zip, names) => upload('replace', zip, 'files', names),
             onAdd: (added) => upload('add', added, 'files'),
             onRemove: removeFile,
           }}
@@ -984,8 +999,9 @@ function WorkspaceMatch({
               existing={0}
               busy={busy}
               maxFiles={MAX_WORKSPACE_PAYROLL_FILES}
+              takesNames
               kind="navy"
-              onReady={(zip) => void upload('replace', zip, 'match')}
+              onReady={(zip, _replace, names) => void upload('replace', zip, 'match', names)}
             />
           </div>
         )}
@@ -1013,8 +1029,11 @@ function WorkspaceMatch({
                 existing={files!.files.length}
                 busy={busy}
                 maxFiles={MAX_WORKSPACE_PAYROLL_FILES}
+                takesNames
                 kind="navy"
-                onReady={(zip, replace) => void upload(replace ? 'replace' : 'add', zip, 'match')}
+                onReady={(zip, replace, names) =>
+                  void upload(replace ? 'replace' : 'add', zip, 'match', names)
+                }
                 onSkip={() => void matchAgain()}
               />
             ) : (
@@ -1179,9 +1198,10 @@ function WorkspaceMatch({
                   existing={0}
                   busy={busy}
                   maxFiles={MAX_WORKSPACE_PAYROLL_FILES}
+                  takesNames
                   kind="navy"
                   action="Send the rest of the zip"
-                  onReady={(zip) => void upload('replace', zip, 'match')}
+                  onReady={(zip, _replace, names) => void upload('replace', zip, 'match', names)}
                 />
               </div>
             )}

@@ -281,7 +281,8 @@ export interface ParticipantRow {
 /** The pay stubs by person, as the staff are: one row each, the stubs of every payroll run that paid them. */
 export function participantRows(run: Run): ParticipantRow[] {
   const rows = new Map<string, StubPayDto[]>()
-  for (const x of run.plan.stubs) {
+  // A staff member's own pay stub is proof on their payroll lines, not a participant's payment.
+  for (const x of run.plan.stubs.filter((y) => !y.staff)) {
     const key = x.participant
       ? `p-${x.participant.id}`
       : x.named
@@ -594,7 +595,7 @@ export function nobodyBlock(run: Run, chosen: Links): WhyBlock | null {
       }.`,
     })),
     ...run.plan.stubs
-      .filter((x) => !x.participant)
+      .filter((x) => !x.participant && !x.staff)
       .map((x): WhyRow => ({
         label: SLOT_LABEL.stub,
         tone: 'missing',
