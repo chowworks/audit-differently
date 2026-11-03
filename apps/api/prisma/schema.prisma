@@ -745,6 +745,9 @@ model PayrollPayLine {
   notFundedAt      DateTime?
   // A pay stub's flags from the last match (StubFlag in packages/types, migration 20261018000200); flagged only.
   flags            String[]  @default([])
+  /// A bank line that is a pay run's debit: how many of the month's registers it pays (two registers of one run share
+  /// it). Set by each Save (migration 20261102000100); null on any other line.
+  registers        Int?
   createdAt        DateTime  @default(now())
   document         Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
 

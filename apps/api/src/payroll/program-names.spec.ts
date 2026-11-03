@@ -1,4 +1,9 @@
-import { mergeProgramNames, namesOfEngagement, programOf } from '@ad/types'
+import {
+  mergeProgramNames,
+  namesOfEngagement,
+  programOf,
+  engagementsWithoutProgram,
+} from '@ad/types'
 import { cleanProgramNames, programNameRows } from './program-names'
 
 /** Fictional programs throughout. */
@@ -137,5 +142,20 @@ describe('program names (owner, 2026-11-01)', () => {
     expect(cleanProgramNames([{ names: ['A'], engagementId: 'none' }], ids)).toEqual([
       { names: ['A'], engagementId: 'none' },
     ])
+  })
+
+  it('names the engagements no program is: none linked, none by its name; none at all with no list', () => {
+    const list = [
+      { names: ['Board (In-School Youth 2026)'], engagementId: 'e-isy' },
+      { names: ['Adult Tech Training'], engagementId: null },
+      { names: ['Summer Camp'], engagementId: 'none' },
+    ]
+    const engagements = [
+      { id: 'e-isy', name: 'In-School Youth 2026' },
+      { id: 'e-ait', name: 'Adult Tech Training' },
+      { id: 'e-new', name: 'Robotics League 2027' },
+    ]
+    expect(engagementsWithoutProgram(list, engagements).map((e) => e.id)).toEqual(['e-new'])
+    expect(engagementsWithoutProgram([], engagements)).toEqual([])
   })
 })

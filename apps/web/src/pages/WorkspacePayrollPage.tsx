@@ -25,6 +25,7 @@ import {
   type WorkspacePayrollPeriodDto,
   type WorkspacePayrollRunDto,
   type ProgramNamesDto,
+  engagementsWithoutProgram,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { ApiError } from '@/services/api'
@@ -155,6 +156,8 @@ export function WorkspacePayrollPage() {
   )
   // The staff list's engagements give each engagement card its colour, as on the staffing page.
   const staffList = useLoad<StaffListDto>(reader ? `/workspaces/${id}/staff` : null)
+  // The engagements with no program name: an action, since a timesheet's project then proves nothing of theirs.
+  const programNames = useLoad<ProgramNamesDto>(reader ? `/workspaces/${id}/program-names` : null)
   /** Changes on each save and each reconciliation change, so the engagement cards are read again. */
   const [cardsVersion, setCardsVersion] = useState(0)
   /** The match on its own: opened from Actions, or a match started from the files card. */
@@ -232,6 +235,19 @@ export function WorkspacePayrollPage() {
           {!focus && (
             <div style={{ order: 1 }}>
               <PayrollActions
+                programs={
+                  programNames.data
+                    ? {
+                        engagements: engagementsWithoutProgram(
+                          programNames.data.programs,
+                          programNames.data.engagements.filter((e) =>
+                            (d.cards ?? []).some((c) => c.engagementId === e.id)
+                          )
+                        ).map((e) => e.name),
+                        href: `/workspaces/${id}#program-names`,
+                      }
+                    : null
+                }
                 period={period}
                 matched={saved}
                 cards={d.cards}

@@ -1989,6 +1989,11 @@ export interface PayLineDto {
   flags: PayLineFlag[]
   /** The person on the staff list this register row or bank line is of, when one is found. */
   staff: { id: string; name: string } | null
+  /**
+   * Whose pay it is, as shown in the Paid column: the staff member, the name a pay stub prints, a register row's
+   * person. Null when no one is read (a bank line, a scanned stub): the file name shows instead.
+   */
+  named?: string | null
 }
 
 /** A workspace payroll match: the run's files, every open slot's match across the engagements, and the person-pays. */
@@ -2098,6 +2103,8 @@ export interface PayrollReconciliationDto {
   pays: PayLineDto[]
   /** The bank statement's other lines (balances, vendor and card payments): no one's pay, counted and not listed. */
   otherBankLines: number
+  /** The registers whose run's bank debit is found (a debit two registers of one run share counts for both). */
+  registersDebited?: number
   /** Engagement payroll items with a proof still missing, and which. */
   unproved: { item: WorkspacePayrollItemDto; missing: PayrollSlot[] }[]
   /**
@@ -2106,6 +2113,11 @@ export interface PayrollReconciliationDto {
    * payments). Null on a side that has none.
    */
   books: BooksRunDto[]
+  /**
+   * The engagement months with payroll in the files but no expenses imported yet: nothing to check the files against,
+   * so none of their runs is in `books`.
+   */
+  booksNotImported?: { engagementId: string; engagementName: string; reportId: string }[]
   /** Every engagement payroll item of the month and the proofs it needs (`item.proved` says which are on file). */
   items: { item: WorkspacePayrollItemDto; needed: PayrollSlot[] }[]
   counts: Record<PayLineState, number> & { unproved: number; flagged: number }
@@ -2629,6 +2641,15 @@ export interface ProgramNamesDto {
   /** A file's rows left out: each would join programs linked to different engagements. */
   conflicts?: string[][]
 }
+
+/**
+ * The engagements no program of the list is: none linked to it, none by its name. A timesheet's project then proves
+ * nothing of it, so the owner links its program. None while the list is empty (a workspace that keeps no program names).
+ */
+export const engagementsWithoutProgram = <E extends { id: string; name: string }>(
+  list: ProgramNames[],
+  engagements: E[]
+): E[] => (list.length ? engagements.filter((e) => !programOf(list, e)) : [])
 
 /** Every name an engagement goes by in payroll files: its own, and its program's. */
 export const namesOfEngagement = (

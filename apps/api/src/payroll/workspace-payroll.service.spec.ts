@@ -416,6 +416,26 @@ describe('WorkspacePayrollService', () => {
         ['2026-09-11', 'staff-taxes', null, 91.8],
         ['2026-09-25', 'participant-pay', 300, 280],
       ])
+      expect(out.booksNotImported).toEqual([])
+    })
+
+    it('compares nothing on a month with no expenses imported yet, and says so instead', async () => {
+      const s = await setup()
+      const d = (iso: string) => new Date(`${iso}T00:00:00Z`)
+      // Only the match's own lines: the month's transactions are not imported yet.
+      s.prisma.expense.findMany.mockResolvedValueOnce([
+        {
+          monthlyReportId: 'r-a',
+          date: d('2026-09-11'),
+          allocatedAmount: 1200,
+          payrollKind: null,
+          payrollKey: 'staff:s-1:2026-09-06:pay',
+          importFingerprint: null,
+        },
+      ])
+      const out = await s.service.reconciliation(owner, W, '2026-09')
+      expect(out.books).toEqual([])
+      expect(out.booksNotImported).toEqual([expect.objectContaining({ reportId: 'r-a' })])
     })
 
     it('lets an auditor change nothing in the reconciliation', async () => {
