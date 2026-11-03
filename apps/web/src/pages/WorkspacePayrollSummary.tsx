@@ -107,10 +107,10 @@ export function PayrollActions({
   period: string
   matched: boolean
   /**
-   * The workspace's program names not set (`unsetPrograms`), with where to set them: a timesheet's project of one
-   * proves no engagement, so the owner links each or marks it not one of ours.
+   * The month's engagements no program name is (`engagementsWithoutProgram`), with where to link one: a timesheet's
+   * project proves nothing of theirs until then.
    */
-  programs?: { names: string[]; href: string } | null
+  programs?: { engagements: string[]; href: string } | null
   cards: EngagementPayrollCardDto[] | null
   recon: PayrollReconciliationDto | null
   colors: Map<string, string>
@@ -155,17 +155,15 @@ export function PayrollActions({
       ) : null,
     })
   }
-  if (programs?.names.length) {
-    const n = programs.names.length
+  for (const name of programs?.engagements ?? [])
     rows.push({
-      key: 'programs-unset',
+      key: `no-program-${name}`,
       sign: '⚠️',
-      who: 'Program names',
-      text: `${n} ${n === 1 ? 'program is' : 'programs are'} not set: ${programs.names.slice(0, 3).join(', ')}${n > 3 ? ', …' : ''}`,
-      sub: "A timesheet's project of a program not set proves no engagement. Link each to its engagement, or mark it not one of ours.",
-      go: <Link to={programs.href}>Set program names →</Link>,
+      who: name,
+      text: 'No program name is linked to it',
+      sub: "Its timesheets' projects prove none of its pay until one is. Link its program on the Program names card.",
+      go: <Link to={programs!.href}>Link its program →</Link>,
     })
-  }
   for (const c of all) {
     const color = colorOf(colors, c.engagementId)
     for (const f of fixesOf(c, null))

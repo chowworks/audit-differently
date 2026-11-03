@@ -2643,14 +2643,13 @@ export interface ProgramNamesDto {
 }
 
 /**
- * The programs no one has set: not linked to an engagement, not one by its name, and not marked not one of ours. A
- * timesheet's project of such a program proves no engagement, so the owner sets each.
+ * The engagements no program of the list is: none linked to it, none by its name. A timesheet's project then proves
+ * nothing of it, so the owner links its program. None while the list is empty (a workspace that keeps no program names).
  */
-export const unsetPrograms = (
+export const engagementsWithoutProgram = <E extends { id: string; name: string }>(
   list: ProgramNames[],
-  engagements: { id: string; name: string }[]
-): ProgramNames[] =>
-  list.filter((g) => !g.engagementId && !engagements.some((e) => programOf(list, e) === g))
+  engagements: E[]
+): E[] => (list.length ? engagements.filter((e) => !programOf(list, e)) : [])
 
 /** Every name an engagement goes by in payroll files: its own, and its program's. */
 export const namesOfEngagement = (
