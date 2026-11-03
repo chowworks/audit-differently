@@ -1096,6 +1096,16 @@ export class ReportsService {
     return { r, entry, also }
   }
 
+  /**
+   * Runs the month's checks again without changing it: checks are stored and run on each change, so a change to the
+   * rules shows on a month only once it changes or is rechecked. An owner or bookkeeper, on a draft.
+   */
+  async recheck(caller: Caller, reportId: string): Promise<ReportDetail> {
+    const r = await this.editable(caller, reportId)
+    await this.checks.refresh(r.id)
+    return this.fresh(caller, r.id)
+  }
+
   /** Submits the month to the funder; its month-end closing must be approved first. */
   async submit(caller: Caller, reportId: string): Promise<ReportDetail> {
     const r = await this.load(caller, reportId)

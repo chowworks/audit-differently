@@ -45,6 +45,8 @@ export interface MonthActions {
   deletePayment: (w: WexPaymentDto) => void
   /** A staff payroll line's evidence of payment: find its line on the bank statement, for this line alone. */
   findBankLine: (e: ExpenseDto) => void
+  /** Runs the month's checks again as the rules now stand, changing nothing. */
+  recheck: () => void
   /** A month with nothing in it: an owner deletes it, after a yes. */
   deleteMonth: () => void
 }

@@ -696,6 +696,8 @@ function FilterNote({
   tokens,
   text,
   onClear,
+  onRecheck,
+  busy,
 }: {
   shown: number
   total: number
@@ -704,6 +706,9 @@ function FilterNote({
   tokens: FilterToken[]
   text: string
   onClear: () => void
+  /** Run the month's checks again: offered to whoever edits the month. */
+  onRecheck?: () => void
+  busy?: boolean
 }) {
   if (!quick && !tokens.length && !text) return null
   const parts = [
@@ -717,9 +722,22 @@ function FilterNote({
         {quick ? ` ${QUICK_WORDS[quick]}` : ''}
         {parts.length ? ` · ${parts.join(' · ')}` : ''}
       </span>
-      <Button size="sm" kind="navy" onClick={onClear}>
-        Clear filter
-      </Button>
+      <span className="flex flex-wrap gap-2">
+        {onRecheck && (
+          <Button
+            size="sm"
+            kind="ghost"
+            onClick={onRecheck}
+            disabled={busy}
+            title="Run this month's checks again, as the rules now stand"
+          >
+            Recheck
+          </Button>
+        )}
+        <Button size="sm" kind="navy" onClick={onClear}>
+          Clear filter
+        </Button>
+      </span>
     </div>
   )
 }
@@ -963,6 +981,8 @@ function ExpensesSection({
         tokens={tokens}
         text={search}
         onClear={clear}
+        onRecheck={r.can.edit ? act.recheck : undefined}
+        busy={busy}
       />
       {all.length === 0 && <Empty>No expenses yet.</Empty>}
       {all.length > 0 && rows.length === 0 && <Empty>No expense matches this filter.</Empty>}
@@ -1294,6 +1314,7 @@ function PayrollSection({
         tokens={tokens}
         text={search}
         onClear={clear}
+        onRecheck={r.can.edit ? act.recheck : undefined}
       />
       {all.length === 0 && <Empty>No payroll this month.</Empty>}
       {all.length > 0 && rows.length === 0 && <Empty>No payroll row matches this filter.</Empty>}

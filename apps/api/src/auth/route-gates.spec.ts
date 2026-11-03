@@ -173,6 +173,7 @@ const GATED = [
   'POST /api/reports/:id/request-edits',
   'DELETE /api/reports/:id',
   'POST /api/reports/:id/reopen',
+  'POST /api/reports/:id/recheck',
   'POST /api/reports/:id/submit',
   'POST /api/reports/:id/receipts',
   'PATCH /api/receipts/:id',
