@@ -411,6 +411,8 @@ export function ReportPage() {
           editPayment: (w) => setEditingWex(w),
           deletePayment,
           findBankLine: (e) => setFindingLine(e),
+          recheck: () =>
+            void run(() => api.post<ReportDetail>(`/reports/${r.id}/recheck`), 'Checks run again.'),
           deleteMonth: () => void deleteMonth(),
         }}
       />

@@ -239,6 +239,7 @@ function service(status = 'draft', over: Record<string, unknown> = {}) {
   ]
   return {
     service: new ReportsService(prisma as never, checks as never, log as never),
+    checks,
     prisma,
     log,
     writes,
@@ -315,6 +316,7 @@ describe('ReportsService', () => {
     await expect(s.approveClosing(who, 'r-1', closing)).rejects.toThrow(NotFoundException)
     await expect(s.sendBack(who, 'r-1', 'Wrong rent')).rejects.toThrow(NotFoundException)
     await expect(s.reopen(who, 'r-1', 'Typo')).rejects.toThrow(NotFoundException)
+    await expect(s.recheck(who, 'r-1')).rejects.toThrow(NotFoundException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
   })
@@ -366,8 +368,16 @@ describe('ReportsService', () => {
     await expect(s.attachToWex(who, 'wx-1', 'payment', 'd-1')).rejects.toThrow(ForbiddenException)
     await expect(s.submit(who, 'r-1')).rejects.toThrow(ForbiddenException)
     await expect(s.approveClosing(who, 'r-1', closing)).rejects.toThrow(ForbiddenException)
+    await expect(s.recheck(who, 'r-1')).rejects.toThrow(ForbiddenException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
+  })
+
+  it("lets an owner or bookkeeper run a draft's checks again, changing nothing in it", async () => {
+    const { service: s, checks, writes } = service()
+    await s.recheck(member('bookkeeper'), 'r-1')
+    expect(checks.refresh).toHaveBeenCalledWith('r-1')
+    for (const w of writes) expect(w).not.toHaveBeenCalled()
   })
 
   it('lets an auditor neither approve a month-end closing nor send one back', async () => {
