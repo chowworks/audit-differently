@@ -259,6 +259,35 @@ describe('runRules', () => {
     expect(found({ words: ['09/24', '$2,100.00'] })).not.toContain('proof-mismatch')
   })
 
+  it("does not look for a match line's share on the pay stub, which shows the person's whole pay", () => {
+    const found = (shareOfRun: boolean) =>
+      codes(
+        month({
+          expenses: [
+            expense({
+              reportLine: 'staff-salaries',
+              totalCost: 193.5,
+              allocatedAmount: 193.5,
+              documents: ['timesheet', 'register', 'payment'],
+              fromPayroll: true,
+              shareOfRun,
+              proofs: [
+                {
+                  purpose: 'payment',
+                  kind: 'paystub',
+                  words: ['Gross Pay $1,250.00 Net Pay $980.12'],
+                },
+              ],
+            }),
+          ],
+          highlights: { paystub: ['amount'] },
+        })
+      )
+    expect(found(true)).not.toContain('proof-mismatch')
+    // A line entered by hand with the stub attached: its amount is the pay, so the stub must show it.
+    expect(found(false)).toContain('proof-mismatch')
+  })
+
   it('computes the due date and notes a late submission', () => {
     expect(dueDate('2026-07', 12).toISOString()).toBe('2026-08-12T23:59:59.000Z')
     expect(codes(month({ submittedAt: '2026-08-13T09:00:00Z' }))).toEqual(['late-submission'])

@@ -33,6 +33,11 @@ export interface RuleExpense {
   /** Written by the payroll match from payroll details: a payroll line whatever its budget line. */
   fromPayroll?: boolean
   /**
+   * Written by the payroll match: one program's share of a person's pay run, or the employer's taxes on it. Their pay
+   * stub shows the whole pay, never the share, so its amount is not asked for there.
+   */
+  shareOfRun?: boolean
+  /**
    * A payroll line entered on the month whose kind of payroll the match counts there too (report-lines.ts): the same
    * pay counted twice, as its kind's words say ("participant pay").
    */
@@ -114,10 +119,17 @@ const kindWords = (kind: string) => DOCUMENT_KIND_LABELS[kind as DocumentKind] ?
  * highlights on that kind of proof, so a field nobody asked for is never reported missing. A register for a
  * participant is a company summary that rarely names their pay: its amount is not asked for. A bank line passes when
  * it shows the item's amount, or when it was matched as the one debit of the pay run that paid the item (owner's
- * decision, 2026-10-19): that line shows the run's total, never the item's.
+ * decision, 2026-10-19): that line shows the run's total, never the item's. A pay stub on a share of a run shows the
+ * person's whole pay, never the share: its amount is not asked for either.
  */
 function mismatches(
-  item: { amount: number; start?: string; end?: string; participant: boolean },
+  item: {
+    amount: number
+    start?: string
+    end?: string
+    participant: boolean
+    shareOfRun?: boolean
+  },
   proofs: RuleProof[],
   highlights: Partial<Record<string, HighlightField[]>>
 ): string[] {
@@ -131,7 +143,8 @@ function mismatches(
       fields.includes('amount') &&
       (p.purpose === 'payment' || (p.purpose === 'timesheet' && item.participant))
     const runDebit = p.kind === 'bank-statement' && p.payRun === true
-    if (asksAmount && !amount.test(words) && !runDebit)
+    const wholePay = p.kind === 'paystub' && item.shareOfRun === true
+    if (asksAmount && !amount.test(words) && !runDebit && !wholePay)
       out.push(`${money(item.amount)} was not found on its ${kindWords(p.kind)}`)
     if (item.participant && item.start && fields.includes('payPeriod')) {
       const dates = new Set(dateSpans(words).map((d) => d.iso))
@@ -216,7 +229,7 @@ export function runRules(month: RuleMonth): Finding[] {
 
     if ((PAYROLL_REPORT_LINES.has(e.reportLine) || e.fromPayroll) && e.proofs)
       for (const what of mismatches(
-        { amount: e.totalCost, participant: false },
+        { amount: e.totalCost, participant: false, shareOfRun: e.shareOfRun },
         e.proofs,
         month.highlights ?? {}
       ))
