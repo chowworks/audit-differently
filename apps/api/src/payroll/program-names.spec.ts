@@ -1,4 +1,4 @@
-import { mergeProgramNames, namesOfEngagement, programOf } from '@ad/types'
+import { mergeProgramNames, namesOfEngagement, programOf, unsetPrograms } from '@ad/types'
 import { cleanProgramNames, programNameRows } from './program-names'
 
 /** Fictional programs throughout. */
@@ -136,6 +136,22 @@ describe('program names (owner, 2026-11-01)', () => {
     ).toThrow(/linked to one program only/)
     expect(cleanProgramNames([{ names: ['A'], engagementId: 'none' }], ids)).toEqual([
       { names: ['A'], engagementId: 'none' },
+    ])
+  })
+
+  it('counts a program as not set until it is linked, one by its name, or marked not one of ours', () => {
+    const list = [
+      { names: ['Board (In-School Youth 2026)'], engagementId: 'e-isy' },
+      { names: ['Adult Tech Training'], engagementId: null },
+      { names: ['Summer Camp'], engagementId: 'none' },
+      { names: ['Youth - Board Pathway'], engagementId: null },
+    ]
+    const engagements = [
+      { id: 'e-isy', name: 'In-School Youth 2026' },
+      { id: 'e-ait', name: 'Adult Tech Training' },
+    ]
+    expect(unsetPrograms(list, engagements).map((g) => g.names[0])).toEqual([
+      'Youth - Board Pathway',
     ])
   })
 })

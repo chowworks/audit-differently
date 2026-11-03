@@ -102,9 +102,15 @@ export function PayrollActions({
   onMatch,
   onShow,
   onBudget,
+  programs,
 }: {
   period: string
   matched: boolean
+  /**
+   * The workspace's program names not set (`unsetPrograms`), with where to set them: a timesheet's project of one
+   * proves no engagement, so the owner links each or marks it not one of ours.
+   */
+  programs?: { names: string[]; href: string } | null
   cards: EngagementPayrollCardDto[] | null
   recon: PayrollReconciliationDto | null
   colors: Map<string, string>
@@ -147,6 +153,17 @@ export function PayrollActions({
           Match payroll &amp; timecards
         </Button>
       ) : null,
+    })
+  }
+  if (programs?.names.length) {
+    const n = programs.names.length
+    rows.push({
+      key: 'programs-unset',
+      sign: '⚠️',
+      who: 'Program names',
+      text: `${n} ${n === 1 ? 'program is' : 'programs are'} not set: ${programs.names.slice(0, 3).join(', ')}${n > 3 ? ', …' : ''}`,
+      sub: "A timesheet's project of a program not set proves no engagement. Link each to its engagement, or mark it not one of ours.",
+      go: <Link to={programs.href}>Set program names →</Link>,
     })
   }
   for (const c of all) {
@@ -569,9 +586,14 @@ export function FileStats({
   if (!files || !data) return null
   const n = (k: string) => files.files.filter((f) => f.kind === k).length
   const runs = n('payroll-register')
-  const debits = data.pays.filter(
-    (p) => p.kind === 'bank-statement' && p.state === 'matched'
-  ).length
+  // A run's debit pays each of its registers: two registers paid together share one debit.
+  const debits = Math.min(
+    runs,
+    Math.max(
+      data.registersDebited ?? 0,
+      data.pays.filter((p) => p.kind === 'bank-statement' && p.state === 'matched').length
+    )
+  )
   return (
     <p className="wpd-filestats">
       <span className="wpd-pill wpd-pill-ok">
@@ -677,15 +699,20 @@ export function ResolveGrid({
       rows.push({
         key: p.id,
         kind: p.state as ResolveKind,
-        text: `${p.mark?.text ?? ''} ${p.fileName} ${p.staff?.name ?? ''} ${p.item?.engagementName ?? ''}`,
+        text: `${p.named ?? ''} ${p.mark?.text ?? ''} ${p.fileName} ${p.staff?.name ?? ''} ${p.item?.engagementName ?? ''}`,
         missing: [],
         paid: (
           <>
-            <span className="ad-mono text-sm">{p.mark?.text ?? 'The whole file (scanned)'}</span>
-            <span className="ad-table-sub">
-              {p.staff ? `${p.staff.name} · ` : ''}
-              {p.notFunded ? `“${p.notFunded.reason}” · ${p.notFunded.by}` : ''}
+            {/* Whose pay it is first; the line the file prints under it. */}
+            <span className="font-semibold">{p.named ?? p.staff?.name ?? p.fileName}</span>
+            <span className="ad-table-sub ad-mono">
+              {p.mark?.text ?? 'The whole file (scanned)'}
             </span>
+            {p.notFunded && (
+              <span className="ad-table-sub">
+                “{p.notFunded.reason}” · {p.notFunded.by}
+              </span>
+            )}
           </>
         ),
         engagement: p.item ? (
@@ -958,6 +985,8 @@ export function ResolveGrid({
           agree={agree.length}
           hidden={booksHidden}
           colors={colors}
+          period={data.period}
+          notImported={data.booksNotImported ?? []}
         />
       </section>
     </div>
@@ -975,6 +1004,8 @@ function BooksAgainstFiles({
   agree,
   hidden,
   colors,
+  period,
+  notImported,
 }: {
   /** The lines the tiles and the search leave. */
   rows: BooksRunDto[]
@@ -983,13 +1014,23 @@ function BooksAgainstFiles({
   /** Lines that agree, hidden until the Proof complete tile or a search asks for them. */
   hidden: number
   colors: Map<string, string>
+  period: string
+  /** Engagement months with no expenses imported yet: nothing to compare, one plain line instead. */
+  notImported: { engagementId: string; engagementName: string; reportId: string }[]
 }) {
-  if (!rows.length && !hidden) return null
+  if (!rows.length && !hidden && !notImported.length) return null
   return (
     <section className="grid gap-2" aria-label="Expenses against the payroll files">
       <h3 className="wpd-stats-head">
-        Expenses vs payroll files · {agree} of {total} agree
+        Expenses vs payroll files{total > 0 ? ` · ${agree} of ${total} agree` : ''}
       </h3>
+      {notImported.length > 0 && (
+        <p className="text-sm text-soft">
+          Expenses for {periodLabel(period)} not imported yet
+          {total > 0 ? ` for ${notImported.map((m) => m.engagementName).join(', ')}` : ''} — import
+          them to check them against payroll.
+        </p>
+      )}
       {agree < total && (
         <p className="text-sm">
           <b>A difference means the expenses are off, not the report:</b> the budget counts what the

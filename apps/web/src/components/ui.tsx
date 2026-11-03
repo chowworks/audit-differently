@@ -156,12 +156,15 @@ export function MoneyInput({
 }
 
 export function Card({
+  id,
   eyebrow,
   title,
   aside,
   children,
   className = '',
 }: {
+  /** An anchor a link can open the page at (`#id`). */
+  id?: string
   /** A small line over the title, e.g. "Don't miss a date". */
   eyebrow?: string
   title?: React.ReactNode
@@ -170,7 +173,7 @@ export function Card({
   className?: string
 }) {
   return (
-    <section className={`ad-card ${className}`}>
+    <section id={id} className={`ad-card ${className}`}>
       {(title || aside) && (
         <header className="ad-card-head">
           <div>

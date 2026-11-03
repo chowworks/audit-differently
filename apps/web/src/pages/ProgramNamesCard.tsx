@@ -1,5 +1,12 @@
-import { useState } from 'react'
-import { NOT_OURS, programOf, type ProgramNames, type ProgramNamesDto } from '@ad/types'
+import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
+import {
+  NOT_OURS,
+  programOf,
+  unsetPrograms,
+  type ProgramNames,
+  type ProgramNamesDto,
+} from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { Button, Card, ErrorNote } from '@/components/ui'
 
@@ -50,11 +57,24 @@ export function ProgramNamesCard({
   }
   const programs = data?.programs ?? []
   const engagements = data?.engagements ?? []
-  // A program an owner linked; else the engagement it is by its name ("auto"); else, or marked so, not one of ours.
+  // A program an owner linked; else the engagement it is by its name ("auto"); marked not one of ours; else not set.
   const byName = (g: ProgramNames) =>
     g.engagementId ? null : (engagements.find((e) => programOf(programs, e) === g) ?? null)
+  const unset = new Set(unsetPrograms(programs, engagements))
   const choice = (g: ProgramNames) =>
-    g.engagementId && g.engagementId !== NOT_OURS ? g.engagementId : byName(g) ? 'auto' : 'none'
+    g.engagementId === NOT_OURS
+      ? 'none'
+      : g.engagementId
+        ? g.engagementId
+        : byName(g)
+          ? 'auto'
+          : 'unset'
+  // Opened from the payroll page's action (#program-names): brought into view once the list is read.
+  const { hash } = useLocation()
+  useEffect(() => {
+    if (data && hash === '#program-names')
+      document.getElementById('program-names')?.scrollIntoView({ block: 'start' })
+  }, [data, hash])
   return (
     <Card
       title="Program names"
@@ -126,6 +146,11 @@ export function ProgramNamesCard({
                           )
                         }
                       >
+                        {unset.has(g) && (
+                          <option value="unset" disabled>
+                            Not set: choose one
+                          </option>
+                        )}
                         {byName(g) && <option value="auto">{byName(g)!.name} (by its name)</option>}
                         <option value="none">Not one of ours</option>
                         {engagements.map((e) => (
@@ -137,7 +162,7 @@ export function ProgramNamesCard({
                     ) : (
                       (engagements.find((e) => e.id === g.engagementId)?.name ??
                       byName(g)?.name ??
-                      '—')
+                      (g.engagementId === NOT_OURS ? 'Not one of ours' : 'Not set'))
                     )}
                   </td>
                   {canManage && (
