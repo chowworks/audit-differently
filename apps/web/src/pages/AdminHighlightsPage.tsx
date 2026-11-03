@@ -22,6 +22,8 @@ const FIELDS_FOR: Record<string, HighlightField[]> = {
   'payroll-register': ['payPeriod', 'payDate', 'amount', 'name'],
   paystub: ['name', 'payPeriod', 'payDate', 'amount'],
   'bank-statement': ['date', 'amount'],
+  // A spreadsheet: the person's rows of the run filled, or only the cells chosen (`sheetMarks`).
+  'payroll-details': ['row', 'name', 'payDate', 'amount'],
 }
 
 /** Fictional sample lines for the preview (the sample zip's Jordan Sample), each part tagged with what it shows. */
@@ -45,6 +47,18 @@ const SAMPLE: Record<string, { label?: string; parts: [string, HighlightField | 
     },
     { label: 'Pay date', parts: [['09/25/2026', 'payDate']] },
     { label: 'Gross pay', parts: [['$280.00', 'amount']] },
+  ],
+  'payroll-details': [
+    {
+      parts: [
+        ['2026-09-25', 'payDate'],
+        [' | Payroll Check | ', null],
+        ['Jordan Sample', 'name'],
+        [' | Gross Pay | ', null],
+        ['280.00', 'amount'],
+      ],
+    },
+    { parts: [['2026-09-25 | Payroll Check | Casey Demo | Gross Pay | 280.00', null]] },
   ],
   timesheet: [
     {
@@ -90,8 +104,8 @@ function Preview({ kind, fields }: { kind: string; fields: HighlightField[] }) {
   const row = fields.includes('row')
   return (
     <div className="ad-hl-doc" aria-label="Preview">
-      {SAMPLE[kind]!.map((l, i) => {
-        const isRow = kind === 'timesheet' && i === 0 && row
+      {(SAMPLE[kind] ?? []).map((l, i) => {
+        const isRow = (kind === 'timesheet' || kind === 'payroll-details') && i === 0 && row
         return (
           <div key={i} className={`ad-hl-line ${isRow ? 'ad-hl-on' : ''}`}>
             {l.label && <span className="ad-hl-label">{l.label}</span>}
@@ -170,7 +184,7 @@ export function HighlightsSection({ onSaved }: { onSaved: () => void }) {
                 </span>
               </div>
               <div className="ad-hl-chips">
-                {FIELDS_FOR[s.kind]!.map((f) => {
+                {(FIELDS_FOR[s.kind] ?? s.fields).map((f) => {
                   const on = s.fields.includes(f)
                   const last = on && s.fields.length === 1
                   return (
