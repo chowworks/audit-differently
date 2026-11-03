@@ -1,4 +1,5 @@
 import {
+  computeBudgetLines,
   countedTwice,
   countsOnBudget,
   holdsPayroll,
@@ -103,5 +104,19 @@ describe("the books' payroll transactions on the budget", () => {
     expect(countedTwice({ ...typed, account: '60901 Rent Expense', memo: 'Rent' }, cover)).toBe(
       false
     )
+  })
+})
+
+describe('a budget line spent to the cent', () => {
+  it('has nothing left, not a hair over its budget', () => {
+    // Fictional: two runs' pay that add up, in floating point, to a hair more than the approved amount.
+    const [l] = computeBudgetLines(
+      [{ id: 'b-1', name: 'Staff Salaries', reportLine: 'personnel', amount: '0.3' }],
+      [{ budgetLineId: 'b-1', allocatedAmount: '0.1' }],
+      [{ budgetLineId: 'b-1', allocatedAmount: '0.2' }]
+    )
+    expect(l!.remaining).toBe(0)
+    expect(Object.is(l!.remaining, -0)).toBe(false)
+    expect(l!.cumulative).toBe(0.3)
   })
 })
