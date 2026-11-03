@@ -2437,6 +2437,17 @@ export interface WorkspacePayrollPlanDto {
       amount: number
       kind: PayrollBudgetKind
     }[]
+    /**
+     * Payroll details charges an engagement's month that Save cannot put on its budget: no budget line is ticked for
+     * that kind. Each is left off until a line takes it.
+     */
+    unbudgeted: {
+      reportId: string
+      engagementId: string
+      engagementName: string
+      kind: PayrollBudgetKind
+      amount: number
+    }[]
   }
   /** The owner's decisions Save drops, because their file changed or leaves the set. */
   dropped: DroppedDecisionDto[]
@@ -2489,6 +2500,8 @@ export interface EngagementPayrollCardDto {
   charged: number
   /** What payroll details charges to the grant this month for the staff tagged to it (a shared person on each card). */
   chargedByDetails: number
+  /** The staff payroll kinds the files charge that no budget line of the engagement takes: left off its budget. */
+  unbudgeted: PayrollBudgetKind[]
   /** The month page's budget table: each budget line's approved amount, spent before, this month and what is left. */
   lines: BudgetLineRow[]
   /** Work experience: the payments on its month, those of earlier months, and its approved WEX budget lines. */

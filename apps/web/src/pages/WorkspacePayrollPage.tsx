@@ -248,6 +248,7 @@ export function WorkspacePayrollPage() {
                       }
                     : undefined
                 }
+                onBudget={owner ? () => setCardsVersion((n) => n + 1) : undefined}
                 onShow={(k) => {
                   setResolve(k)
                   document.getElementById('wpd-grid')?.scrollIntoView({ behavior: 'smooth' })
@@ -1205,7 +1206,17 @@ function WorkspaceMatch({
                 />
               </div>
             )}
-            <PlanWords run={run} chosen={toSave} proof={proof} reopen={toReopen} />
+            <PlanWords
+              run={run}
+              chosen={toSave}
+              proof={proof}
+              reopen={toReopen}
+              onBudget={() =>
+                void api
+                  .get<WorkspacePayrollRunDto>(`/workspace-payroll-match/${run.id}`)
+                  .then(setRun, (e: Error) => setRunError(e.message))
+              }
+            />
             <MatchFooter
               onBack={() => setStep('Upload')}
               backLabel="Back: upload"

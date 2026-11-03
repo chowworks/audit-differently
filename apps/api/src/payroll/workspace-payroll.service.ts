@@ -117,7 +117,7 @@ import {
   type StaffFound,
   type StaffRow,
 } from './staff-match'
-import { amountsOn, payDateOn, payMonthOf, payRunsOf, runOfLine, suggestedRuns } from './pay-runs'
+import { amountsOn, payMonthOf, payRunsOf, runOfLine, suggestedRuns } from './pay-runs'
 import { chargesOf } from './payroll-details'
 import { cleanProgramNames, programNameRows, programNamesIn } from './program-names'
 import {
@@ -1018,6 +1018,10 @@ export class WorkspacePayrollService {
         keep: [...p.payrollLines.keep, ...p.payrollLines.books].map((e) => ({
           ...e,
           engagementName: engagementsOf([e.reportId])[0]?.name ?? '',
+        })),
+        unbudgeted: p.payrollLines.unbudgeted.map((u) => ({
+          ...u,
+          engagementName: engagementsOf([u.reportId])[0]?.name ?? '',
         })),
       },
       dropped: p.dropped.map((d) => ({ ...d, id: null, by: null, at: null })),
@@ -2157,9 +2161,9 @@ export class WorkspacePayrollService {
         )
         .map((e) => e.date.toISOString().slice(0, 10)),
     }))
-    const { writes, skipped } = charges.length
+    const { writes, skipped, unbudgeted } = charges.length
       ? payrollLinesOf({ charges, staff, participants, months: lineMonths, period })
-      : { writes: [], skipped: [] }
+      : { writes: [], skipped: [], unbudgeted: [] }
     const had = onMonths.filter((e) => e.payrollKey)
     const keyOfRow = (reportId: string, key: string) => `${reportId}|${key}`
     const wanted = new Set(writes.map((w) => keyOfRow(w.reportId, w.key)))
@@ -2258,6 +2262,7 @@ export class WorkspacePayrollService {
       change,
       remove,
       skipped,
+      unbudgeted,
       keep,
       books,
       /** Every line payroll details asks for, written or already as written: the files that prove them reach their months. */
@@ -2392,17 +2397,23 @@ export class WorkspacePayrollService {
     byMatch: true
     payRun: boolean
   }[] {
-    // A run is its register: its pay date is the one the register prints.
-    const payDateOf = new Map(
-      files.filter((f) => f.kind === 'payroll-register').map((f) => [f.id, payDateOn(f.lines)])
-    )
-    const ofRun = (p: PersonLine | null | undefined): p is PersonLine =>
-      !!p &&
-      (p.runId
-        ? payDateOf.get(p.runId) === w.date
-        : p.source === 'details'
-          ? !!p.line?.text.includes(w.date)
-          : true)
+    // A run is its register, and the line is of the run whose period it was written for (its key's run end): the
+    // books date a run's pay on their own day (09/17), seldom the pay date the register prints (09/18). A run with no
+    // period printed is told by its pay date, as before.
+    const runOf = new Map(payRunsOf(files).map((r) => [r.fileId, r]))
+    const sameRun = (run: { payDate: string | null; end: string | null }) =>
+      run.end && w.end ? run.end === w.end : run.payDate === w.date
+    const ofRun = (p: PersonLine | null | undefined): p is PersonLine => {
+      if (!p) return false
+      // A job report's row, or payroll details' rows, of another program: never this engagement's proof.
+      if (p.program !== undefined && p.program !== w.engagementId) return false
+      if (p.engagementId && p.engagementId !== w.engagementId) return false
+      if (p.runId) {
+        const run = runOf.get(p.runId)
+        return !!run && sameRun(run)
+      }
+      return p.source === 'details' ? !!p.line?.text.includes(w.date) : true
+    }
     const spots: { purpose: string; spot: PersonLine }[] = []
     if (w.staffId) {
       const found = plan.staff.find((s) => s.staff.id === w.staffId)
@@ -2413,7 +2424,7 @@ export class WorkspacePayrollService {
       ] as const)
         for (const p of found?.[slot] ?? []) if (ofRun(p)) spots.push({ purpose, spot: p })
     } else
-      for (const st of plan.stubs.filter((x) => x.reading.payDate === w.date))
+      for (const st of plan.stubs.filter((x) => sameRun(x.reading)))
         for (const [p, purpose] of [
           [st.timesheet, 'timesheet'],
           [st.register, 'register'],
@@ -3088,6 +3099,7 @@ export class WorkspacePayrollService {
         }
       })
       const payFound = cents(people.reduce((t, x) => t + (x.pay ?? 0), 0))
+      const chargedByDetails = cents(people.reduce((t, x) => t + (x.charged ?? 0), 0))
       return {
         engagementId: m.engagementId,
         engagementName: m.engagement.name,
@@ -3095,7 +3107,14 @@ export class WorkspacePayrollService {
         reportId: m.id,
         monthStatus: m.status as ReportStatus,
         charged,
-        chargedByDetails: cents(people.reduce((t, x) => t + (x.charged ?? 0), 0)),
+        chargedByDetails,
+        // Staff payroll the files charge with no budget line to take it: Save leaves it off the budget.
+        unbudgeted:
+          chargedByDetails > 0
+            ? (['staff-pay', 'staff-taxes'] as const).filter(
+                (k) => !holdsPayroll(m.engagement.budgetLines, k)
+              )
+            : [],
         lines: computeBudgetLines(
           m.engagement.budgetLines,
           [

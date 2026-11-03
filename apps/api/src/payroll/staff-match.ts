@@ -169,6 +169,11 @@ export interface PersonLine {
   end?: string | null
   /** Payroll details: the engagement whose program the rows charge; its proof on that engagement's lines only. */
   engagementId?: string
+  /**
+   * A job report's row (a timesheet with a program column): the engagement whose program the row names, null for a row
+   * of another program or of none (a person's total). Its proof on that engagement's lines only.
+   */
+  program?: string | null
 }
 
 export interface StaffFound {
@@ -859,6 +864,16 @@ export function planMatch(input: {
     ['payroll-register', 'register', 'register'],
     ['bank-statement', 'bank', 'bank'],
   ]
+  // A timesheet with a program column (a job report): each row's program, as the engagement it is for.
+  for (const found of staff)
+    for (const p of found.timesheet) {
+      const file = fileById.get(p.fileId)
+      if (file?.kind !== 'timesheet' || !p.line) continue
+      const col = programColumn(file)
+      if (col < 0) continue
+      const id = programIn(p.line.text.split(CELL)[col] ?? '', knownPrograms)
+      p.program = id && !id.startsWith('program:') ? id : null
+    }
   for (const found of staff)
     for (const engagementId of found.staff.engagementIds) {
       const month = monthOf.get(engagementId)
@@ -866,14 +881,7 @@ export function planMatch(input: {
       // A timesheet with a program column (a job report: a row per person and project) proves this engagement by the
       // rows whose program is its own only: a row of another program, or a person's total (no program), is not this
       // program's time. One without (a time report with a row per person) proves it by the person's row, as before.
-      const sheetFor = (p: PersonLine) => {
-        const file = fileById.get(p.fileId)
-        if (file?.kind !== 'timesheet' || !p.line) return true
-        const col = programColumn(file)
-        return (
-          col < 0 || programIn(p.line.text.split(CELL)[col] ?? '', knownPrograms) === engagementId
-        )
-      }
+      const sheetFor = (p: PersonLine) => p.program === undefined || p.program === engagementId
       for (const [kind, slot, key] of proofs)
         for (const p of found[key] as PersonLine[]) {
           if (!sheetFor(p) || (p.engagementId && p.engagementId !== engagementId)) continue
