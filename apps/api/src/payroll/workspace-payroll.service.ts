@@ -1019,6 +1019,10 @@ export class WorkspacePayrollService {
           ...e,
           engagementName: engagementsOf([e.reportId])[0]?.name ?? '',
         })),
+        unbudgeted: p.payrollLines.unbudgeted.map((u) => ({
+          ...u,
+          engagementName: engagementsOf([u.reportId])[0]?.name ?? '',
+        })),
       },
       dropped: p.dropped.map((d) => ({ ...d, id: null, by: null, at: null })),
       months: touched,
@@ -2157,9 +2161,9 @@ export class WorkspacePayrollService {
         )
         .map((e) => e.date.toISOString().slice(0, 10)),
     }))
-    const { writes, skipped } = charges.length
+    const { writes, skipped, unbudgeted } = charges.length
       ? payrollLinesOf({ charges, staff, participants, months: lineMonths, period })
-      : { writes: [], skipped: [] }
+      : { writes: [], skipped: [], unbudgeted: [] }
     const had = onMonths.filter((e) => e.payrollKey)
     const keyOfRow = (reportId: string, key: string) => `${reportId}|${key}`
     const wanted = new Set(writes.map((w) => keyOfRow(w.reportId, w.key)))
@@ -2258,6 +2262,7 @@ export class WorkspacePayrollService {
       change,
       remove,
       skipped,
+      unbudgeted,
       keep,
       books,
       /** Every line payroll details asks for, written or already as written: the files that prove them reach their months. */
@@ -3094,6 +3099,7 @@ export class WorkspacePayrollService {
         }
       })
       const payFound = cents(people.reduce((t, x) => t + (x.pay ?? 0), 0))
+      const chargedByDetails = cents(people.reduce((t, x) => t + (x.charged ?? 0), 0))
       return {
         engagementId: m.engagementId,
         engagementName: m.engagement.name,
@@ -3101,7 +3107,14 @@ export class WorkspacePayrollService {
         reportId: m.id,
         monthStatus: m.status as ReportStatus,
         charged,
-        chargedByDetails: cents(people.reduce((t, x) => t + (x.charged ?? 0), 0)),
+        chargedByDetails,
+        // Staff payroll the files charge with no budget line to take it: Save leaves it off the budget.
+        unbudgeted:
+          chargedByDetails > 0
+            ? (['staff-pay', 'staff-taxes'] as const).filter(
+                (k) => !holdsPayroll(m.engagement.budgetLines, k)
+              )
+            : [],
         lines: computeBudgetLines(
           m.engagement.budgetLines,
           [

@@ -17,6 +17,7 @@ import {
   type WorkspacePayrollOutputDto,
 } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
+import { AddPayrollBudgetLine } from '@/components/AddPayrollBudgetLine'
 import { ENGAGEMENT_COLORS } from '@/lib/engagement-colors'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty } from '@/components/ui'
@@ -100,12 +101,15 @@ export function PayrollActions({
   colors,
   onMatch,
   onShow,
+  onBudget,
 }: {
   period: string
   matched: boolean
   cards: EngagementPayrollCardDto[] | null
   recon: PayrollReconciliationDto | null
   colors: Map<string, string>
+  /** A budget line was added from an action: owners only (the page reads the cards again). */
+  onBudget?: () => void
   /** Opens the match: owners only (an auditor changes nothing, so sees no button). */
   onMatch?: () => void
   /** Filters the reconciliation's grid to one kind and scrolls to it. */
@@ -157,6 +161,20 @@ export function PayrollActions({
           text: f.text,
           go: <Link to={f.href}>{f.action} →</Link>,
         })
+    for (const k of c.unbudgeted)
+      rows.push({
+        key: `${c.engagementId}-unbudgeted-${k}`,
+        sign: '⛔',
+        color,
+        who: c.engagementName,
+        text: `No budget line takes ${PAYROLL_BUDGET_KIND_LABELS[k].toLowerCase()}`,
+        sub: 'Its payroll from the files is left off the budget. Add the line, then Match again and Save.',
+        go: onBudget ? (
+          <AddPayrollBudgetLine engagementId={c.engagementId} kind={k} onAdded={onBudget} />
+        ) : (
+          <Link to={`/engagements/${c.engagementId}`}>See budget →</Link>
+        ),
+      })
     for (const l of c.lines)
       if (l.remaining < 0)
         rows.push({

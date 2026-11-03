@@ -16,6 +16,7 @@ import {
   type WorkspacePayrollRunDto,
 } from '@ad/types'
 import { money, shortDate } from '@/lib/format'
+import { AddPayrollBudgetLine } from '@/components/AddPayrollBudgetLine'
 import { Chip, Empty } from '@/components/ui'
 import { FoundProof, Resolve, Tally, foundWords } from '@/components/payroll-match/MatchParts'
 import { SLOT_LABEL } from '@/components/payroll-match/why'
@@ -440,6 +441,7 @@ export function PlanWords({
   chosen,
   proof,
   reopen,
+  onBudget,
 }: {
   run: WorkspacePayrollRunDto
   /** The owner's own choices on the table. */
@@ -447,6 +449,8 @@ export function PlanWords({
   /** The proof Save attaches, the owner's choices included (`proofList`). */
   proof: PlanProofDto[]
   reopen: WorkspacePayrollMonthDto[]
+  /** A budget line was added or changed here: the page reads the run again. */
+  onBudget?: () => void
 }) {
   const { plan } = run
   return (
@@ -480,6 +484,28 @@ export function PlanWords({
           <li>
             <b>Staff payroll on the budget:</b> {plan.payrollLines.write}{' '}
             {plan.payrollLines.write === 1 ? 'line' : 'lines'} from payroll details.
+          </li>
+        )}
+        {plan.payrollLines.unbudgeted.length > 0 && (
+          <li className="text-danger">
+            <b>⛔ Not on the budget</b> (no budget line takes it, so Save leaves it off):
+            <ul className="mt-1 grid gap-1">
+              {plan.payrollLines.unbudgeted.map((u) => (
+                <li key={`${u.reportId}-${u.kind}`} className="flex flex-wrap items-center gap-2">
+                  <span>
+                    {u.engagementName}: {money(u.amount)} of{' '}
+                    {PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}
+                  </span>
+                  {onBudget && (
+                    <AddPayrollBudgetLine
+                      engagementId={u.engagementId}
+                      kind={u.kind}
+                      onAdded={onBudget}
+                    />
+                  )}
+                </li>
+              ))}
+            </ul>
           </li>
         )}
         {plan.payrollLines.keep.length > 0 && (

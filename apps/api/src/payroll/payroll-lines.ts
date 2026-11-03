@@ -56,6 +56,14 @@ export interface PayrollLineSkip {
   why: 'no-engagement' | 'other-program' | 'other-month' | 'no-month' | 'no-line' | 'entered'
 }
 
+/** Payroll an engagement's month is charged that no budget line takes: none is ticked for its kind. Never saved. */
+export interface PayrollLineUnbudgeted {
+  reportId: string
+  engagementId: string
+  kind: PayrollBudgetKind
+  amount: number
+}
+
 const cents = (n: number) => Math.round(n * 100) / 100
 
 /** The line ticked for a kind on an engagement's month; null when no line holds it. */
@@ -69,13 +77,30 @@ export function payrollLinesOf(input: {
   months: LineMonth[]
   /** The month matched, yyyy-mm: a charge of a run of another month (`payMonthOf`) is that month's, never this one's. */
   period?: string
-}): { writes: PayrollLineWrite[]; skipped: PayrollLineSkip[] } {
+}): {
+  writes: PayrollLineWrite[]
+  skipped: PayrollLineSkip[]
+  unbudgeted: PayrollLineUnbudgeted[]
+} {
   const names = new Map(
     input.months.map((m) => [m.engagementId, [m.engagementName, ...(m.names ?? [])]])
   )
   const monthOf = new Map(input.months.map((m) => [m.engagementId, m]))
   const writes = new Map<string, PayrollLineWrite>()
   const skipped: PayrollLineSkip[] = []
+  const unbudgeted = new Map<string, PayrollLineUnbudgeted>()
+  const noLine = (m: LineMonth, kind: PayrollBudgetKind, amount: number) => {
+    const key = `${m.reportId}|${kind}`
+    const had = unbudgeted.get(key)
+    if (had) had.amount = cents(had.amount + amount)
+    else
+      unbudgeted.set(key, {
+        reportId: m.reportId,
+        engagementId: m.engagementId,
+        kind,
+        amount: cents(amount),
+      })
+  }
   const skip = (s: PayrollLineSkip) => {
     if (!skipped.some((x) => x.who === s.who && x.end === s.end && x.why === s.why)) skipped.push(s)
   }
@@ -116,6 +141,7 @@ export function payrollLinesOf(input: {
       const budgetLineId = lineFor(m, kind)
       if (!budgetLineId) {
         skip({ who: person.name, end: c.end, why: 'no-line' })
+        noLine(m, kind, c.amount)
         continue
       }
       add(
@@ -155,6 +181,7 @@ export function payrollLinesOf(input: {
     const budgetLineId = lineFor(m, 'participant-taxes')
     if (!budgetLineId) {
       skip({ who: 'Participants', end: c.end, why: 'no-line' })
+      noLine(m, 'participant-taxes', c.amount)
       continue
     }
     add(
@@ -180,6 +207,8 @@ export function payrollLinesOf(input: {
       .filter((w) => w.amount !== 0)
       .sort((a, b) => a.reportId.localeCompare(b.reportId) || a.key.localeCompare(b.key)),
     skipped,
+    // A run booked and reversed nets to nothing: nothing is missing for it.
+    unbudgeted: [...unbudgeted.values()].filter((u) => u.amount !== 0),
   }
 }
 

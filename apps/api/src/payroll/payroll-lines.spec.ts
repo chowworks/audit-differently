@@ -101,6 +101,39 @@ describe('payrollLinesOf', () => {
     )
   })
 
+  it('totals the payroll no budget line takes, by engagement month and kind, for the page to flag', () => {
+    const lined = payrollLinesOf({
+      charges,
+      staff,
+      participants,
+      months: [month('isy'), month('ait')],
+    })
+    // Every line taken: nothing to flag.
+    expect(lined.unbudgeted).toEqual([])
+    const onAit = (kind: string) =>
+      lined.writes
+        .filter((w) => w.reportId === 'r-ait' && w.kind === kind)
+        .reduce((t, w) => Math.round((t + w.amount) * 100) / 100, 0)
+    const { writes, unbudgeted } = payrollLinesOf({
+      charges,
+      staff,
+      participants,
+      months: [month('isy'), month('ait', { lines: [{ id: 'ait-program', payroll: [] }] })],
+    })
+    // What would have been Adult IT Training's lines, by kind, left off and said.
+    expect(unbudgeted).toEqual([
+      { reportId: 'r-ait', engagementId: 'e-ait', kind: 'staff-pay', amount: onAit('staff-pay') },
+      {
+        reportId: 'r-ait',
+        engagementId: 'e-ait',
+        kind: 'staff-taxes',
+        amount: onAit('staff-taxes'),
+      },
+    ])
+    expect(onAit('staff-pay')).toBeGreaterThan(0)
+    expect(writes.some((w) => w.reportId === 'r-ait')).toBe(false)
+  })
+
   it("puts a participant's taxes on the engagement the job names when they are on two, and says when none is named", () => {
     const tax = (job: string | null, end: string): PayrollCharge => ({
       name: 'Jordan Sample',
