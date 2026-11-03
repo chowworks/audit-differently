@@ -117,7 +117,7 @@ import {
   type StaffFound,
   type StaffRow,
 } from './staff-match'
-import { amountsOn, payDateOn, payMonthOf, payRunsOf, runOfLine, suggestedRuns } from './pay-runs'
+import { amountsOn, payMonthOf, payRunsOf, runOfLine, suggestedRuns } from './pay-runs'
 import { chargesOf } from './payroll-details'
 import { cleanProgramNames, programNameRows, programNamesIn } from './program-names'
 import {
@@ -2392,17 +2392,23 @@ export class WorkspacePayrollService {
     byMatch: true
     payRun: boolean
   }[] {
-    // A run is its register: its pay date is the one the register prints.
-    const payDateOf = new Map(
-      files.filter((f) => f.kind === 'payroll-register').map((f) => [f.id, payDateOn(f.lines)])
-    )
-    const ofRun = (p: PersonLine | null | undefined): p is PersonLine =>
-      !!p &&
-      (p.runId
-        ? payDateOf.get(p.runId) === w.date
-        : p.source === 'details'
-          ? !!p.line?.text.includes(w.date)
-          : true)
+    // A run is its register, and the line is of the run whose period it was written for (its key's run end): the
+    // books date a run's pay on their own day (09/17), seldom the pay date the register prints (09/18). A run with no
+    // period printed is told by its pay date, as before.
+    const runOf = new Map(payRunsOf(files).map((r) => [r.fileId, r]))
+    const sameRun = (run: { payDate: string | null; end: string | null }) =>
+      run.end && w.end ? run.end === w.end : run.payDate === w.date
+    const ofRun = (p: PersonLine | null | undefined): p is PersonLine => {
+      if (!p) return false
+      // A job report's row, or payroll details' rows, of another program: never this engagement's proof.
+      if (p.program !== undefined && p.program !== w.engagementId) return false
+      if (p.engagementId && p.engagementId !== w.engagementId) return false
+      if (p.runId) {
+        const run = runOf.get(p.runId)
+        return !!run && sameRun(run)
+      }
+      return p.source === 'details' ? !!p.line?.text.includes(w.date) : true
+    }
     const spots: { purpose: string; spot: PersonLine }[] = []
     if (w.staffId) {
       const found = plan.staff.find((s) => s.staff.id === w.staffId)
@@ -2413,7 +2419,7 @@ export class WorkspacePayrollService {
       ] as const)
         for (const p of found?.[slot] ?? []) if (ofRun(p)) spots.push({ purpose, spot: p })
     } else
-      for (const st of plan.stubs.filter((x) => x.reading.payDate === w.date))
+      for (const st of plan.stubs.filter((x) => sameRun(x.reading)))
         for (const [p, purpose] of [
           [st.timesheet, 'timesheet'],
           [st.register, 'register'],

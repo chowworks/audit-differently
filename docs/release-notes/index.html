@@ -583,64 +583,6 @@
 
       <article
         class="entry"
-        id="payroll-files-as-exported"
-        data-status="review"
-        data-short="Payroll files as exported"
-        data-summary="The payroll zip takes your payroll company's and accounting system's files exactly as they export them, and splits a company-wide export by program."
-      >
-        <div class="meta">
-          <span class="chip review">IN REVIEW</span><time datetime="2026-11-01">Nov 1, 2026</time>
-        </div>
-        <h2>Payroll files as exported</h2>
-        <p>
-          Put your files in the payroll zip as your payroll company and your books export them, with
-          nothing edited: CSV job reports, a zip of pay stubs, and your accounting system's
-          company-wide transaction list as the payroll details. Each row counts only on the
-          engagement whose program it names.
-        </p>
-        <p>
-          A new Program names list, under Configuration Data on the workspace page, records what
-          each program is called in your books (its class) and by your payroll company (its project
-          or job), and any other name it goes by. Fill it from a mapping file in the zip's new
-          Program names folder, or add one on the workspace page: one row per program, one column
-          per name, as many columns as you need. Each file is merged with the list, and rows that
-          share a name are one program.
-        </p>
-        <div class="know">
-          <strong>Good to know</strong>
-          <ul>
-            <li>
-              A pay run now counts in the month its work was done, by its pay period: the second
-              half of September, paid in October, is September's.
-            </li>
-            <li>
-              Payroll details is read by its column names: the amount, date, account and class.
-              Dates written as text are read, and payroll liability and bank rows are left out.
-            </li>
-            <li>
-              A job report with a project column proves an engagement only by the rows of its
-              program. A staff member's own pay stub is proof on their payroll lines, and the Pay
-              stubs folder is optional.
-            </li>
-            <li>
-              A run's payment date and pay period written in words ("Oct 6, 2026") are read, and
-              "Employee net pay" is a bank debit total. When a run comes as two files (a payments
-              report and a register), the bank debit found by one is the other's too.
-            </li>
-            <li>
-              A wide export (a payroll journal with dozens of columns) saves: the line a proof
-              points to keeps its cells that say something, leaving out empty and zero ones.
-            </li>
-            <li>
-              The sample zip (Download a sample on the workspace payroll page) now has a Program
-              names file, so you can see what one looks like.
-            </li>
-          </ul>
-        </div>
-      </article>
-
-      <article
-        class="entry"
         id="workspace-payroll-match"
         data-status="shipped"
         data-short="Month End Payroll Processing"

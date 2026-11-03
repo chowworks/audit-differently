@@ -1450,3 +1450,92 @@ describe('payroll lines Save writes from payroll details', () => {
     expect(again.touched).toEqual(['r-ait'])
   })
 })
+
+describe("the proof Save links to a staff line it writes: the run of the line's period", () => {
+  type Proofs = {
+    payrollLineProofs: (
+      w: PayrollLineWrite,
+      plan: unknown,
+      files: unknown[],
+      docIds: Map<string, string | null>
+    ) => { documentId: string; purpose: string }[]
+  }
+  const line = (text: string, y = 700): StatementLine => ({
+    page: 1,
+    text,
+    x: 40,
+    y,
+    width: 300,
+    height: 12,
+  })
+  // Fictional: the books date the run's pay 09/17; the register pays it 09/18 for 09/01 – 09/15.
+  const register = {
+    id: 'f-reg',
+    kind: 'payroll-register',
+    fileName: 'register.pdf',
+    lines: [line('Pay period 09/01/2026 - 09/15/2026'), line('Pay Date 09/18/2026', 685)],
+  }
+  const sheet = {
+    id: 'f-ts',
+    kind: 'timesheet',
+    fileName: 'journal.csv',
+    lines: [line('Morgan Lee | 1042 | Demo Youth Program (2026) | 1,250.00')],
+  }
+  const plan = {
+    staff: [
+      {
+        staff: { id: 's-morgan', name: 'Morgan Lee', engagementIds: ['e-isy'] },
+        timesheet: [{ fileId: 'f-ts', runId: 'f-reg', line: sheet.lines[0], amount: 1250 }],
+        register: [],
+        bank: [],
+      },
+    ],
+    stubs: [],
+  }
+  const write = (end: string): PayrollLineWrite => ({
+    key: `staff:s-morgan:${end}:taxes`,
+    kind: 'staff-taxes',
+    reportId: 'r-isy',
+    engagementId: 'e-isy',
+    budgetLineId: 'isy-fringe',
+    date: '2026-09-17',
+    start: null,
+    end,
+    amount: 95.63,
+    staffId: 's-morgan',
+    who: 'Morgan Lee',
+    account: '60000 Payroll Expenses',
+  })
+  const docIds = new Map<string, string | null>([['f-ts', 'd-ts']])
+  const proofs = (w: PayrollLineWrite) =>
+    (setup().service as unknown as Proofs).payrollLineProofs(w, plan, [register, sheet], docIds)
+
+  it("links the timesheet of the line's run though the books date it a day before the register's pay date", () => {
+    expect(proofs(write('2026-09-15'))).toEqual([
+      expect.objectContaining({ documentId: 'd-ts', purpose: 'timesheet' }),
+    ])
+  })
+
+  it("never links another run's timesheet", () => {
+    expect(proofs(write('2026-09-30'))).toEqual([])
+  })
+
+  it("never links a job report's row of another program", () => {
+    const row = plan.staff[0]!.timesheet[0]!
+    const other = {
+      ...plan,
+      staff: [{ ...plan.staff[0]!, timesheet: [{ ...row, program: 'e-ait' }] }],
+    }
+    const service = setup().service as unknown as Proofs
+    expect(
+      service.payrollLineProofs(write('2026-09-15'), other, [register, sheet], docIds)
+    ).toEqual([])
+    const ours = {
+      ...plan,
+      staff: [{ ...plan.staff[0]!, timesheet: [{ ...row, program: 'e-isy' }] }],
+    }
+    expect(
+      service.payrollLineProofs(write('2026-09-15'), ours, [register, sheet], docIds)
+    ).toHaveLength(1)
+  })
+})
