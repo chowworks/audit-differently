@@ -118,6 +118,11 @@ async function setup(opts: { statusB?: string; links?: Record<string, Link[]> } 
       const l = payLines.find((x) => x.id === id)
       return l ? [{ notFundedReason: l.notFundedReason ?? null }] : []
     }),
+    // Save marks the months it covered as matched.
+    monthlyReport: {
+      create: jest.fn(async ({ data }: { data: object }) => ({ id: 'r-new', ...data })),
+      updateMany: jest.fn(),
+    },
     document: {
       create: jest.fn(async ({ data }) => ({ id: `d-${++n}`, ...data })),
       createMany: jest.fn(),
@@ -173,7 +178,11 @@ async function setup(opts: { statusB?: string; links?: Record<string, Link[]> } 
     monthlyReport: {
       findMany: jest.fn().mockResolvedValue(months),
       groupBy: jest.fn().mockResolvedValue([]),
+      create: jest.fn(async ({ data }: { data: object }) => ({ id: 'r-new', ...data })),
+      updateMany: jest.fn(),
     },
+    // The workspace's engagements without this month: none, unless a test says.
+    engagement: { findMany: jest.fn().mockResolvedValue([]) },
     payrollPayLine: {
       groupBy: jest.fn().mockResolvedValue([]),
       findMany: jest.fn(async () => payLines),
@@ -547,6 +556,53 @@ describe('WorkspacePayrollService', () => {
       expect(s.lines.map((l) => l.description)).toEqual([
         'Opened the workspace payroll match for September 2026 (1 file)',
       ])
+    })
+  })
+
+  describe("the month's engagements", () => {
+    const engagement = (id: string, name: string, from: string, to: string) => ({
+      id,
+      name,
+      periodStart: new Date(`${from}T00:00:00Z`),
+      periodEnd: new Date(`${to}T00:00:00Z`),
+      reportDueDay: 12,
+    })
+
+    it('starts the month of an engagement whose contract covers it, and no other, before matching', async () => {
+      const s = await setup()
+      s.prisma.payrollMatchRun.findFirst.mockResolvedValueOnce(null)
+      s.prisma.engagement.findMany.mockResolvedValueOnce([
+        engagement('e-c', 'Lakeside Careers', '2026-07-01', '2027-06-30'),
+        engagement('e-d', 'Old Pathways', '2025-01-01', '2025-12-31'),
+      ])
+      await s.service.start(owner, W, '2026-09')
+      expect(s.tx.monthlyReport.create.mock.calls.map((c) => c[0].data)).toEqual([
+        { engagementId: 'e-c', period: '2026-09', dueDate: new Date('2026-10-12T23:59:59Z') },
+      ])
+      expect(s.lines.map((l) => l.description)).toContain(
+        "Started September 2026 of Lakeside Careers for the workspace's payroll"
+      )
+      expect(s.checks.refresh).toHaveBeenCalledWith('r-new')
+    })
+
+    it('says which engagement its payroll cannot reach: no budget line holds payroll', async () => {
+      const s = await setup()
+      s.prisma.payrollMatchRun.findFirst.mockResolvedValueOnce(null)
+      const run = await s.service.start(owner, W, '2026-09')
+      // Both engagements list participants; neither has a budget line that holds payroll.
+      expect(run.setup).toEqual([
+        { engagementId: 'e-a', engagementName: 'Riverbend Youth Works', missing: ['budget'] },
+        { engagementId: 'e-b', engagementName: 'Harbor Tech Pathways', missing: ['budget'] },
+      ])
+    })
+
+    it('marks the draft months Save covered as matched', async () => {
+      const s = await setup()
+      await s.service.save(owner, 'run-ws', { links: [] })
+      expect(s.tx.monthlyReport.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['r-a', 'r-b'] }, status: 'draft' },
+        data: { payrollMatchedAt: expect.any(Date) },
+      })
     })
   })
 

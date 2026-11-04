@@ -391,3 +391,16 @@
 .ad-tile.wpd-tile-grey {
   border-top-color: #9aa5b1;
 }
+/* A card whose month started after the last match: its payroll is not on it until the files are matched again. */
+.wpd-unmatched {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--warn);
+  background: var(--warn-tint);
+}

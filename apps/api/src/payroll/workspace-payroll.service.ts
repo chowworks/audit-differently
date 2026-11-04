@@ -49,6 +49,7 @@ import {
   type WorkspacePayrollPeriodDto,
   type WorkspacePayrollPlanDto,
   type WorkspacePayrollRunDto,
+  type WorkspacePayrollSetupDto,
   type WorkspacePayrollSaveInput,
   type WorkspacePayrollStartInput,
   type ProgramNames,
@@ -68,6 +69,7 @@ import {
 } from '../documents/documents.service'
 import { describe, type StagedFile } from '../documents/staged-file'
 import { PrismaService } from '../prisma/prisma.service'
+import { dueDate } from '../checks/rules'
 import { refuseLocked, ReportsService, WEX_FIELDS } from '../reports/reports.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
 import { highlightsFor } from './highlights'
@@ -1213,6 +1215,7 @@ export class WorkspacePayrollService {
     // The set's size first: a refusal changes nothing, the caller's unsaved uploads included.
     const set = await this.setOf(workspaceId, period)
     if (set.length > MAX) throw new BadRequestException(TOO_MANY(set.length))
+    await this.startMonths(caller, workspaceId, period)
     const mine = await this.prisma.payrollMatchRun.findMany({
       where: { workspaceId, period, monthlyReportId: null, createdById: caller.userId },
       include: { files: true },
@@ -1280,6 +1283,82 @@ export class WorkspacePayrollService {
     )
     if (keep.length) this.worker.kick()
     return this.dto(caller, (await this.load(caller, runId)) as WorkspaceRun)
+  }
+
+  /**
+   * Every engagement of the workspace whose contract covers the month gets its month, started as its own page starts it
+   * (owner's decision, 2026-11-03): the match never misses an engagement for want of one. A closed engagement, or one
+   * without its contract period, is left alone; a month started meanwhile is no error.
+   */
+  private async startMonths(caller: Caller, workspaceId: string, period: string) {
+    const missing = await this.prisma.engagement.findMany({
+      where: {
+        workspaceId,
+        status: { not: 'closed' },
+        periodStart: { not: null },
+        periodEnd: { not: null },
+        monthlyReports: { none: { period } },
+      },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, periodStart: true, periodEnd: true, reportDueDay: true },
+    })
+    for (const e of missing) {
+      const from = e.periodStart!.toISOString().slice(0, 7)
+      const to = e.periodEnd!.toISOString().slice(0, 7)
+      if (period < from || period > to) continue
+      const due = dueDate(period, e.reportDueDay)
+      const made = await this.log
+        .change(
+          caller,
+          (tx) => tx.monthlyReport.create({ data: { engagementId: e.id, period, dueDate: due } }),
+          (r) => ({
+            workspaceId,
+            resource: 'report',
+            subjectId: r.id,
+            action: 'create',
+            description: `Started ${monthName(period)} of ${e.name} for the workspace's payroll`,
+            changes: [{ field: 'Due on', after: due.toISOString().slice(0, 10) }],
+          })
+        )
+        .catch((err: unknown) => {
+          if ((err as { code?: string }).code === 'P2002') return null
+          throw err
+        })
+      if (made) await this.checks.refresh(made.id)
+    }
+  }
+
+  /**
+   * What each month's engagement still needs for its payroll to reach it: staff tagged to it (or participants listed),
+   * and a budget line that holds payroll. The review asks the owner to fix these.
+   */
+  private async setupOf(
+    months: WorkspacePayrollMonthDto[],
+    staff: StaffRow[],
+    participants: ParticipantRow[]
+  ): Promise<WorkspacePayrollSetupDto[]> {
+    const ids = [...new Set(months.map((m) => m.engagementId))]
+    const lines = ids.length
+      ? await this.prisma.budgetLine.findMany({
+          where: { engagementId: { in: ids } },
+          select: { engagementId: true, payroll: true },
+        })
+      : []
+    return months
+      .map((m) => ({
+        engagementId: m.engagementId,
+        engagementName: m.engagementName,
+        missing: [
+          ...(staff.some((x) => x.engagementIds.includes(m.engagementId)) ||
+          participants.some((x) => x.engagementId === m.engagementId)
+            ? []
+            : (['people'] as const)),
+          ...(lines.some((l) => l.engagementId === m.engagementId && l.payroll.length)
+            ? []
+            : (['budget'] as const)),
+        ],
+      }))
+      .filter((x) => x.missing.length)
   }
 
   /**
@@ -1707,6 +1786,12 @@ export class WorkspacePayrollService {
             })),
           })
         await tx.payrollMatchRun.delete({ where: { id: run.id } })
+        // Each draft month the match covered is matched as of now: one started after this shows it is not yet.
+        if (months.length)
+          await tx.monthlyReport.updateMany({
+            where: { id: { in: months.map((m) => m.reportId) }, status: 'draft' },
+            data: { payrollMatchedAt: new Date() },
+          })
         if (leavingDocs.length) {
           await tx.document.deleteMany({ where: { id: { in: leavingIds } } })
           for (const l of change.leaving) {
@@ -2662,6 +2747,7 @@ export class WorkspacePayrollService {
       pays,
       totalsOnly,
       plan: this.planDto(planned, months),
+      setup: await this.setupOf(months, planned.staff, planned.participants),
       runs: suggestedRuns(payRunsOf(planned.files)),
       ai: PayrollAiService.summary(run.files),
     }
@@ -3150,6 +3236,7 @@ export class WorkspacePayrollService {
         engagementCode: m.engagement.code,
         reportId: m.id,
         monthStatus: m.status as ReportStatus,
+        notMatched: m.status === 'draft' && !m.payrollMatchedAt,
         charged,
         chargedByDetails,
         // Staff payroll the files charge with no budget line to take it: Save leaves it off the budget.
