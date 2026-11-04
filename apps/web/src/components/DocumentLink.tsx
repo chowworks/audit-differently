@@ -20,11 +20,14 @@ export function DocumentLink({
   children,
   className = '',
   proofOf,
+  page,
 }: {
   doc: DocumentDto
   children?: React.ReactNode
   className?: string
   proofOf?: { target: 'expense' | 'wex'; id: string }
+  /** The page a PDF opens at in the viewer: where its highlight is. */
+  page?: number
 }) {
   const api = useApi()
   const [error, setError] = useState<string | null>(null)
@@ -72,7 +75,7 @@ export function DocumentLink({
             wide
           >
             <Suspense fallback={<p className="text-sm text-soft">Opening the file…</p>}>
-              <StatementViewer doc={doc} src={copy} downloadName={doc.fileName} />
+              <StatementViewer doc={doc} src={copy} page={page} downloadName={doc.fileName} />
             </Suspense>
           </Modal>,
           document.body

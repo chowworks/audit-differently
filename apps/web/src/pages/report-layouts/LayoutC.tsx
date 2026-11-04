@@ -7,6 +7,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
   ALLOCATION_TYPE_LABELS,
+  DOCUMENT_KIND_LABELS,
   DOCUMENT_PURPOSE_LABELS,
   PAYROLL_REPORT_LINES,
   isPayrollLine,
@@ -1076,6 +1077,29 @@ function ExpensesSection({
 }
 
 /** The proof a row needs: a green chip for each on file, a red "+" for each missing. */
+/** The page an attached proof's highlight is on: where its file opens. */
+function firstPage(d: ExpenseDto['documents'][number]): number | undefined {
+  return d.mark?.page ?? d.marks?.[0]?.page
+}
+
+/**
+ * The proof a chip shows for each needed purpose, and the rest. Evidence of payment is the pay stub whenever one is
+ * attached, so every payroll line shows the same kind of proof; a bank debit attached as well is shown beside it.
+ */
+export function proofsShown<D extends { purpose: DocumentPurpose; document: { kind: string } }>(
+  needed: DocumentPurpose[],
+  docs: D[]
+): { have: Map<DocumentPurpose, D>; extra: D[] } {
+  const have = new Map<DocumentPurpose, D>()
+  for (const purpose of needed) {
+    const of = docs.filter((d) => d.purpose === purpose)
+    const pick = (purpose === 'payment' && of.find((d) => d.document.kind === 'paystub')) || of[0]
+    if (pick) have.set(purpose, pick)
+  }
+  const shown = new Set(have.values())
+  return { have, extra: docs.filter((d) => !shown.has(d)) }
+}
+
 function ProofChips({
   can,
   needed,
@@ -1095,8 +1119,7 @@ function ProofChips({
   /** False: "Bookkeepers see staff payroll" is off, so the proofs show as labels that open nothing. */
   files?: boolean
 }) {
-  const have = new Map(docs.map((d) => [d.purpose, d]))
-  const extra = docs.filter((d) => !needed.includes(d.purpose))
+  const { have, extra } = proofsShown(needed, docs)
   return (
     <div className="flex flex-wrap gap-1">
       {needed.map((purpose) => {
@@ -1104,7 +1127,7 @@ function ProofChips({
         return d ? (
           <Chip key={purpose} tone="ok" fill title={files ? d.document.fileName : undefined}>
             {files ? (
-              <DocumentLink doc={d.document} proofOf={proofOf}>
+              <DocumentLink doc={d.document} proofOf={proofOf} page={firstPage(d)}>
                 ✓ {DOCUMENT_PURPOSE_LABELS[purpose]}
               </DocumentLink>
             ) : (
@@ -1127,15 +1150,27 @@ function ProofChips({
           </Chip>
         )
       })}
-      {extra.map((d) => (
-        <Chip key={d.document.id} tone="muted" title={files ? d.document.fileName : undefined}>
-          {files ? (
-            <DocumentLink doc={d.document}>{DOCUMENT_PURPOSE_LABELS[d.purpose]}</DocumentLink>
-          ) : (
-            DOCUMENT_PURPOSE_LABELS[d.purpose]
-          )}
-        </Chip>
-      ))}
+      {extra.map((d) => {
+        // A second proof of a needed purpose (a staff line's bank debit beside its pay stub) is named by its kind.
+        const word = needed.includes(d.purpose)
+          ? DOCUMENT_KIND_LABELS[d.document.kind].replace(/^./, (c) => c.toUpperCase())
+          : DOCUMENT_PURPOSE_LABELS[d.purpose]
+        return (
+          <Chip key={d.document.id} tone="muted" title={files ? d.document.fileName : undefined}>
+            {files ? (
+              <DocumentLink
+                doc={d.document}
+                proofOf={needed.includes(d.purpose) ? proofOf : undefined}
+                page={firstPage(d)}
+              >
+                {word}
+              </DocumentLink>
+            ) : (
+              word
+            )}
+          </Chip>
+        )
+      })}
     </div>
   )
 }
