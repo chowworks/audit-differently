@@ -147,6 +147,22 @@ export class WorkspacePayrollController {
     return this.payroll.files(await this.callers.load(userId), id, period)
   }
 
+  /** One file of the month's set as uploaded: to view or download. Logged. */
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('workspaces/:id/payroll/:period/files/:documentId/file')
+  async setFile(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('period') period: string,
+    @Param('documentId') documentId: string,
+    @Res() res: Response
+  ): Promise<void> {
+    sendInline(
+      res,
+      await this.payroll.setFile(await this.callers.load(userId), id, period, documentId)
+    )
+  }
+
   /** Remove a file: a run that takes it out of the month's set, matched again from the rest, to check and save. */
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('workspaces/:id/payroll/:period/files/:documentId/remove')

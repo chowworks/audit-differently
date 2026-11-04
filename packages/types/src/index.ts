@@ -2084,6 +2084,8 @@ export interface WorkspacePayrollFileDto {
   sha256: string
   uploadedAt: string
   personal: boolean
+  /** Its media type: a PDF opens in the viewer, any file downloads. */
+  contentType: string
 }
 
 /** GET /workspaces/:id/payroll/:period/files: the month's set. */

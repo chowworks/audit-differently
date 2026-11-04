@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { Suspense, lazy, useState, type ReactNode } from 'react'
 import {
   DOCUMENT_KIND_LABELS,
   MAX_WORKSPACE_PAYROLL_FILES,
@@ -8,7 +8,13 @@ import {
 import { periodLabel, shortDate } from '@/lib/format'
 import { PAYROLL_FOLDERS, type PayrollFolderKind } from '@/lib/zip-files'
 import { FILE_MAX_BYTES, UploadPanel } from '@/components/PayrollProof'
-import { Button, Card, Empty, ErrorNote, Field, inputClass } from '@/components/ui'
+import { Button, Card, Empty, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
+import { useApi } from '@/hooks/useApi'
+
+/** pdf.js is large: it loads when a file is first viewed. */
+const StatementViewer = lazy(() =>
+  import('@/components/StatementViewer').then((m) => ({ default: m.StatementViewer }))
+)
 
 export type PayrollUpload = { file: File; kind: PayrollFolderKind }[]
 
@@ -172,7 +178,29 @@ export function PayrollFilesCard({
   const [panel, setPanel] = useState<'replace' | 'add' | null>(null)
   const [folder, setFolder] = useState<PayrollFolderKind | undefined>()
   const [shut, setShut] = useState<Set<string>>(new Set())
+  const [viewing, setViewing] = useState<WorkspacePayrollFileDto | null>(null)
+  const [fileError, setFileError] = useState<string | null>(null)
+  const api = useApi()
   const list = files?.files ?? []
+  /** A file of the set as uploaded, through the API (which logs each open). */
+  const fileUrl = (f: WorkspacePayrollFileDto) =>
+    `/workspaces/${files!.workspaceId}/payroll/${period}/files/${f.id}/file`
+  const download = async (f: WorkspacePayrollFileDto) => {
+    setFileError(null)
+    try {
+      const bytes = await api.bytes(fileUrl(f))
+      const url = URL.createObjectURL(new Blob([bytes], { type: f.contentType }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = f.fileName
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    } catch (e) {
+      setFileError(`${f.fileName} could not be downloaded: ${(e as Error).message}`)
+    }
+  }
   const addTo = (kind?: PayrollFolderKind) => {
     setFolder(kind)
     setPanel('add')
@@ -199,7 +227,7 @@ export function PayrollFilesCard({
     >
       <div className="grid gap-4">
         {note}
-        <ErrorNote message={error ?? actions?.error ?? null} />
+        <ErrorNote message={error ?? actions?.error ?? fileError} />
         {actions?.changeOpen && (
           <p className="text-sm text-soft">
             Save or discard the change below before changing the files again.
@@ -293,6 +321,24 @@ export function PayrollFilesCard({
                             {f.fileName}
                           </span>
                           <span className="wpc-leaf-date">{shortDate(f.uploadedAt)}</span>
+                          {f.contentType === 'application/pdf' && (
+                            <button
+                              type="button"
+                              className="wpc-open"
+                              aria-label={`View ${f.fileName}`}
+                              onClick={() => setViewing(f)}
+                            >
+                              view
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="wpc-open"
+                            aria-label={`Download ${f.fileName}`}
+                            onClick={() => void download(f)}
+                          >
+                            download
+                          </button>
                           {can && (
                             <button
                               type="button"
@@ -314,6 +360,23 @@ export function PayrollFilesCard({
           </ul>
         )}
       </div>
+      {viewing && files && (
+        <Modal title={viewing.fileName} onClose={() => setViewing(null)} wide>
+          <Suspense fallback={<p className="text-sm text-soft">Opening the file…</p>}>
+            <StatementViewer
+              doc={{
+                id: viewing.id,
+                sensitivity: viewing.personal ? 'personal' : 'financial',
+                // The month's payroll files open like the other payroll files, pay stubs too (owner's decision,
+                // 2026-10-16).
+                kind: viewing.personal ? 'paystub' : viewing.kind,
+              }}
+              src={fileUrl(viewing)}
+              downloadName={viewing.fileName}
+            />
+          </Suspense>
+        </Modal>
+      )}
     </Card>
   )
 }

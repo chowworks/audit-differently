@@ -28,6 +28,8 @@ import {
   type PayLineLinkInput,
   type PayLineState,
   type PayrollDocumentKind,
+  personalRolesFor,
+  type Role,
   type PayrollMatchFileDto,
   type PayrollMatchProgress,
   type PayrollReconciliationDto,
@@ -336,9 +338,40 @@ export class WorkspacePayrollService {
         sha256: d.sha256,
         uploadedAt: d.uploadedAt.toISOString(),
         personal: d.sensitivity === 'personal',
+        contentType: d.contentType,
       })),
       can: { change: workspaceRole(caller, workspaceId, ['owner']) },
     }
+  }
+
+  /**
+   * One file of the month's set as it was uploaded, to view or download from the files card. Owners and auditors read
+   * the set; a personal file opens to its roles (personalRolesFor) alone. Each open is one read line.
+   */
+  async setFile(
+    caller: Caller,
+    workspaceId: string,
+    period: unknown,
+    documentId: string
+  ): Promise<{ bytes: Uint8Array; contentType: string; fileName: string }> {
+    this.reader(caller, workspaceId)
+    const p = this.period(period)
+    const doc = (await this.setOf(workspaceId, p)).find((d) => d.id === documentId)
+    if (!doc) throw new NotFoundException()
+    if (
+      doc.sensitivity === 'personal' &&
+      !workspaceRole(caller, workspaceId, [...personalRolesFor(doc.kind)] as Role[])
+    )
+      throw new NotFoundException()
+    const bytes = await this.storage.read(doc.storageKey)
+    await this.log.log(caller, {
+      workspaceId,
+      resource: 'document',
+      subjectId: doc.id,
+      action: 'read',
+      description: `Opened ${describe(doc)} from the workspace's payroll files`,
+    })
+    return { bytes: new Uint8Array(bytes), contentType: doc.contentType, fileName: doc.fileName }
   }
 
   /**

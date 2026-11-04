@@ -1160,4 +1160,24 @@ describe('WorkspacePayrollService', () => {
       expect(coveredBy(items, 'd-ws', 'paystub', null, 'sha-2')).toBeUndefined()
     })
   })
+
+  describe("a file of the month's set", () => {
+    it('opens a file of the set as uploaded to owners and auditors, one read line each, and nothing outside the set', async () => {
+      const s = await setup()
+      s.setDocs.push(onFile('d-reg', { kind: 'payroll-register', fileName: 'register.pdf' }))
+      const got = await s.service.setFile(auditor, W, '2026-09', 'd-reg')
+      expect(got).toEqual({
+        bytes: new Uint8Array(s.bytes),
+        contentType: 'application/pdf',
+        fileName: 'register.pdf',
+      })
+      expect(s.lines.at(-1)).toMatchObject({
+        action: 'read',
+        subjectId: 'd-reg',
+        description: expect.stringContaining("from the workspace's payroll files"),
+      })
+      await expect(s.service.setFile(owner, W, '2026-09', 'd-elsewhere')).rejects.toThrow()
+      await expect(s.service.setFile(bookkeeper, W, '2026-09', 'd-reg')).rejects.toThrow()
+    })
+  })
 })

@@ -36,6 +36,15 @@
   opacity: 0.5;
   cursor: default;
 }
+/* A file's view and download, beside its date. */
+.wpc-open {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+.wpc-open:hover {
+  text-decoration: underline;
+}
 /* The month's payroll files: a long set scrolls inside its card. */
 .wpc-files {
   max-height: 480px;

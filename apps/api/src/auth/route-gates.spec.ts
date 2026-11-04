@@ -238,6 +238,7 @@ const GATED = [
   'GET /api/workspaces/:id/payroll/:period/staff-suggestions',
   'POST /api/workspaces/:id/payroll/:period/match-again',
   'GET /api/workspaces/:id/payroll/:period/files',
+  'GET /api/workspaces/:id/payroll/:period/files/:documentId/file',
   'POST /api/workspaces/:id/payroll/:period/files/:documentId/remove',
   // The staff list and engagement staffing: owners change it, owners and auditors read it.
   'GET /api/workspaces/:id/staff',
