@@ -382,10 +382,8 @@ export function MonthHead({
     <>
       <nav className="ad-crumbs" aria-label="Breadcrumb">
         <Link to={`/workspaces/${r.engagement.workspace.id}`}>{r.engagement.workspace.name}</Link> /{' '}
-        <Link to={`/engagements/${r.engagement.id}`} className="ad-mono">
-          {r.engagement.number}
-        </Link>{' '}
-        / {periodLabel(r.period)}
+        <Link to={`/engagements/${r.engagement.id}`}>{r.engagement.name}</Link> /{' '}
+        {periodLabel(r.period)}
       </nav>
       <div className="rl-head">
         <div className="min-w-0">
@@ -393,7 +391,12 @@ export function MonthHead({
             {periodLabel(r.period)} <StatusChip status={r.status} />
           </h1>
           <p className="ad-sub !mt-1">
-            <span className="ad-mono">{r.engagement.number}</span> · {r.engagement.name}
+            {r.engagement.number && (
+              <>
+                <span className="ad-mono">{r.engagement.number}</span> ·{' '}
+              </>
+            )}
+            <Link to={`/engagements/${r.engagement.id}`}>{r.engagement.name}</Link>
             {r.engagement.workspace.featuredDemo && (
               <>
                 {' '}
