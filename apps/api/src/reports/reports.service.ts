@@ -19,6 +19,7 @@ import {
   type ExpenseInput,
   type PayrollBudgetKind,
   type ClosingInput,
+  type PayrollSplitDto,
   type ReportDetail,
   type ReportStatus,
   type StatementMark,
@@ -1194,6 +1195,7 @@ export function expenseDto(
     tags: string[]
     payrollKey?: string | null
     payrollKind?: string | null
+    payrollSplit?: unknown
     documents: {
       purpose: string
       mark?: unknown
@@ -1222,6 +1224,7 @@ export function expenseDto(
     budgetLineName: (e.budgetLineId && lineNames.get(e.budgetLineId)) ?? null,
     tags: e.tags,
     fromPayroll: !!e.payrollKey,
+    payrollSplit: (e.payrollSplit ?? null) as PayrollSplitDto | null,
     payrollKind: (e.payrollKind as PayrollBudgetKind | null) ?? null,
     counts,
     documents: e.documents.map((d) => ({

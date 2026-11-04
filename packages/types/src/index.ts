@@ -529,6 +529,22 @@ export interface DocumentDto {
   uploadedAt: string
 }
 
+/**
+ * How a person's pay (or employer taxes and benefits) in one run is charged across programs, as payroll details charge
+ * it, with the hours each program's time report row shows: why a payroll line is less than the pay stub shows.
+ */
+export interface PayrollSplitDto {
+  /** pay: the person's pay itself; taxes: the employer's taxes and benefits on it. */
+  kind: 'pay' | 'taxes'
+  /** The person, as the line names them. */
+  who: string
+  /** The run's pay period, yyyy-mm-dd. */
+  start: string | null
+  end: string
+  /** One row per program; `mine` on the line's own. Hours null on every row when the time report does not show them. */
+  rows: { program: string; hours: number | null; amount: number; mine: boolean }[]
+}
+
 export interface AttachedDocument<P extends string = string> {
   purpose: P
   document: DocumentDto
@@ -568,6 +584,11 @@ export interface ExpenseDto extends ExpenseInput {
   documents: AttachedDocument<DocumentPurpose>[]
   /** Written by the payroll match from payroll details: payroll, proved like a payroll line whatever its budget line. */
   fromPayroll: boolean
+  /**
+   * A staff payroll line whose person's pay in the run is charged to several programs: the run's split, by program.
+   * Its pay stub opens with a note of it first. Null on any other line.
+   */
+  payrollSplit?: PayrollSplitDto | null
   /**
    * A books' payroll transaction and its kind (imported as payroll, or marked on the month): it counts on the budget
    * only until the payroll match covers that kind of payroll on the month. Null: an ordinary line.

@@ -12,6 +12,7 @@ import {
   type Role,
   type PayrollDocumentKind,
   type PayrollLineSearch,
+  type PayrollSplitDto,
   type PayrollUploadResult,
   type ReportDetail,
   type ReportLine,
@@ -317,8 +318,13 @@ export class PayrollService {
     const saved = (Array.isArray(link.marks) ? link.marks : []) as unknown as StatementMark[]
     const marks = saved.length ? saved : link.mark ? [link.mark as unknown as StatementMark] : []
     const original = new Uint8Array(await this.storage.read(doc.storageKey))
+    // A split staff line's pay stub opens with the note of its split (owner's decision, 2026-11-03).
+    const note =
+      'expense' in link && doc.kind === 'paystub'
+        ? ((link.expense.payrollSplit ?? null) as PayrollSplitDto | null)
+        : null
     const bytes = COPIED_TYPES.includes(doc.contentType)
-      ? (await itemCopy(original, marks)).bytes
+      ? (await itemCopy(original, marks, note)).bytes
       : original
     const subject =
       'expense' in link ? `expense ${link.expense.itemNumber}` : 'a work-experience payment'
