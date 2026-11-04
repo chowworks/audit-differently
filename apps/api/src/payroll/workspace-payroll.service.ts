@@ -55,7 +55,7 @@ import {
   type ProgramNames,
   type ProgramNamesDto,
 } from '@ad/types'
-import type { Document, Prisma } from '@prisma/client'
+import { Prisma, type Document } from '@prisma/client'
 import { ChecksService } from '../checks/checks.service'
 import { AccessLogService, type LogEntry } from '../core/access-log.service'
 import { allow, staffName, tenantWhere, workspaceRole, type Caller } from '../core/caller'
@@ -119,7 +119,7 @@ import {
   type StaffFound,
   type StaffRow,
 } from './staff-match'
-import { amountsOn, payMonthOf, payRunsOf, runOfLine, suggestedRuns } from './pay-runs'
+import { amountsOn, payMonthOf, payRunsOf, periodOn, runOfLine, suggestedRuns } from './pay-runs'
 import { chargesOf } from './payroll-details'
 import { cleanProgramNames, programNameRows, programNamesIn } from './program-names'
 import {
@@ -128,6 +128,7 @@ import {
   type LineMonth,
   type PayrollLineWrite,
 } from './payroll-lines'
+import { hoursOf } from './payroll-split'
 import { readStatement, type PageItem } from './statement-lines'
 import {
   lineOfKey,
@@ -738,7 +739,8 @@ export class WorkspacePayrollService {
       participants,
       matchMonths,
       paidMonths,
-      run.period
+      run.period,
+      programs.map((g) => g.names)
     )
     // The files proving the payroll lines reach those lines' months, as a link to any other item does.
     const asFile = new Map(files.map((f) => [f.id, f.id] as const))
@@ -2198,8 +2200,11 @@ export class WorkspacePayrollService {
     /** The months that have participants' payments once Save is done (kept or made from stubs). */
     paidMonths: Set<string>,
     /** The month matched: a charge of another month's run is not this month's line. */
-    period: string
+    period: string,
+    /** The workspace's programs by every name each goes by: a line's split shows each program once. */
+    programs: string[][] = []
   ) {
+    const runs = payRunsOf(files)
     const charges = files
       .filter((f) => f.kind === 'payroll-details')
       .flatMap((f) => chargesOf(f.lines))
@@ -2229,6 +2234,7 @@ export class WorkspacePayrollService {
           vendor: true,
           totalCost: true,
           allocationType: true,
+          payrollSplit: true,
         },
       }),
     ])
@@ -2253,7 +2259,19 @@ export class WorkspacePayrollService {
         .map((e) => e.date.toISOString().slice(0, 10)),
     }))
     const { writes, skipped, unbudgeted } = charges.length
-      ? payrollLinesOf({ charges, staff, participants, months: lineMonths, period })
+      ? payrollLinesOf({
+          charges,
+          staff,
+          participants,
+          months: lineMonths,
+          period,
+          hours: files
+            .filter((f) => f.kind === 'timesheet')
+            .flatMap((f) =>
+              hoursOf(f, (l) => runOfLine(runs, f, l)?.end ?? periodOn(f)?.end ?? null)
+            ),
+          programs,
+        })
       : { writes: [], skipped: [], unbudgeted: [] }
     const had = onMonths.filter((e) => e.payrollKey)
     const keyOfRow = (reportId: string, key: string) => `${reportId}|${key}`
@@ -2272,7 +2290,8 @@ export class WorkspacePayrollService {
         Number(e.totalCost).toFixed(2) === d.totalCost &&
         Number(e.allocatedAmount).toFixed(2) === d.allocatedAmount &&
         e.allocationType === d.allocationType &&
-        e.budgetLineId === d.budgetLineId
+        e.budgetLineId === d.budgetLineId &&
+        JSON.stringify(e.payrollSplit ?? null) === JSON.stringify(w.split ?? null)
       )
     }
     const change = writes.flatMap((w) => {
@@ -2478,6 +2497,7 @@ export class WorkspacePayrollService {
       // Set from the budget line by the database (Expense_4_budget_line); named here for the insert.
       reportLine: 'program-costs',
       budgetLineId: w.budgetLineId,
+      payrollSplit: w.split ? (w.split as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
     }
   }
 

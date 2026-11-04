@@ -1469,6 +1469,8 @@ describe('payroll lines Save writes from payroll details', () => {
       monthlyReportId: w.reportId,
       payrollKey: w.key,
       payrollKind: null,
+      // A line without a split reads back as null, not the DbNull it was written with.
+      payrollSplit: w.split ?? null,
       reportLine: 'staff-salaries',
       documents: [],
     }

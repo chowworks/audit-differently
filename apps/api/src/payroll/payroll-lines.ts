@@ -1,7 +1,8 @@
-import type { PayrollBudgetKind } from '@ad/types'
+import type { PayrollBudgetKind, PayrollSplitDto } from '@ad/types'
 import { personIn } from './match-proof'
 import { payMonthOf } from './pay-runs'
 import { engagementOfCharge, type PayrollCharge } from './payroll-details'
+import { splitOf, type ProgramHours } from './payroll-split'
 
 export { engagementOfCharge }
 import { printedName, type ParticipantRow, type StaffRow } from './staff-match'
@@ -47,6 +48,8 @@ export interface PayrollLineWrite {
   /** As the line's description says it: the person's name, or "Participants". */
   who: string
   account: string
+  /** A staff line's run split by program, when the person's pay is charged to several; else null. */
+  split?: PayrollSplitDto | null
 }
 
 /** Why a charge reached no line, said once per person and run on the plan. */
@@ -77,6 +80,10 @@ export function payrollLinesOf(input: {
   months: LineMonth[]
   /** The month matched, yyyy-mm: a charge of a run of another month (`payMonthOf`) is that month's, never this one's. */
   period?: string
+  /** Hours by person and program from the time reports (`hoursOf`): each program's hours on a line's split. */
+  hours?: ProgramHours[]
+  /** The workspace's programs by every name each goes by, for a line's split. */
+  programs?: string[][]
 }): {
   writes: PayrollLineWrite[]
   skipped: PayrollLineSkip[]
@@ -104,7 +111,15 @@ export function payrollLinesOf(input: {
   const skip = (s: PayrollLineSkip) => {
     if (!skipped.some((x) => x.who === s.who && x.end === s.end && x.why === s.why)) skipped.push(s)
   }
-  const add = (w: Omit<PayrollLineWrite, 'amount'>, amount: number) => {
+  // The charges each line is made of, for its split.
+  const madeOf = new Map<string, Set<PayrollCharge>>()
+  const printedOf = new Map<string, string>()
+  const add = (w: Omit<PayrollLineWrite, 'amount'>, amount: number, c?: PayrollCharge) => {
+    if (c)
+      madeOf.set(
+        `${w.reportId}|${w.key}`,
+        (madeOf.get(`${w.reportId}|${w.key}`) ?? new Set()).add(c)
+      )
     const had = writes.get(`${w.reportId}|${w.key}`)
     if (had) had.amount = cents(had.amount + amount)
     else writes.set(`${w.reportId}|${w.key}`, { ...w, amount: cents(amount) })
@@ -158,8 +173,10 @@ export function payrollLinesOf(input: {
           who: person.name,
           account: c.account,
         },
-        c.amount
+        c.amount,
+        c
       )
+      printedOf.set(person.id, printedName(person.name))
       continue
     }
     // A participant's pay counts from their payment; their employer taxes, the run's together, are a line.
@@ -200,6 +217,20 @@ export function payrollLinesOf(input: {
       },
       c.amount
     )
+  }
+  for (const [k, w] of writes) {
+    if (!w.staffId) continue
+    w.split = splitOf({
+      who: w.who,
+      printed: printedOf.get(w.staffId) ?? w.who,
+      end: w.end,
+      start: w.start,
+      pay: w.kind === 'staff-pay',
+      charges: input.charges,
+      mine: madeOf.get(k) ?? new Set(),
+      hours: input.hours ?? [],
+      programs: input.programs ?? [],
+    })
   }
   return {
     // A run booked and reversed in the same file (an accrual and its reversal) nets to nothing: no line of $0.00.

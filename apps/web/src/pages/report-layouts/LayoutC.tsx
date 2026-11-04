@@ -1077,8 +1077,12 @@ function ExpensesSection({
 }
 
 /** The proof a row needs: a green chip for each on file, a red "+" for each missing. */
-/** The page an attached proof's highlight is on: where its file opens. */
-function firstPage(d: ExpenseDto['documents'][number]): number | undefined {
+/**
+ * The page an attached proof opens at: its highlight's. A split line's pay stub opens at its first page, the note of
+ * the split the API puts before the stub.
+ */
+function firstPage(d: ExpenseDto['documents'][number], noteFirst = false): number | undefined {
+  if (noteFirst && d.document.kind === 'paystub') return undefined
   return d.mark?.page ?? d.marks?.[0]?.page
 }
 
@@ -1108,6 +1112,7 @@ function ProofChips({
   onAdd,
   proofOf,
   files = true,
+  noteFirst = false,
 }: {
   can: boolean
   needed: DocumentPurpose[]
@@ -1118,6 +1123,8 @@ function ProofChips({
   proofOf?: { target: 'expense' | 'wex'; id: string }
   /** False: "Bookkeepers see staff payroll" is off, so the proofs show as labels that open nothing. */
   files?: boolean
+  /** A split staff line: its pay stub's copy opens with the note of the split. */
+  noteFirst?: boolean
 }) {
   const { have, extra } = proofsShown(needed, docs)
   return (
@@ -1127,7 +1134,7 @@ function ProofChips({
         return d ? (
           <Chip key={purpose} tone="ok" fill title={files ? d.document.fileName : undefined}>
             {files ? (
-              <DocumentLink doc={d.document} proofOf={proofOf} page={firstPage(d)}>
+              <DocumentLink doc={d.document} proofOf={proofOf} page={firstPage(d, noteFirst)}>
                 ✓ {DOCUMENT_PURPOSE_LABELS[purpose]}
               </DocumentLink>
             ) : (
@@ -1161,7 +1168,7 @@ function ProofChips({
               <DocumentLink
                 doc={d.document}
                 proofOf={needed.includes(d.purpose) ? proofOf : undefined}
-                page={firstPage(d)}
+                page={firstPage(d, noteFirst)}
               >
                 {word}
               </DocumentLink>
@@ -1408,6 +1415,7 @@ function PayrollSection({
                         onAdd={(purpose) => addProof(row, purpose)}
                         proofOf={{ target: row.kind, id: row.id }}
                         files={files}
+                        noteFirst={row.kind === 'expense' && !!row.e.payrollSplit}
                       />
                       <SeeChecks
                         checks={f.checks}

@@ -401,6 +401,8 @@ model Expense {
   /// marked on the month: counts on the budget only until the payroll match covers that kind on the month, then kept for
   /// reconciliation. Null: not one.
   payrollKind       String?
+  /// A staff payroll line's run split by program (PayrollSplitDto), when the person's pay is charged to several (migration 20261104000100)
+  payrollSplit      Json?
   createdById       String?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt

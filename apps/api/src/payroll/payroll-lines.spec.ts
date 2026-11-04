@@ -59,6 +59,23 @@ describe('payrollLinesOf', () => {
     expect(skipped).toEqual([])
   })
 
+  it("keeps the run's split by program on a line whose person's pay is charged to several, and none on one that is not", () => {
+    const { writes } = payrollLinesOf({
+      charges,
+      staff,
+      participants,
+      months: [month('isy'), month('ait')],
+    })
+    const morgan = writes.find(
+      (w) => w.engagementId === 'e-isy' && w.who === 'Morgan Lee' && w.kind === 'staff-pay'
+    )!
+    expect(morgan.split!.kind).toBe('pay')
+    expect(morgan.split!.rows.filter((r) => r.mine).map((r) => r.amount)).toEqual([morgan.amount])
+    expect(morgan.split!.rows).toHaveLength(2)
+    const priya = writes.find((w) => w.who === 'Priya Shah' && w.kind === 'staff-pay')!
+    expect(priya.split).toBeNull()
+  })
+
   it("puts the employer's taxes on Staff taxes and benefits, and the participants' taxes per run on Participant taxes", () => {
     const { writes } = payrollLinesOf({
       charges,
