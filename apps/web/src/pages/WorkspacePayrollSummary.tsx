@@ -295,11 +295,14 @@ export function BudgetTracking({
   cards,
   error,
   colors,
+  onMatchAgain,
 }: {
   period: string
   cards: EngagementPayrollCardDto[] | null
   error: string | null
   colors: Map<string, string>
+  /** Owners, when the month has files: match them again, for a month started after the last match. */
+  onMatchAgain?: () => void
 }) {
   return (
     <section className="grid gap-3" aria-label="Engagement Budget Tracking">
@@ -318,9 +321,12 @@ export function BudgetTracking({
       <div className="wpd-cards">
         {(cards ?? []).map((c) => {
           const color = colorOf(colors, c.engagementId)
-          const lines = c.lines.filter(
+          // Its budget lines with an amount or spending; with none, every line it has, so a budget with no amounts yet
+          // still shows as one.
+          const used = c.lines.filter(
             (l) => l.budget > 0 || l.billedThisPeriod > 0 || l.previouslyBilled > 0
           )
+          const lines = used.length ? used : c.lines
           const total = lines.reduce(
             (t, l) => ({
               budget: t.budget + l.budget,
@@ -339,6 +345,19 @@ export function BudgetTracking({
                 <span className="wps-name">{c.engagementName}</span>
                 <Chip tone="muted">{REPORT_STATUS_LABELS[c.monthStatus]}</Chip>
               </header>
+              {c.notMatched && (
+                <div className="wpd-unmatched" role="status">
+                  <p className="text-sm">
+                    <b>Not matched yet.</b> This month started after the last payroll match, so its
+                    payroll is not on it yet. Match the same files again to bring it in.
+                  </p>
+                  {onMatchAgain && (
+                    <Button size="sm" kind="navy" onClick={onMatchAgain}>
+                      Match again
+                    </Button>
+                  )}
+                </div>
+              )}
               <div className="ad-tablewrap">
                 <table className="ad-table wpd-table">
                   <thead>
@@ -353,7 +372,7 @@ export function BudgetTracking({
                     {lines.length === 0 && (
                       <tr>
                         <td colSpan={4} className="text-soft">
-                          No approved budget yet.
+                          No budget lines yet.
                         </td>
                       </tr>
                     )}

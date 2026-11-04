@@ -2011,6 +2011,18 @@ export interface WorkspacePayrollRunDto extends PayrollMatchRunDto {
   totalsOnly: string[]
   /** What Save will do from the staff list and the participant lists, before anything is written. */
   plan: WorkspacePayrollPlanDto
+  /** The month's engagements that are not set up for payroll to reach them: the review asks the owner to fix them. */
+  setup?: WorkspacePayrollSetupDto[]
+}
+
+/**
+ * An engagement the month's payroll cannot reach: no staff tagged to it and no participants listed ('people'), or no
+ * budget line that holds payroll ('budget').
+ */
+export interface WorkspacePayrollSetupDto {
+  engagementId: string
+  engagementName: string
+  missing: ('people' | 'budget')[]
 }
 
 /** Save: the proofs chosen, and the reason when a chosen item's month is closed or submitted and must be reopened. */
@@ -2508,6 +2520,8 @@ export interface EngagementPayrollCardDto {
   engagementCode: string | null
   reportId: string
   monthStatus: ReportStatus
+  /** A draft month the workspace's payroll match has never saved (started after it): Match again brings its payroll. */
+  notMatched?: boolean
   /** Its staff payroll lines this month (Staff Salaries and Staff Fringe Benefits, the amount charged to the program). */
   charged: number
   /** What payroll details charges to the grant this month for the staff tagged to it (a shared person on each card). */

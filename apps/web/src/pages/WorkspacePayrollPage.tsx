@@ -162,6 +162,8 @@ export function WorkspacePayrollPage() {
   const [cardsVersion, setCardsVersion] = useState(0)
   /** The match on its own: opened from Actions, or a match started from the files card. */
   const [focus, setFocus] = useState(false)
+  // A card's Match again: the match below starts it.
+  const [again, setAgain] = useState(0)
   const [matchStep, setMatchStep] = useState<'Upload' | 'Match'>('Upload')
   /** Starts the match card afresh when the owner goes back to the summary. */
   const [matchKey, setMatchKey] = useState(0)
@@ -278,6 +280,9 @@ export function WorkspacePayrollPage() {
                 period={period}
                 cards={d.cards}
                 error={d.error}
+                onMatchAgain={
+                  owner && shownFiles?.files.length ? () => setAgain((n) => n + 1) : undefined
+                }
                 colors={colorsOf(
                   (staffList.data?.engagements ?? []).map((e) => e.id),
                   (d.cards ?? []).map((c) => c.engagementId)
@@ -329,6 +334,7 @@ export function WorkspacePayrollPage() {
                 key={`${period}-${matchKey}`}
                 compact={saved && !focus}
                 alone={focus}
+                again={again}
                 fileStats={<FileStats files={shownFiles} data={shownRecon} />}
                 onOpen={() => {
                   setFocus(true)
@@ -384,9 +390,12 @@ function WorkspaceMatch({
   onOpen,
   fileStats,
   alone = false,
+  again = 0,
 }: {
   workspaceId: string
   period: string
+  /** Raised by the page (a month not matched yet): Match again starts here, as its own button does. */
+  again?: number
   /** The month's set, once loaded. */
   files: WorkspacePayrollFilesDto | null
   filesError: string | null
@@ -661,6 +670,14 @@ function WorkspaceMatch({
     }
   }
   const hasFiles = !!files?.files.length
+  const againSeen = useRef(again)
+  useEffect(() => {
+    if (again === againSeen.current) return
+    againSeen.current = again
+    void matchAgain()
+    // matchAgain reads the run as it is when asked; only a new request starts it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [again])
   const againAction = hasFiles && (
     <div className="ad-actions justify-start">
       <Button kind="navy" disabled={!!busy} onClick={() => void matchAgain()}>

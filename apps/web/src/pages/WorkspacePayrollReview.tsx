@@ -457,6 +457,41 @@ export function PlanWords({
     <section aria-label="What Save will do">
       <h3 className="mx-work-title">What Save will do</h3>
       <ul className="grid list-disc gap-1 pl-5 text-sm">
+        {(run.setup ?? []).length > 0 && (
+          <li className="text-danger">
+            <b>⚠ Not set up for payroll</b> (its pay cannot reach it until this is fixed; then match
+            again):
+            <ul className="mt-1 grid gap-1">
+              {run.setup!.map((x) => (
+                <li key={x.engagementId} className="flex flex-wrap items-center gap-2">
+                  <span>
+                    {x.engagementName}:{' '}
+                    {x.missing
+                      .map((m) =>
+                        m === 'people'
+                          ? 'no staff tagged to it and no participants'
+                          : 'no budget line holds payroll'
+                      )
+                      .join('; ')}
+                  </span>
+                  {x.missing.includes('people') && (
+                    <Link to={`/workspaces/${run.workspaceId}/staff`}>Tag staff →</Link>
+                  )}
+                  {x.missing.includes('budget') &&
+                    (onBudget ? (
+                      <AddPayrollBudgetLine
+                        engagementId={x.engagementId}
+                        kind="staff-pay"
+                        onAdded={onBudget}
+                      />
+                    ) : (
+                      <Link to={`/engagements/${x.engagementId}`}>Open its budget →</Link>
+                    ))}
+                </li>
+              ))}
+            </ul>
+          </li>
+        )}
         <li>
           <b>Files:</b> {filesWords(run, chosen).line}.
         </li>

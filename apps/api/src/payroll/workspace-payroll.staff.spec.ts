@@ -227,6 +227,8 @@ function setup(
   let n = 0
   const tx = {
     $queryRaw: jest.fn(async () => []),
+    // Save marks the months it covered as matched.
+    monthlyReport: { updateMany: jest.fn() },
     document: {
       create: jest.fn(async ({ data }) => ({ id: `d-${++n}`, ...data })),
       createMany: jest.fn(),
@@ -290,7 +292,8 @@ function setup(
     },
     payrollMatchFile: { count: jest.fn().mockResolvedValue(0) },
     payrollDroppedDecision: { findMany: jest.fn(async () => dropped) },
-    monthlyReport: { findMany: jest.fn().mockResolvedValue(months) },
+    monthlyReport: { findMany: jest.fn().mockResolvedValue(months), updateMany: jest.fn() },
+    engagement: { findMany: jest.fn().mockResolvedValue([]) },
     expense: {
       groupBy: jest.fn().mockResolvedValue([]),
       findMany: jest.fn().mockResolvedValue([]),

@@ -245,6 +245,8 @@ model MonthlyReport {
   editsRequestedByEmail String?
   editsRequestComment   String?
   isFinal               Boolean           @default(false)
+  // When the workspace's payroll match last saved this month (draft months only): null, it was never matched.
+  payrollMatchedAt      DateTime?
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
   engagement            Engagement        @relation(fields: [engagementId], references: [id], onDelete: Cascade)

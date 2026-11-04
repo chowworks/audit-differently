@@ -229,7 +229,8 @@ suite("the workspace payroll plan for the September sample, on the demo seed's S
       },
       payrollMatchFile: { count: jest.fn().mockResolvedValue(0) },
       payrollDroppedDecision: { findMany: jest.fn(async () => []) },
-      monthlyReport: { findMany: jest.fn().mockResolvedValue(months) },
+      monthlyReport: { findMany: jest.fn().mockResolvedValue(months), updateMany: jest.fn() },
+      engagement: { findMany: jest.fn().mockResolvedValue([]) },
       // The demo's budget lines: Staff Salaries holds staff pay and taxes, WEX the participants' (the defaults).
       budgetLine: {
         findMany: jest.fn(async () =>
