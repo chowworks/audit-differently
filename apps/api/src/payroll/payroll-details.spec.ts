@@ -121,6 +121,33 @@ describe('payroll details (#22, section 8)', () => {
     ])
     expect(await sheetCopy(original, [])).toBeInstanceOf(Buffer)
   })
+
+  it('fills only the marked row when every row shares one format, as an accounting export does', async () => {
+    const book = new ExcelJS.Workbook()
+    const sheet = book.addWorksheet('Payroll details')
+    for (const [who, amount] of [
+      ['Morgan Lee', 612.5],
+      ['Casey Demo', 140],
+      ['Riley Sample', 300],
+    ] as const) {
+      const row = sheet.addRow(['2026-09-11', `Salary for ${who}`, amount])
+      row.eachCell((c) => (c.numFmt = '#,##0.00'))
+    }
+    const original = new Uint8Array(await book.xlsx.writeBuffer())
+    const copy = await sheetCopy(original, [{ page: 1, x: 0, y: 2 }])
+    const back = new ExcelJS.Workbook()
+    await back.xlsx.load(copy as unknown as ArrayBuffer)
+    const filled = [1, 2, 3].map(
+      (r) =>
+        (
+          back.worksheets[0]!.getRow(r).getCell(3).fill as
+            { fgColor?: { argb?: string } } | undefined
+        )?.fgColor?.argb ?? null
+    )
+    expect(filled).toEqual([null, 'FFFFF176', null])
+    // Its format is kept.
+    expect(back.worksheets[0]!.getRow(2).getCell(3).numFmt).toBe('#,##0.00')
+  })
 })
 
 describe('payroll details as an accounting system exports them (owner, 2026-11-01)', () => {

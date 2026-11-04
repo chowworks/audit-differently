@@ -333,6 +333,14 @@ export function sheetMarks(
 
 const YELLOW = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF176' } } as const
 
+/**
+ * Fills one cell yellow. A loaded workbook's cells share one style object among all cells of the same format, so the
+ * fill goes on a copy of this cell's style: set on the shared one (`cell.fill = …`), it filled every row of that format.
+ */
+const fill = (cell: ExcelJS.Cell) => {
+  cell.style = { ...cell.style, fill: YELLOW }
+}
+
 /** An item's own copy of payroll details: the original, untouched but for its highlights filled yellow. */
 export async function sheetCopy(
   bytes: Uint8Array,
@@ -344,8 +352,8 @@ export async function sheetCopy(
     const sheet = book.worksheets[m.page - 1]
     if (!sheet) continue
     const row = sheet.getRow(m.y)
-    if (m.x > 0) row.getCell(m.x).fill = YELLOW
-    else row.eachCell({ includeEmpty: true }, (cell) => (cell.fill = YELLOW))
+    if (m.x > 0) fill(row.getCell(m.x))
+    else row.eachCell({ includeEmpty: true }, fill)
   }
   return Buffer.from(await book.xlsx.writeBuffer())
 }
