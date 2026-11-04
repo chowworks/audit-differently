@@ -23,13 +23,6 @@
   color: var(--danger);
   font-weight: 700;
 }
-.wps-dot {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  margin-right: 8px;
-}
 /* The month's payroll files table (WorkspacePayrollFiles.tsx, WorkspacePayrollReview.tsx). */
 .wpc-remove {
   color: var(--danger);

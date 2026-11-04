@@ -2759,3 +2759,11 @@
 .ad-quiet-gone {
   opacity: 0;
 }
+
+/* An engagement's colour in its shape (EngagementMark.tsx), before its name. */
+.ad-eng-mark {
+  display: inline-block;
+  flex-shrink: 0;
+  margin-right: 6px;
+  vertical-align: -1px;
+}

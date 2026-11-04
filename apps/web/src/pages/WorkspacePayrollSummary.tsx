@@ -19,6 +19,7 @@ import {
 import { useLoad } from '@/hooks/useApi'
 import { AddPayrollBudgetLine } from '@/components/AddPayrollBudgetLine'
 import { ENGAGEMENT_COLORS } from '@/lib/engagement-colors'
+import { EngagementMark } from '@/components/EngagementMark'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty } from '@/components/ui'
 import { SLOT_LABEL } from '@/components/payroll-match/why'
@@ -238,7 +239,7 @@ export function PayrollActions({
                 <b>{r.text}</b>
                 {r.sub && <span className="wpd-action-sub">{r.sub}</span>}
                 <span className="ad-table-sub">
-                  {r.color && <span className="wps-dot" style={{ background: r.color }} />}
+                  {r.color && <EngagementMark color={r.color} />}
                   {r.who}
                 </span>
               </span>
@@ -342,7 +343,10 @@ export function BudgetTracking({
               style={{ borderTopColor: color }}
             >
               <header className="wps-card-head">
-                <span className="wps-name">{c.engagementName}</span>
+                <span className="wps-name">
+                  <EngagementMark color={color} />
+                  {c.engagementName}
+                </span>
                 <Chip tone="muted">{REPORT_STATUS_LABELS[c.monthStatus]}</Chip>
               </header>
               {c.notMatched && (
@@ -672,7 +676,7 @@ export function ResolveGrid({
 
   const engagement = (id: string, name: string, reportId: string) => (
     <Link to={`/reports/${reportId}`} className="wpd-eng">
-      <span className="wps-dot" style={{ background: colorOf(colors, id) }} />
+      <EngagementMark color={colorOf(colors, id)} />
       {name}
     </Link>
   )
@@ -1080,10 +1084,7 @@ function BooksAgainstFiles({
                 return (
                   <tr key={`${r.reportId}-${r.date}-${r.kind}`}>
                     <td>
-                      <span
-                        className="wps-dot"
-                        style={{ background: colorOf(colors, r.engagementId) }}
-                      />
+                      <EngagementMark color={colorOf(colors, r.engagementId)} />
                       {r.engagementName}
                     </td>
                     <td className="whitespace-nowrap">{shortDate(r.date)}</td>
