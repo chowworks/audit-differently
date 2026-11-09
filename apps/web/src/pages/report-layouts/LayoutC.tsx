@@ -109,6 +109,23 @@ function overrunOf(k: CheckDto, lines: TileLine[]) {
   return { line: line.line }
 }
 
+/**
+ * The tables a budget line's filter applies to: a payroll line's pay is in the payroll table, and the books' expenses
+ * on it (payroll fees, workers comp: no one's pay) are in the expenses table, so a payroll line with any filters both.
+ */
+export function tablesOfLine(
+  r: ReportDetail,
+  line: string
+): { payroll: boolean; expenses: boolean } {
+  const of = r.budgetLines.find((b) => b.id === line)
+  const payroll = !!of && PAYROLL_REPORT_LINES.has(of.reportLine)
+  if (!payroll) return { payroll: false, expenses: true }
+  return {
+    payroll: true,
+    expenses: r.expenses.some((e) => lineKey(e) === line && !isPayrollLine(e)),
+  }
+}
+
 /** Where each check shows: on its expense row, its payroll row, its report line, or above the grid. */
 export function placeChecks(r: ReportDetail) {
   const onLine = new Map<string, { check: CheckDto }>()
@@ -187,11 +204,13 @@ export function LayoutC({ r, busy, notice, highlight, sections: s, act }: MonthL
   const next = nextActionOf(r, p, act, () => setQuick('other'))
   const unmatched = r.matching.receipts.filter((x) => !x.dismissed && x.matchedTo.length === 0)
   const filterLine = (line: string, label: string) => {
-    const of = r.budgetLines.find((b) => b.id === line)
-    const payroll = !!of && PAYROLL_REPORT_LINES.has(of.reportLine)
-    const [tokens, set] = payroll ? [payTokens, setPayTokens] : [expTokens, setExpTokens]
-    if (!tokens.some((t) => t.field === 'line' && t.value === line))
-      set([...tokens.filter((t) => t.field !== 'line'), { field: 'line', value: line, label }])
+    const on = tablesOfLine(r, line)
+    const filter = (tokens: FilterToken[], set: (t: FilterToken[]) => void) => {
+      if (!tokens.some((t) => t.field === 'line' && t.value === line))
+        set([...tokens.filter((t) => t.field !== 'line'), { field: 'line', value: line, label }])
+    }
+    if (on.payroll) filter(payTokens, setPayTokens)
+    if (on.expenses) filter(expTokens, setExpTokens)
   }
 
   const row = actionRowOf(r, p, next, act)
