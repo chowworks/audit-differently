@@ -92,15 +92,15 @@ export const PAYROLL_FOLDERS = [
   ['Timesheets', 'timesheet'],
   ['Payroll registers', 'payroll-register'],
   ['Pay stubs', 'paystub'],
-  ['Bank statements', 'bank-statement'],
-  ['Payroll details', 'payroll-details'],
+  ['Bank & card statements', 'bank-statement'],
+  ['QuickBooks transactions', 'payroll-details'],
 ] as const
 export type PayrollFolderKind = (typeof PAYROLL_FOLDERS)[number][1]
 /**
  * The folders a zip may leave out: the payroll company's per-person export (GitHub issue #22, section 8), and pay stubs
  * (a month of staff pay only has none to give).
  */
-export const OPTIONAL_FOLDERS = new Set<string>(['Payroll details', 'Pay stubs'])
+export const OPTIONAL_FOLDERS = new Set<string>(['QuickBooks transactions', 'Pay stubs'])
 /** The folder of a program names file: the same program's names in the books and the payroll company, one row each. */
 export const PROGRAM_NAMES_FOLDER = 'Program names'
 /**
@@ -111,19 +111,19 @@ export const ACCOUNT_MAPPING_FOLDER = 'Account mapping'
 const ACCOUNT_MAPPING_NAMES = [ACCOUNT_MAPPING_FOLDER, 'Account mappings']
 /**
  * Other names a folder goes by (owner's decision, 2026-11-09): the bank's and the card's statements share one folder,
- * and payroll details is the books' whole month, its expenses too.
+ * and the books' export is the whole month, its expenses too. The old names still open a zip made before.
  */
 const FOLDER_ALIASES: Record<string, string[]> = {
-  'Bank statements': ['Bank & card statements', 'Bank and card statements'],
-  'Payroll details': ['QuickBooks transactions', 'Books transactions'],
+  'Bank & card statements': ['Bank statements', 'Bank and card statements'],
+  'QuickBooks transactions': ['Payroll details', 'Books transactions'],
 }
 const isFolder = (name: string, given: string) =>
   [name, ...(FOLDER_ALIASES[name] ?? [])].some((n) => same(n, given))
 /** The folders a CSV may be in: the payroll company's journals, job reports and exports, and program names. */
-const CSV_FOLDERS = new Set<string>(['Timesheets', 'Payroll registers', 'Payroll details'])
+const CSV_FOLDERS = new Set<string>(['Timesheets', 'Payroll registers', 'QuickBooks transactions'])
 
 /**
- * A payroll zip checked against its required layout: the folders (Payroll details, Pay stubs and Program names when the
+ * A payroll zip checked against its required layout: the folders (QuickBooks transactions, Pay stubs, Program names and Account mapping when the
  * team has them) and nothing else (a zip of the folder itself, one level up, is fine). Every problem at once, so the
  * person fixes the zip in one go. A program names file is not proof: it comes back apart, in `names`.
  */
@@ -188,7 +188,7 @@ export function sortPayrollZip(
       problems.push(`The zip has no "${name}" folder, or it is empty.`)
   if (unknown.size)
     problems.push(
-      `${[...unknown].map((u) => `"${u}"`).join(', ')} ${unknown.size === 1 ? 'is not one of the folders' : 'are not among the folders'}: use Timesheets, Payroll registers, Pay stubs, Bank statements, Payroll details and Program names.`
+      `${[...unknown].map((u) => `"${u}"`).join(', ')} ${unknown.size === 1 ? 'is not one of the folders' : 'are not among the folders'}: use Timesheets, Payroll registers, Pay stubs, Bank & card statements, QuickBooks transactions, Program names and Account mapping.`
     )
   if (outside.length)
     problems.push(
@@ -196,7 +196,7 @@ export function sortPayrollZip(
     )
   if (misplaced.length)
     problems.push(
-      `${misplaced.length === 1 ? '1 file is' : `${misplaced.length} files are`} in a folder that does not take its type: a CSV goes in Timesheets, Payroll registers, Payroll details or Program names, and Program names takes an XLSX or CSV (${misplaced.slice(0, 3).join(', ')}${misplaced.length > 3 ? ', …' : ''}).`
+      `${misplaced.length === 1 ? '1 file is' : `${misplaced.length} files are`} in a folder that does not take its type: a CSV goes in Timesheets, Payroll registers, QuickBooks transactions, Program names or Account mapping, and Program names and Account mapping take an XLSX or CSV (${misplaced.slice(0, 3).join(', ')}${misplaced.length > 3 ? ', …' : ''}).`
     )
   if (skipped.length)
     problems.push(

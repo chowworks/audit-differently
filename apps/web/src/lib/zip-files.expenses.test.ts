@@ -5,7 +5,7 @@ import { sortPayrollZip } from './zip-files'
 const f = (path: string) => ({ path, file: new File(['x'], path.split('/').pop()!) })
 
 describe("the payroll zip's expenses folders", () => {
-  it('takes the bank and card statements in one folder, and the books export by its new name', () => {
+  it('takes the bank and card statements in one folder, and the books export, by their names', () => {
     const { files, problems } = sortPayrollZip(
       [
         f('Timesheets/t.pdf'),
@@ -20,9 +20,28 @@ describe("the payroll zip's expenses folders", () => {
     expect(files.map((x) => [x.folder, x.kind, x.file.name])).toEqual([
       ['Timesheets', 'timesheet', 't.pdf'],
       ['Payroll registers', 'payroll-register', 'r.pdf'],
-      ['Bank statements', 'bank-statement', 'bank.pdf'],
-      ['Bank statements', 'bank-statement', 'card.pdf'],
-      ['Payroll details', 'payroll-details', 'books.xlsx'],
+      ['Bank & card statements', 'bank-statement', 'bank.pdf'],
+      ['Bank & card statements', 'bank-statement', 'card.pdf'],
+      ['QuickBooks transactions', 'payroll-details', 'books.xlsx'],
+    ])
+  })
+
+  it('still opens a zip made with the old names', () => {
+    const { files, problems } = sortPayrollZip(
+      [
+        f('Timesheets/t.pdf'),
+        f('Payroll registers/r.pdf'),
+        f('Bank statements/b.pdf'),
+        f('Payroll details/books.xlsx'),
+      ],
+      []
+    )
+    expect(problems).toEqual([])
+    expect(files.map((x) => [x.folder, x.kind])).toEqual([
+      ['Timesheets', 'timesheet'],
+      ['Payroll registers', 'payroll-register'],
+      ['Bank & card statements', 'bank-statement'],
+      ['QuickBooks transactions', 'payroll-details'],
     ])
   })
 

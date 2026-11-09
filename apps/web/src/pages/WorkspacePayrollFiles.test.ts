@@ -25,8 +25,8 @@ describe('payrollFolders', () => {
       ['Timesheets', ['hours.csv']],
       ['Payroll registers', []],
       ['Pay stubs', ['Jordan Sample.pdf', 'stub-9.pdf', 'stub-10.pdf']],
-      ['Bank statements', []],
-      ['Payroll details', []],
+      ['Bank & card statements', []],
+      ['QuickBooks transactions', []],
     ])
   })
 })

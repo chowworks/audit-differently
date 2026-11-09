@@ -1097,7 +1097,7 @@ export const FILE_MAX_BYTES = 25 * 1024 * 1024
 const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`
 
 /**
- * Step 1: one zip with the sample's folders (Timesheets, Payroll registers, Bank statements; Pay stubs, Payroll details and Program names when the team has them), opened in the
+ * Step 1: one zip with the sample's folders (Timesheets, Payroll registers, Bank & card statements; Pay stubs, QuickBooks transactions, Program names and Account mapping when the team has them), opened in the
  * browser. Each folder sets its files' type; a zip laid out any other way is refused, with every problem at once.
  * The files then go up to the server, 20 at a time, to be read and matched; nothing is filed until Save.
  */
@@ -1210,7 +1210,7 @@ export function UploadPanel({
         </p>
       )}
       <Field
-        label="One zip with the folders Timesheets, Payroll registers and Bank statements (and Pay stubs, Payroll details and Program names, when you have them), as in the sample above. Files as your payroll company and books export them: PDF, XLSX or CSV, and a zip of pay stubs as it comes."
+        label="One zip with the folders Timesheets, Payroll registers and Bank & card statements (and Pay stubs, QuickBooks transactions, Program names and Account mapping, when you have them), as in the sample above. Files as your payroll company and books export them: PDF, XLSX or CSV, and a zip of pay stubs as it comes."
         required
         hint={`Up to ${mb(ZIP_MAX_BYTES)} and ${maxFiles.toLocaleString('en-US')} files; each file up to ${mb(FILE_MAX_BYTES)}.`}
       >

@@ -465,12 +465,12 @@ export async function sampleFiles(): Promise<{ folder: string; name: string; byt
       })
   }
   out.push({
-    folder: 'Bank statements',
+    folder: 'Bank & card statements',
     name: 'Lakeside Community Bank statement 2026-09.pdf',
     bytes: await bankStatementPdf(),
   })
   out.push({
-    folder: 'Payroll details',
+    folder: 'QuickBooks transactions',
     name: 'Payroll details 2026-09.xlsx',
     bytes: await payrollDetailsXlsx(),
   })

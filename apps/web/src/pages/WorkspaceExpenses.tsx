@@ -84,7 +84,7 @@ export function WorkspaceExpenses({
         {!d.file ? (
           <p className="text-soft">
             The month's files have no books export with expenses. Put the month's QuickBooks
-            Transaction List with Splits in the zip's Payroll details folder.
+            Transaction List with Splits in the zip's QuickBooks transactions folder.
           </p>
         ) : (
           <p className="text-sm">

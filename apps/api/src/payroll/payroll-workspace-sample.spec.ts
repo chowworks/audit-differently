@@ -46,7 +46,7 @@ const KIND: Record<string, MatchFile['kind']> = {
   Timesheets: 'timesheet',
   'Payroll registers': 'payroll-register',
   'Pay stubs': 'paystub',
-  'Bank statements': 'bank-statement',
+  'Bank & card statements': 'bank-statement',
 }
 const [RUN1, RUN2] = RUNS as [(typeof RUNS)[0], (typeof RUNS)[0]]
 const dollars = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
@@ -115,7 +115,7 @@ suite('the workspace payroll sample', () => {
         namesFile = committed
         continue
       }
-      if (f.folder === 'Payroll details') {
+      if (f.folder === 'QuickBooks transactions') {
         details = await sheetLines(committed)
         continue
       }

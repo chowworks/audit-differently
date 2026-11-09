@@ -1011,8 +1011,8 @@ function WorkspaceMatch({
       <p className="ad-hand-address">
         <span className="ad-hand-address-label">The zip&apos;s layout</span>
         <span>
-          Timesheets · Payroll registers · Pay stubs · Bank statements · Payroll details (when you
-          have it)
+          Timesheets · Payroll registers · Pay stubs · Bank &amp; card statements · QuickBooks
+          transactions · Program names · Account mapping (when you have them)
         </span>
         <a href="/samples/payroll-workspace-sample.zip" download>
           Download a sample (zip)
