@@ -40,6 +40,7 @@ import {
   usePayrollAi,
 } from '@/components/payroll-match/AiReadBox'
 import { NotFoundPage } from '@/pages/NotFoundPage'
+import { WorkspaceExpenses } from '@/pages/WorkspaceExpenses'
 import { UploadPanel } from '@/components/PayrollProof'
 import {
   BudgetTracking,
@@ -170,6 +171,8 @@ export function WorkspacePayrollPage() {
   /** What Save did, said once over the summary it returns to. */
   const [savedNote, setSavedNote] = useState<string | null>(null)
   const [resolve, setResolve] = useState<ResolveKind | null>(null)
+  /** The step after payroll: the month's expenses from the books, opened by Save or from the summary. */
+  const [expensesOpen, setExpensesOpen] = useState(false)
   // Another month starts afresh: no note, filter or "saved just now" carried over from the last one.
   const [shownPeriod, setShownPeriod] = useState(period)
   if (shownPeriod !== period) {
@@ -178,6 +181,7 @@ export function WorkspacePayrollPage() {
     setSavedNote(null)
     setResolve(null)
     setFocus(false)
+    setExpensesOpen(false)
   }
   const d = useCards(id, period ?? '', period ? cardsVersion : 0, !!period)
   if (wStatus === 404 || status === 404 || (w && !reader)) return <NotFoundPage />
@@ -222,7 +226,32 @@ export function WorkspacePayrollPage() {
           </label>
         )}
       </div>
-      {!period ? (
+      {period && expensesOpen ? (
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
+          <button
+            type="button"
+            className="wpd-back"
+            onClick={() => {
+              setExpensesOpen(false)
+              window.scrollTo({ top: 0 })
+            }}
+          >
+            ← Back to {periodLabel(period)}&apos;s summary
+          </button>
+          {owner && <Stepper steps={['Upload', 'Match', 'Expenses'] as const} current="Expenses" />}
+          {savedNote && <Notice tone="ok">{savedNote}</Notice>}
+          <WorkspaceExpenses
+            workspaceId={w.id}
+            period={period}
+            onDone={(note) => {
+              setExpensesOpen(false)
+              setSavedNote(note)
+              setCardsVersion((n) => n + 1)
+              window.scrollTo({ top: 0 })
+            }}
+          />
+        </div>
+      ) : !period ? (
         <Empty>No engagement has a month yet. Start one on an engagement&apos;s page first.</Empty>
       ) : (
         // minmax(0, 1fr): the column is the page's width, never the widest thing in it, so the page never scrolls sideways.
@@ -291,6 +320,24 @@ export function WorkspacePayrollPage() {
             </div>
           )}
           {saved && !focus && (
+            <div style={{ order: 3 }}>
+              <Card
+                title="Expenses from the books"
+                aside={
+                  <Button size="sm" kind="navy" onClick={() => setExpensesOpen(true)}>
+                    {owner ? 'Review and save expenses' : 'See expenses'}
+                  </Button>
+                }
+              >
+                <p className="text-sm text-soft">
+                  The month&apos;s other expenses: every line of the books export that is no
+                  one&apos;s pay, on the engagement its class is and the budget line its account
+                  maps to.
+                </p>
+              </Card>
+            </div>
+          )}
+          {saved && !focus && (
             <div style={{ order: 4 }}>
               <Reconciliation
                 key={`rd-${period}`}
@@ -355,10 +402,11 @@ export function WorkspacePayrollPage() {
                   recon.setData(r)
                   setCardsVersion((n) => n + 1)
                   void files.reload()
-                  // Save goes back to the month's summary, where the results are, not a Done step.
+                  // Save goes on to the expenses step; from there, back to the month's summary.
                   setFocus(false)
                   setMatchKey((n) => n + 1)
                   setSavedNote(`Saved the payroll for ${periodLabel(period)}.`)
+                  setExpensesOpen(true)
                   window.scrollTo({ top: 0 })
                 }}
               />
@@ -415,7 +463,8 @@ function WorkspaceMatch({
   /** The match open on its own, with nothing else on the page (no files card above it). */
   alone?: boolean
 }) {
-  const STEPS = ['Upload', 'Match'] as const
+  // Expenses, the step after Save, opens on the page (WorkspaceExpenses).
+  const STEPS = ['Upload', 'Match', 'Expenses'] as const
   const [step, setStep] = useState<'Upload' | 'Match'>('Upload')
   useEffect(() => onStep?.(step), [step, onStep])
   /** "Read the files with AI", ticked on the Upload step: unticked each time the page opens (#22). */
@@ -572,7 +621,9 @@ function WorkspaceMatch({
     list: PayrollUpload,
     where: 'files' | 'match',
     /** The zip's "Program names" files: merged into the workspace's program names first, so the match reads by them. */
-    names: File[] = []
+    names: File[] = [],
+    /** The zip's "Account mapping" files: each kept as its engagement's account mapping, for the expenses step. */
+    mappings: File[] = []
   ): Promise<boolean> => {
     clearErrors()
     const fail = where === 'files' ? setFileError : setRunError
@@ -586,6 +637,17 @@ function WorkspaceMatch({
         } catch (e) {
           // Nothing of the payroll files was sent yet: nothing to start again.
           fail(`Program names/${file.name}: ${(e as Error).message}`)
+          return false
+        }
+      }
+      for (const file of mappings) {
+        setBusy(`Reading the account mapping in ${file.name}…`)
+        const form = new FormData()
+        form.append('file', file)
+        try {
+          await api.upload(`/workspaces/${workspaceId}/account-mappings`, form)
+        } catch (e) {
+          fail(`Account mapping/${file.name}: ${(e as Error).message}`)
           return false
         }
       }
@@ -988,7 +1050,7 @@ function WorkspaceMatch({
           busy,
           error: fileError,
           changeOpen: !!run,
-          onReplace: (zip, names) => upload('replace', zip, 'files', names),
+          onReplace: (zip, names, mappings) => upload('replace', zip, 'files', names, mappings),
           onAdd: (added) => upload('add', added, 'files'),
           onRemove: removeFile,
         }}
@@ -1006,7 +1068,7 @@ function WorkspaceMatch({
             busy,
             error: fileError,
             changeOpen: !!run,
-            onReplace: (zip, names) => upload('replace', zip, 'files', names),
+            onReplace: (zip, names, mappings) => upload('replace', zip, 'files', names, mappings),
             onAdd: (added) => upload('add', added, 'files'),
             onRemove: removeFile,
           }}
@@ -1035,7 +1097,9 @@ function WorkspaceMatch({
               maxFiles={MAX_WORKSPACE_PAYROLL_FILES}
               takesNames
               kind="navy"
-              onReady={(zip, _replace, names) => void upload('replace', zip, 'match', names)}
+              onReady={(zip, _replace, names, mappings) =>
+                void upload('replace', zip, 'match', names, mappings)
+              }
             />
           </div>
         )}
@@ -1065,8 +1129,8 @@ function WorkspaceMatch({
                 maxFiles={MAX_WORKSPACE_PAYROLL_FILES}
                 takesNames
                 kind="navy"
-                onReady={(zip, replace, names) =>
-                  void upload(replace ? 'replace' : 'add', zip, 'match', names)
+                onReady={(zip, replace, names, mappings) =>
+                  void upload(replace ? 'replace' : 'add', zip, 'match', names, mappings)
                 }
                 onSkip={() => void matchAgain()}
               />
@@ -1235,7 +1299,9 @@ function WorkspaceMatch({
                   takesNames
                   kind="navy"
                   action="Send the rest of the zip"
-                  onReady={(zip, _replace, names) => void upload('replace', zip, 'match', names)}
+                  onReady={(zip, _replace, names, mappings) =>
+                    void upload('replace', zip, 'match', names, mappings)
+                  }
                 />
               </div>
             )}

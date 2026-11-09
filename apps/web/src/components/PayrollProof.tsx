@@ -24,6 +24,7 @@ import {
   PAYROLL_FOLDERS,
   OPTIONAL_FOLDERS,
   PROGRAM_NAMES_FOLDER,
+  ACCOUNT_MAPPING_FOLDER,
   filesFromZip,
   sortPayrollZip,
   type PayrollFolderKind,
@@ -1126,7 +1127,9 @@ export function UploadPanel({
   onReady: (
     files: { file: File; kind: PayrollFolderKind }[],
     replace: boolean,
-    names: File[]
+    names: File[],
+    /** Its "Account mapping" files: not proof either (each engagement's account mapping). */
+    mappings: File[]
   ) => void
   /** Already uploaded this month: match those files again without uploading more. */
   onSkip?: () => void
@@ -1140,6 +1143,7 @@ export function UploadPanel({
   const [zipName, setZipName] = useState<string | null>(null)
   const [files, setFiles] = useState<{ file: File; kind: PayrollFolderKind; folder: string }[]>([])
   const [names, setNames] = useState<File[]>([])
+  const [mappings, setMappings] = useState<File[]>([])
   const [problems, setProblems] = useState<string[]>([])
   // Too big to take: the zip, the number of files, or one file over the server's limit. Said as it is, not as a layout problem.
   const [tooBig, setTooBig] = useState<string | null>(null)
@@ -1147,6 +1151,7 @@ export function UploadPanel({
   const choose = async (zip: File | undefined) => {
     setFiles([])
     setNames([])
+    setMappings([])
     setProblems([])
     setTooBig(null)
     setZipName(zip?.name ?? null)
@@ -1176,13 +1181,16 @@ export function UploadPanel({
             .map((f) => f.file.name)
             .join(', ')}${big.length > 3 ? ', …' : ''}.`
         )
-      const bigNames = takesNames ? sorted.names.filter((f) => f.size > NAMES_MAX_BYTES) : []
+      const bigNames = takesNames
+        ? [...sorted.names, ...sorted.mappings].filter((f) => f.size > NAMES_MAX_BYTES)
+        : []
       if (bigNames.length)
         setTooBig(
-          `${PROGRAM_NAMES_FOLDER}/${bigNames[0]!.name} is over ${mb(NAMES_MAX_BYTES)}: a program names file is read in memory, up to ${mb(NAMES_MAX_BYTES)}.`
+          `${sorted.names.includes(bigNames[0]!) ? PROGRAM_NAMES_FOLDER : ACCOUNT_MAPPING_FOLDER}/${bigNames[0]!.name} is over ${mb(NAMES_MAX_BYTES)}: a program names or account mapping file is read in memory, up to ${mb(NAMES_MAX_BYTES)}.`
         )
       setFiles(sorted.files)
       setNames(sorted.names)
+      setMappings(sorted.mappings)
       setProblems(sorted.problems)
     } catch (e) {
       setProblems([(e as Error).message])
@@ -1244,6 +1252,13 @@ export function UploadPanel({
                 <span className="ad-tile-note">{names.length === 1 ? 'file' : 'files'}</span>
               </div>
             )}
+            {mappings.length > 0 && takesNames && (
+              <div className="ad-tile ad-tile-ok">
+                <span className="ad-tile-label">{ACCOUNT_MAPPING_FOLDER}</span>
+                <span className="ad-tile-value">{mappings.length}</span>
+                <span className="ad-tile-note">{mappings.length === 1 ? 'file' : 'files'}</span>
+              </div>
+            )}
           </div>
           {names.length > 0 && !takesNames && (
             <p className="text-sm text-soft">
@@ -1279,7 +1294,9 @@ export function UploadPanel({
         )}
         <Button
           kind={kind}
-          onClick={() => onReady(files, replace, takesNames ? names : [])}
+          onClick={() =>
+            onReady(files, replace, takesNames ? names : [], takesNames ? mappings : [])
+          }
           disabled={!files.length || problems.length > 0 || !!tooBig || !!busy}
         >
           {busy ?? action}

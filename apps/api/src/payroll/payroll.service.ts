@@ -224,7 +224,7 @@ export class PayrollService {
       const e = await this.prisma.expense.findFirst({ where: { id, ...tenantWhere(caller) } })
       if (!e) throw new NotFoundException()
       const r = await this.reports.editable(caller, e.monthlyReportId)
-      if (!PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine))
+      if (!PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine) || e.booksKey)
         throw new BadRequestException('Only payroll lines are linked to a bank statement here')
       return {
         r,

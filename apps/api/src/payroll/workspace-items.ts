@@ -155,6 +155,8 @@ export async function workspaceItems(
         payRun: d.payRun === true,
       }))
     for (const e of r.expenses) {
+      // A line from the books' expenses is a bill on whatever line it is (a payroll fee on Fringe): never a payroll item.
+      if (e.booksKey) continue
       if (!PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine)) continue
       if (e.payrollKind && !countsOnBudget(e, covers.get(r.id))) continue
       const proof: ProofItem = {

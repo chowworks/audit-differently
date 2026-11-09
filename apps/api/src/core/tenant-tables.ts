@@ -57,6 +57,9 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   'PayrollReadingSetting',
   // What AI read from a payroll file, kept by its contents (migration 20261019000500).
   'PayrollFileAiReading',
+  // Each engagement's account mapping, for the month's expenses from the books (migration 20261109000100): owners
+  // and auditors read it, owners change it.
+  'AccountMapping',
 ])
 
 type Fields = Map<string, string> // relation field name -> the model it points at

@@ -247,6 +247,13 @@ const GATED = [
   'DELETE /api/staff/:staffId',
   'PUT /api/staff/:staffId/engagements/:engagementId',
   'DELETE /api/staff/:staffId/engagements/:engagementId',
+  // The month's expenses from the books, and each engagement's account mapping: owners change them, owners and
+  // auditors read them.
+  'POST /api/workspaces/:id/account-mappings',
+  'PATCH /api/workspaces/:id/account-mappings/:mappingId',
+  'DELETE /api/workspaces/:id/account-mappings/:mappingId',
+  'GET /api/workspaces/:id/expenses/:period',
+  'POST /api/workspaces/:id/expenses/:period/save',
 ]
 
 describe('route gates', () => {

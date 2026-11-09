@@ -184,6 +184,7 @@ async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Findi
           budgetLineId: e.budgetLineId,
           // The match's own line, or a books' payroll transaction that still counts: proved as payroll.
           fromPayroll: !!e.payrollKey || !!e.payrollKind,
+          fromBooks: !!e.booksKey,
           shareOfRun: !!e.payrollKey,
           countedTwice: countedTwice(e, covers.get(report.id))
             ? PAYROLL_BUDGET_KIND_LABELS[

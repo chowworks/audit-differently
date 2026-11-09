@@ -1196,6 +1196,7 @@ export function expenseDto(
     payrollKey?: string | null
     payrollKind?: string | null
     payrollSplit?: unknown
+    booksKey?: string | null
     documents: {
       purpose: string
       mark?: unknown
@@ -1224,6 +1225,7 @@ export function expenseDto(
     budgetLineName: (e.budgetLineId && lineNames.get(e.budgetLineId)) ?? null,
     tags: e.tags,
     fromPayroll: !!e.payrollKey,
+    fromBooks: !!e.booksKey,
     payrollSplit: (e.payrollSplit ?? null) as PayrollSplitDto | null,
     payrollKind: (e.payrollKind as PayrollBudgetKind | null) ?? null,
     counts,

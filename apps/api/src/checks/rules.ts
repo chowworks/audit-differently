@@ -26,12 +26,14 @@ export interface RuleExpense {
   memo?: string | null
   totalCost: number
   allocatedAmount: number
-  allocationType: 'direct' | 'payroll' | 'usage'
+  allocationType: 'direct' | 'payroll' | 'usage' | 'books'
   reportLine: ReportLine
   /** The engagement's budget line it is spent against; null: none chosen yet. */
   budgetLineId?: string | null
   /** Written by the payroll match from payroll details: a payroll line whatever its budget line. */
   fromPayroll?: boolean
+  /** Written by the month's expenses from the books: a bill, proved by its invoice and payment whatever its line. */
+  fromBooks?: boolean
   /**
    * Written by the payroll match: one program's share of a person's pay run, or the employer's taxes on it. Their pay
    * stub shows the whole pay, never the share, so its amount is not asked for there.
@@ -195,7 +197,8 @@ export function runRules(month: RuleMonth): Finding[] {
     const has = (p: DocumentPurpose) => e.documents.includes(p)
     const label = `${e.itemNumber} (${e.vendor}, ${money(e.allocatedAmount)})`
 
-    if (PAYROLL_REPORT_LINES.has(e.reportLine) || e.fromPayroll) {
+    const payrollLine = (PAYROLL_REPORT_LINES.has(e.reportLine) && !e.fromBooks) || e.fromPayroll
+    if (payrollLine) {
       if (!has('timesheet'))
         findings.push({
           code: 'missing-timesheet',
@@ -227,7 +230,7 @@ export function runRules(month: RuleMonth): Finding[] {
         message: `${label}: no bank or card statement, cancelled check or EFT confirmation attached.`,
       })
 
-    if ((PAYROLL_REPORT_LINES.has(e.reportLine) || e.fromPayroll) && e.proofs)
+    if (payrollLine && e.proofs)
       for (const what of mismatches(
         { amount: e.totalCost, participant: false, shareOfRun: e.shareOfRun },
         e.proofs,
@@ -245,7 +248,7 @@ export function runRules(month: RuleMonth): Finding[] {
         code: 'missing-allocation',
         severity: 'blocker',
         expenseId: e.id,
-        message: `${label}: allocated ${e.allocationType === 'payroll' ? 'by payroll hours' : 'by usage'} but no calculation attached.`,
+        message: `${label}: allocated ${e.allocationType === 'payroll' ? 'by payroll hours' : e.allocationType === 'books' ? 'as the books share it' : 'by usage'} but no calculation attached.`,
       })
 
     if (e.allocatedAmount > e.totalCost + 0.005)

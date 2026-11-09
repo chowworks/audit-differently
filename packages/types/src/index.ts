@@ -115,13 +115,14 @@ export interface BudgetChange extends EngagementDetail {
 
 // ── Expenses and documents ──────────────────────────────────────────────────
 
-export const ALLOCATION_TYPES = ['direct', 'payroll', 'usage'] as const
+export const ALLOCATION_TYPES = ['direct', 'payroll', 'usage', 'books'] as const
 export type AllocationType = (typeof ALLOCATION_TYPES)[number]
 /** How the expense form and the access log name each allocation type. */
 export const ALLOCATION_TYPE_LABELS: Record<AllocationType, string> = {
   direct: 'Direct (all of it)',
   payroll: 'Shared, by payroll hours',
   usage: 'Shared, by usage',
+  books: 'Shared, as the books allocate it',
 }
 
 export const DOCUMENT_KINDS = [
@@ -596,15 +597,26 @@ export interface ExpenseDto extends ExpenseInput {
   payrollKind: PayrollBudgetKind | null
   /** Whether it counts on the budget now: false for a books' payroll transaction the match has covered. */
   counts: boolean
+  /**
+   * Written by the month's expenses from the books (the zip's accounting export): a bill, proved by its invoice and
+   * payment, whatever its budget line (a payroll fee on Fringe is no one's pay).
+   */
+  fromBooks?: boolean
 }
 
-/** A payroll line: on a payroll line of the funder's form, or written by the payroll match (on Program Costs, say). */
+/**
+ * A payroll line: on a payroll line of the funder's form, or written by the payroll match (on Program Costs, say). A
+ * line from the books' expenses is a bill on whatever line it is.
+ */
 export const isPayrollLine = (e: {
   reportLine: string
   fromPayroll?: boolean
   payrollKind?: string | null
+  fromBooks?: boolean
 }) =>
-  PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine) || e.fromPayroll === true || !!e.payrollKind
+  (PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine) && e.fromBooks !== true) ||
+  e.fromPayroll === true ||
+  !!e.payrollKind
 
 export interface CheckDto {
   id: string
@@ -2693,3 +2705,123 @@ export const namesOfEngagement = (
   list: ProgramNames[],
   engagement: { id: string; name: string }
 ): string[] => [engagement.name, ...(programOf(list, engagement)?.names ?? [])]
+
+// ── The month's expenses from the books (owner's decision, 2026-11-09) ────────────────────────────────────────────
+// The zip's accounting export holds the whole month; payroll takes the rows of a person's pay run, and every other line
+// booked to an expense account is an expense. Each is routed to an engagement by its class (program names) and to a
+// budget line by its account (the engagement's account mapping file, in the zip's "Account mapping" folder).
+
+/** Why a books line is, or is not, on an engagement. */
+export const BOOKS_LINE_STATUSES = [
+  'billed',
+  'already-entered',
+  'allocation-pool',
+  'no-class',
+  'no-program',
+  'not-ours',
+  'no-mapping',
+  'not-billable',
+  'no-budget-line',
+  'payroll-account',
+  'credit',
+  'outside-contract',
+  'month-closed',
+] as const
+export type BooksLineStatus = (typeof BOOKS_LINE_STATUSES)[number]
+
+export const BOOKS_LINE_STATUS_LABELS: Record<BooksLineStatus, string> = {
+  billed: 'On the engagement',
+  'already-entered': 'Already on the month',
+  'allocation-pool': 'Shared out by an allocation entry',
+  'no-class': 'No class',
+  'no-program': 'Class not in the program names',
+  'not-ours': 'Program of no engagement',
+  'no-mapping': 'No account mapping for the engagement',
+  'not-billable': 'Account not billable to the engagement',
+  'no-budget-line': 'Category with no budget line',
+  'payroll-account': 'On a payroll account',
+  credit: 'A credit or refund',
+  'outside-contract': 'Outside the contract period',
+  'month-closed': 'Month not a draft',
+}
+
+/** A line's share of a shared cost, as the books allocate it. */
+export interface BooksAllocationDto {
+  /** The whole cost shared. */
+  total: number
+  /** This line's share of it, 0-100. */
+  percent: number
+  /** 'entry': a journal entry shares out a pool (its id); 'split': the transaction itself is split by class. */
+  how: 'entry' | 'split'
+  entryId: string | null
+  /** The transactions whose cost is shared (the pool's, or the split one). */
+  sourceIds: string[]
+}
+
+export interface BooksLineDto {
+  /** Stable across saves of the same file: the transaction, the account, the class and the line's place among alike. */
+  key: string
+  transactionId: string
+  date: string
+  type: string
+  vendor: string
+  description: string
+  account: string
+  accountNo: string | null
+  className: string
+  amount: number
+  /** Where it was paid from: the bank or a card, by the books' other side; null when the books do not say. */
+  paidFrom: { account: string; kind: 'bank' | 'card' | 'other' } | null
+  status: BooksLineStatus
+  engagementId: string | null
+  engagementName: string | null
+  category: string | null
+  budgetLineId: string | null
+  budgetLineName: string | null
+  allocation: BooksAllocationDto | null
+  /** A line Save wrote before: unchanged, or changed since. Null: new. */
+  saved: 'same' | 'changed' | null
+}
+
+/** A category of a mapping and the engagement's budget line it bills to. */
+export interface AccountMappingCategoryDto {
+  category: string
+  accounts: number
+  budgetLineId: string | null
+  budgetLineName: string | null
+  /** Chosen by an owner, not read from the file. */
+  chosen: boolean
+}
+
+export interface AccountMappingDto {
+  id: string
+  fileName: string
+  title: string
+  engagementId: string | null
+  engagementName: string | null
+  uploadedAt: string
+  categories: AccountMappingCategoryDto[]
+}
+
+export interface WorkspaceExpensesDto {
+  workspaceId: string
+  period: string
+  /** The accounting export the lines are read from; null when the month's files have none. */
+  file: { id: string; fileName: string } | null
+  mappings: AccountMappingDto[]
+  engagements: {
+    id: string
+    name: string
+    budgetLines: { id: string; name: string }[]
+  }[]
+  lines: BooksLineDto[]
+  can: { change: boolean }
+}
+
+/** What Save of the month's expenses did. */
+export interface WorkspaceExpensesSavedDto {
+  created: number
+  updated: number
+  removed: number
+  expenses: WorkspaceExpensesDto
+}

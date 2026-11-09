@@ -103,6 +103,22 @@ export type PayrollFolderKind = (typeof PAYROLL_FOLDERS)[number][1]
 export const OPTIONAL_FOLDERS = new Set<string>(['Payroll details', 'Pay stubs'])
 /** The folder of a program names file: the same program's names in the books and the payroll company, one row each. */
 export const PROGRAM_NAMES_FOLDER = 'Program names'
+/**
+ * The folder of each engagement's account mapping (owner's decision, 2026-11-09): its chart of accounts mapped to the
+ * categories its funder bills, one file per engagement. Not proof: it comes back apart, as program names do.
+ */
+export const ACCOUNT_MAPPING_FOLDER = 'Account mapping'
+const ACCOUNT_MAPPING_NAMES = [ACCOUNT_MAPPING_FOLDER, 'Account mappings']
+/**
+ * Other names a folder goes by (owner's decision, 2026-11-09): the bank's and the card's statements share one folder,
+ * and payroll details is the books' whole month, its expenses too.
+ */
+const FOLDER_ALIASES: Record<string, string[]> = {
+  'Bank statements': ['Bank & card statements', 'Bank and card statements'],
+  'Payroll details': ['QuickBooks transactions', 'Books transactions'],
+}
+const isFolder = (name: string, given: string) =>
+  [name, ...(FOLDER_ALIASES[name] ?? [])].some((n) => same(n, given))
 /** The folders a CSV may be in: the payroll company's journals, job reports and exports, and program names. */
 const CSV_FOLDERS = new Set<string>(['Timesheets', 'Payroll registers', 'Payroll details'])
 
@@ -117,10 +133,16 @@ export function sortPayrollZip(
 ): {
   files: { file: File; kind: PayrollFolderKind; folder: string }[]
   names: File[]
+  /** The zip's "Account mapping" files: not proof, sent to the engagements' account mappings. */
+  mappings: File[]
   problems: string[]
 } {
   const problems: string[] = []
-  const folders = [...PAYROLL_FOLDERS.map(([name]) => name), PROGRAM_NAMES_FOLDER]
+  const folders = [
+    ...PAYROLL_FOLDERS.flatMap(([name]) => [name, ...(FOLDER_ALIASES[name] ?? [])]),
+    PROGRAM_NAMES_FOLDER,
+    ...ACCOUNT_MAPPING_NAMES,
+  ]
   // A zip of the folder itself puts everything under one top folder: look inside it.
   const tops = new Set(paths.map((p) => p.path.split('/')[0]))
   const strip =
@@ -129,6 +151,7 @@ export function sortPayrollZip(
     !folders.some((name) => same(name, [...tops][0]!))
   const files: { file: File; kind: PayrollFolderKind; folder: string }[] = []
   const names: File[] = []
+  const mappings: File[] = []
   const outside: string[] = []
   const misplaced: string[] = []
   const unknown = new Set<string>()
@@ -144,7 +167,12 @@ export function sortPayrollZip(
       else misplaced.push(parts.join('/'))
       continue
     }
-    const folder = PAYROLL_FOLDERS.find(([name]) => same(name, parts[0]!))
+    if (ACCOUNT_MAPPING_NAMES.some((n) => same(n, parts[0]!))) {
+      if (csv || extOf(parts[1]!) === 'xlsx') mappings.push(p.file)
+      else misplaced.push(parts.join('/'))
+      continue
+    }
+    const folder = PAYROLL_FOLDERS.find(([name]) => isFolder(name, parts[0]!))
     if (!folder) {
       unknown.add(parts[0]!)
       continue
@@ -174,7 +202,7 @@ export function sortPayrollZip(
     problems.push(
       `${skipped.length === 1 ? '1 file is' : `${skipped.length} files are`} not a PDF, PNG, JPG, XLSX, DOCX, CSV or ZIP (${skipped.slice(0, 3).join(', ')}${skipped.length > 3 ? ', …' : ''}).`
     )
-  return { files, names, problems }
+  return { files, names, mappings, problems }
 }
 
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase()

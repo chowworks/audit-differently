@@ -3710,6 +3710,44 @@ suite('tenant isolation', () => {
       })
     })
   })
+
+  describe("the books' expenses (migration 20261109000100)", () => {
+    const mapping = (id: string, ws: string, by: string, engagement = 'NULL') =>
+      `INSERT INTO "AccountMapping" ("id","workspaceId","engagementId","fileName","sha256","read","changedById")
+       VALUES ('${id}','${ws}',${engagement},'m.xlsx','${'e'.repeat(64)}','{"accounts":{}}','${by}')`
+
+    it('lets an owner alone keep an account mapping, which owners and auditors read', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(mapping('AM-0', 'W1', 'owner-W1', `'E-W1'`))).rows).toBe(1)
+        expect((await attempt(mapping('AM-x', 'W1', 'aud-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(mapping('AM-w', 'W2', 'owner-W1'))).error).toMatch(
+          /row-level security/
+        )
+      })
+      // Kept by the database owner, so each role below finds it there.
+      await db.query(mapping('AM-1', 'W1', 'owner-W1', `'E-W1'`))
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(mapping('AM-b', 'W1', 'book-W1'))).error).toMatch(
+          /row-level security/
+        )
+        expect(await ids('AccountMapping')).toEqual([])
+      })
+      await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+        expect(await ids('AccountMapping')).toEqual(['AM-1'])
+        expect((await attempt(`DELETE FROM "AccountMapping"`)).rows).toBe(0)
+      })
+      await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+        expect(await ids('AccountMapping')).toEqual([])
+      })
+      await db.query(`DELETE FROM "AccountMapping"`)
+    })
+
+    it('keeps a line from the books apart from payroll lines', async () => {
+      await expect(
+        db.query(`UPDATE "Expense" SET "booksKey" = 'k', "payrollKey" = 'p' WHERE "id" = 'X-W1'`)
+      ).rejects.toThrow(/Expense_booksKey_check/)
+    })
+  })
 })
 
 describe('touchesTenantTable', () => {
