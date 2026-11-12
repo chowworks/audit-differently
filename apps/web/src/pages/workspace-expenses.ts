@@ -62,3 +62,15 @@ export function shareWords(l: BooksLineDto, money: (n: number) => string) {
     ? `${a.percent.toFixed(2)}% of ${money(a.total)} (allocation entry ${a.entryId})`
     : `${a.percent.toFixed(2)}% of ${money(a.total)} (split by class)`
 }
+
+/**
+ * Where a line's money came from, as the screen says it: the bank, a card, or the other account the books booked it
+ * from (a prepaid cost booked out of its asset is no payment this month).
+ */
+export function paidWords(l: BooksLineDto) {
+  const f = l.paidFrom
+  if (!f) return null
+  if (f.kind === 'card') return 'paid from a card'
+  if (f.kind === 'bank') return 'paid from the bank'
+  return `booked from ${f.account.split(':').pop()!.trim()}`
+}

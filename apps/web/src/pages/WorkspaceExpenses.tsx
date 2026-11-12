@@ -8,7 +8,13 @@ import type {
 import { useApi, useLoad } from '@/hooks/useApi'
 import { money, periodLabel } from '@/lib/format'
 import { Button, Card, Chip, Empty, ErrorNote, Notice } from '@/components/ui'
-import { engagementGroups, notOnEngagements, saveCounts, shareWords } from './workspace-expenses'
+import {
+  engagementGroups,
+  notOnEngagements,
+  paidWords,
+  saveCounts,
+  shareWords,
+} from './workspace-expenses'
 import './workspace-expenses.css'
 
 const many = (n: number, one: string, more = `${one}s`) =>
@@ -266,9 +272,7 @@ function LineTable({ lines, withLine = false }: { lines: BooksLineDto[]; withLin
                   <span className="font-semibold">{l.vendor}</span>
                   <span className="ad-table-sub">
                     {l.type} {l.transactionId}
-                    {l.paidFrom
-                      ? ` · paid from ${l.paidFrom.kind === 'card' ? 'a card' : 'the bank'}`
-                      : ''}
+                    {paidWords(l) ? ` · ${paidWords(l)}` : ''}
                   </span>
                 </td>
                 <td>{l.account.split(':').pop()}</td>

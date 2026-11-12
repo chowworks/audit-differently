@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { BooksLineDto } from '@ad/types'
-import { engagementGroups, notOnEngagements, saveCounts, shareWords } from './workspace-expenses'
+import {
+  engagementGroups,
+  notOnEngagements,
+  paidWords,
+  saveCounts,
+  shareWords,
+} from './workspace-expenses'
 
 const line = (over: Partial<BooksLineDto>): BooksLineDto => ({
   key: 'k',
@@ -69,5 +75,20 @@ describe("the month's expenses from the books, on screen", () => {
       )
     ).toBe('25.00% of $200.00 (allocation entry 9005)')
     expect(shareWords(line({}), money)).toBeNull()
+  })
+
+  it('says where a line was paid from, and an account booked from when it is neither bank nor card', () => {
+    expect(paidWords(line({ paidFrom: { account: '22001 Card', kind: 'card' } }))).toBe(
+      'paid from a card'
+    )
+    expect(paidWords(line({ paidFrom: { account: '10000 Checking', kind: 'bank' } }))).toBe(
+      'paid from the bank'
+    )
+    expect(
+      paidWords(
+        line({ paidFrom: { account: '13000 Assets:13100 Prepaid Expenses', kind: 'other' } })
+      )
+    ).toBe('booked from 13100 Prepaid Expenses')
+    expect(paidWords(line({}))).toBeNull()
   })
 })
