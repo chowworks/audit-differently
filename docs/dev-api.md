@@ -164,6 +164,14 @@ Payroll, each with its own time report, register, a pay stub per participant, an
   withheld, $3,644.27 net. Bank, 09/24/2026: one $3,644.27 net pay debit and one $1,196.75 tax debit.
 - The statement also has a $9,800.00 deposit in and a $412.60 vendor payment; no line names anyone. Taylor Brooks
   (program assistant) is on no staff list in the tour, and Alex Rivera on no participant list.
+- **Expenses** (`apps/api/prisma/expense-sample.ts`, apart from the payroll files so payroll reads the same files it
+  always did): the business card's September statement (Dana Okafor's autopay of $1,975.30, then $3,505.00 of
+  charges), a QuickBooks Transaction List with Splits of September's expenses, and an account mapping per engagement
+  (In-School Youth's $125,000 contract, Adult IT's $27,500). The Expenses step bills rent split 60/40 by class
+  ($1,440.00 and $960.00), the payroll company's $210.00 fee shared out by its month-end allocation entry ($140.00 and
+  $70.00), software, the $412.60 bank payment to Hilltop Office Supply and certification vouchers; and lists on no
+  engagement a Summer Youth field trip (no engagement), an advisory board lunch (not billable to In-School Youth) and
+  insurance booked from prepaid (no class).
 
 The tour: on Engagement staffing, add the three staff, then tag Morgan to both engagements, Priya to In-School Youth and
 Sam to Adult IT; upload the sample on Workspace payroll for September 2026. Before Save, Staff shows the three matched
