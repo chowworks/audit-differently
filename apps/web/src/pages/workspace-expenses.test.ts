@@ -91,4 +91,13 @@ describe("the month's expenses from the books, on screen", () => {
     ).toBe('booked from 13100 Prepaid Expenses')
     expect(paidWords(line({}))).toBeNull()
   })
+
+  it('totals a pool and the entry that shares it out as 0, not -0', () => {
+    const [pool] = notOnEngagements([
+      line({ key: 'p1', status: 'allocation-pool', engagementId: null, amount: 496.14 }),
+      line({ key: 'p2', status: 'allocation-pool', engagementId: null, amount: 195.95 }),
+      line({ key: 'p3', status: 'allocation-pool', engagementId: null, amount: -692.09 }),
+    ])
+    expect(Object.is(pool!.total, 0)).toBe(true)
+  })
 })

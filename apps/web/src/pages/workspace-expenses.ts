@@ -5,7 +5,8 @@ import {
   type BooksLineStatus,
 } from '@ad/types'
 
-const cents = (n: number) => Math.round(n * 100) / 100
+/** To the cent; a sum that nets to nothing is 0, never -0 (shown as -$0.00). */
+const cents = (n: number) => Math.round(n * 100) / 100 + 0
 
 /** The month's books lines on each engagement: its lines, in date order, and their total. */
 export function engagementGroups(lines: BooksLineDto[]) {
