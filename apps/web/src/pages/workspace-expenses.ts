@@ -3,6 +3,7 @@ import {
   BOOKS_LINE_STATUS_LABELS,
   type BooksLineDto,
   type BooksLineStatus,
+  type WorkspaceExpensesDto,
 } from '@ad/types'
 
 /** To the cent; a sum that nets to nothing is 0, never -0 (shown as -$0.00). */
@@ -75,3 +76,30 @@ export function paidWords(l: BooksLineDto) {
   if (f.kind === 'bank') return 'paid from the bank'
   return `booked from ${f.account.split(':').pop()!.trim()}`
 }
+
+/**
+ * A line's receipts as the screen says it (owner's decision, 2026-11-12): its bills that have one, of those not
+ * dropped. Null on a line with no bills.
+ */
+export function receiptWords(l: Pick<BooksLineDto, 'bills'>) {
+  const kept = l.bills.filter((b) => !b.dropped)
+  const dropped = l.bills.length - kept.length
+  if (!l.bills.length) return null
+  const proved = kept.filter((b) => b.receipt).length
+  const words =
+    l.bills.length === 1
+      ? dropped
+        ? 'Dropped: no receipt'
+        : proved
+          ? 'Receipt'
+          : 'No receipt'
+      : `${proved} of ${kept.length} bills have a receipt`
+  return {
+    words: l.bills.length > 1 && dropped ? `${words} (${dropped} dropped)` : words,
+    complete: kept.length > 0 && proved === kept.length,
+  }
+}
+
+/** The month's receipts that prove no bill yet. */
+export const unmatchedReceipts = (d: Pick<WorkspaceExpensesDto, 'receipts'>) =>
+  d.receipts.filter((r) => !r.transactionIds.length)

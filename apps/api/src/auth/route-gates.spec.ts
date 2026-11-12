@@ -254,6 +254,9 @@ const GATED = [
   'DELETE /api/workspaces/:id/account-mappings/:mappingId',
   'GET /api/workspaces/:id/expenses/:period',
   'POST /api/workspaces/:id/expenses/:period/save',
+  // The receipts of the books' bills, and an owner's word on a bill (owner's decision, 2026-11-12).
+  'POST /api/workspaces/:id/expenses/:period/receipts',
+  'PUT /api/workspaces/:id/expenses/bills',
 ]
 
 describe('route gates', () => {

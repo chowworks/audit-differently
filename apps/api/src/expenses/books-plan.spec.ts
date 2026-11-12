@@ -1,6 +1,12 @@
 import type { ProgramNames } from '@ad/types'
 import { booksTransactions } from './books'
-import { allocationNote, planBooks, type PlanEngagement, type PlanMapping } from './books-plan'
+import {
+  allocationNote,
+  planBooks,
+  savedBills,
+  type PlanEngagement,
+  type PlanMapping,
+} from './books-plan'
 import { BOOKS } from './books.testing'
 
 /** A fictional workspace: two programs, one of them an engagement of the app, and its account mapping. */
@@ -145,6 +151,7 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
       totalCost: l.allocation?.total ?? l.amount,
       budgetLineId: l.budgetLineId,
       allocationNote: allocationNote(l),
+      booksBills: savedBills(l),
     })
     const again = plan({ existing: [saved(first[0]!), saved(first[1]!, 79)] })
     expect(again.filter((l) => l.status === 'billed').map((l) => l.saved)).toEqual([
@@ -152,6 +159,9 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
       'changed',
       null,
     ])
+    // Saved before its bills were kept: saved again once, to keep them.
+    const older = plan({ existing: [{ ...saved(first[0]!), booksBills: null }] })
+    expect(older.find((l) => l.key === first[0]!.key)?.saved).toBe('changed')
     const typed = plan({
       existing: [
         {

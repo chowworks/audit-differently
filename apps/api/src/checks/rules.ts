@@ -1,6 +1,7 @@
 import {
   DOCUMENT_KIND_LABELS,
   PAYROLL_REPORT_LINES,
+  type BooksBillSaved,
   type CheckCode,
   type CheckSeverity,
   type DocumentKind,
@@ -34,6 +35,13 @@ export interface RuleExpense {
   fromPayroll?: boolean
   /** Written by the month's expenses from the books: a bill, proved by its invoice and payment whatever its line. */
   fromBooks?: boolean
+  /**
+   * A books line's bills that have no receipt and are not dropped (owner's decision, 2026-11-12): the line is shown
+   * with its receipts so far, and these named, so an owner finds them or drops them.
+   */
+  billsWithoutReceipt?: { transactionId: string; vendor: string; amount: number }[]
+  /** How many bills the books line has, dropped ones aside. */
+  bills?: number
   /**
    * Written by the payroll match: one program's share of a person's pay run, or the employer's taxes on it. Their pay
    * stub shows the whole pay, never the share, so its amount is not asked for there.
@@ -187,6 +195,18 @@ export function dueDate(period: string, dueDay: number): Date {
   return new Date(Date.UTC(dueBase.getUTCFullYear(), dueBase.getUTCMonth(), dueDay, 23, 59, 59))
 }
 
+/** A books line's bills as the rules read them (Expense.booksBills): those still wanting a receipt, of how many. */
+export function booksBillsOf(saved: unknown): Pick<RuleExpense, 'bills' | 'billsWithoutReceipt'> {
+  if (!Array.isArray(saved)) return {}
+  const kept = (saved as BooksBillSaved[]).filter((b) => !b.dropped)
+  return {
+    bills: kept.length,
+    billsWithoutReceipt: kept
+      .filter((b) => !b.documentId)
+      .map((b) => ({ transactionId: b.transactionId, vendor: b.vendor, amount: b.amount })),
+  }
+}
+
 export function runRules(month: RuleMonth): Finding[] {
   const findings: Finding[] = []
   const bounds = monthBounds(month.period)
@@ -219,6 +239,17 @@ export function runRules(month: RuleMonth): Finding[] {
         severity: 'blocker',
         expenseId: e.id,
         message: `${label}: no invoice, receipt or purchase order attached.`,
+      })
+    } else if (e.billsWithoutReceipt?.length) {
+      const missing = e.billsWithoutReceipt
+      const of = e.bills ?? missing.length
+      findings.push({
+        code: 'bills-without-receipt',
+        severity: 'attention',
+        expenseId: e.id,
+        message: `${label}: ${of - missing.length} of ${of} bills have a receipt. No receipt for ${missing
+          .map((b) => `${b.transactionId} (${b.vendor || 'no vendor'}, ${money(b.amount)})`)
+          .join(', ')}: find it, or drop the bill on the month's expenses.`,
       })
     }
 

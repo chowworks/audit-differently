@@ -359,6 +359,7 @@ export const CHECK_CODES = [
   'proof-mismatch',
   'no-budget-line',
   'payroll-counted-twice',
+  'bills-without-receipt',
 ] as const
 export type CheckCode = (typeof CHECK_CODES)[number]
 
@@ -2726,6 +2727,7 @@ export const BOOKS_LINE_STATUSES = [
   'credit',
   'outside-contract',
   'month-closed',
+  'dropped',
 ] as const
 export type BooksLineStatus = (typeof BOOKS_LINE_STATUSES)[number]
 
@@ -2743,6 +2745,7 @@ export const BOOKS_LINE_STATUS_LABELS: Record<BooksLineStatus, string> = {
   credit: 'A credit or refund',
   'outside-contract': 'Outside the contract period',
   'month-closed': 'Month not a draft',
+  dropped: 'Every bill dropped for want of a receipt',
 }
 
 /** A line's share of a shared cost, as the books allocate it. */
@@ -2756,6 +2759,43 @@ export interface BooksAllocationDto {
   entryId: string | null
   /** The transactions whose cost is shared (the pool's, or the split one). */
   sourceIds: string[]
+}
+
+/**
+ * A bill behind a books line (owner's decision, 2026-11-12): the transaction whose cost the line is, or one of the
+ * pool's an allocation entry shares out. Its receipt proves it; an owner may drop one that has none, and the line then
+ * bills its share of the rest.
+ */
+export interface BooksBillDto {
+  transactionId: string
+  date: string
+  vendor: string
+  /** The whole bill, as its receipt shows it. */
+  amount: number
+  /** The receipt that proves it: matched by its amount and date ('auto'), or chosen by an owner ('person'). */
+  receipt: { documentId: string; fileName: string; by: 'auto' | 'person' } | null
+  dropped: boolean
+}
+
+/** A bill as a saved books line keeps it (Expense.booksBills). */
+export interface BooksBillSaved {
+  transactionId: string
+  date: string
+  vendor: string
+  amount: number
+  documentId: string | null
+  dropped: boolean
+}
+
+/** A receipt of the month's workspace receipts (the zip's "Receipts" folder), as the expenses read it. */
+export interface BooksReceiptDto {
+  documentId: string
+  fileName: string
+  amount: number | null
+  date: string | null
+  vendor: string | null
+  /** The bills it proves. None: unmatched. */
+  transactionIds: string[]
 }
 
 export interface BooksLineDto {
@@ -2779,6 +2819,8 @@ export interface BooksLineDto {
   budgetLineId: string | null
   budgetLineName: string | null
   allocation: BooksAllocationDto | null
+  /** The bills behind it (on a line of an engagement; none on the rest), with their receipts. */
+  bills: BooksBillDto[]
   /** A line Save wrote before: unchanged, or changed since. Null: new. */
   saved: 'same' | 'changed' | null
 }
@@ -2815,7 +2857,17 @@ export interface WorkspaceExpensesDto {
     budgetLines: { id: string; name: string }[]
   }[]
   lines: BooksLineDto[]
+  /** The month's workspace receipts and the bills each proves. */
+  receipts: BooksReceiptDto[]
   can: { change: boolean }
+}
+
+/** An owner's word on one bill: the receipt that proves it (null: as matched), or dropped for want of one. */
+export interface BooksBillInput {
+  period: string
+  transactionId: string
+  documentId?: string | null
+  dropped?: boolean
 }
 
 /** What Save of the month's expenses did. */

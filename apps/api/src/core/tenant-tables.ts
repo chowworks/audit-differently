@@ -60,6 +60,9 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   // Each engagement's account mapping, for the month's expenses from the books (migration 20261109000100): owners
   // and auditors read it, owners change it.
   'AccountMapping',
+  // An owner's word on a bill of the books: its receipt, or dropped (migration 20261112000100). Read and changed as
+  // the account mappings are.
+  'BooksBill',
 ])
 
 type Fields = Map<string, string> // relation field name -> the model it points at

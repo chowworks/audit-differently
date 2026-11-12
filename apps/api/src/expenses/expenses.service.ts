@@ -8,7 +8,10 @@ import {
 import { Prisma } from '@prisma/client'
 import { createHash } from 'node:crypto'
 import {
+  RECEIPT_KINDS,
   type AccountMappingDto,
+  type BooksBillInput,
+  type BooksBillSaved,
   type BooksLineDto,
   type ReportLine,
   type WorkspaceExpensesDto,
@@ -18,8 +21,10 @@ import { ChecksService } from '../checks/checks.service'
 import { dueDate } from '../checks/rules'
 import { AccessLogService } from '../core/access-log.service'
 import { allow, workspaceRole, type Caller } from '../core/caller'
-import { dollars, howMany, monthName } from '../core/changes'
-import { keyInWorkspace } from '../documents/documents.service'
+import { changesOf, dollars, howMany, monthName, type Fields } from '../core/changes'
+import { DocumentsService, keyInWorkspace, type Uploaded } from '../documents/documents.service'
+import { describe } from '../documents/staged-file'
+import { readReceipt } from '../receipts/read-receipt'
 import { csvLines, sheetLines } from '../payroll/payroll-details'
 import { programNamesIn } from '../payroll/program-names'
 import { PrismaService } from '../prisma/prisma.service'
@@ -36,6 +41,7 @@ import {
   SKIP,
   allocationNote,
   planBooks,
+  savedBills,
   type PlanEngagement,
   type PlanMapping,
 } from './books-plan'
@@ -45,6 +51,19 @@ const CSV = 'text/csv'
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
 /** A mapping file's rows are a chart of accounts: a few hundred at most. */
 const MAX_ACCOUNTS = 5000
+/** Receipts are PDFs or photos, as the month's receipts are (receipts.service.ts). */
+const RECEIPT_TYPES = ['application/pdf', 'image/png', 'image/jpeg']
+export const MAX_BOOKS_RECEIPTS = 20
+const MAX_RECEIPT_BYTES = 10 * 1024 * 1024
+/** How many receipts are read at once. */
+const READ_AT_ONCE = 4
+
+/** What was read from a receipt, in the access log, by value. */
+const RECEIPT_FIELDS: Fields = {
+  receiptAmount: { label: 'Amount', show: 'money' },
+  receiptDate: { label: 'Date', show: 'date' },
+  receiptVendor: { label: 'Vendor', show: 'text' },
+}
 
 /**
  * The month's expenses from the books (owner's decision, 2026-11-09): read from the accounting export in the month's
@@ -58,6 +77,7 @@ export class ExpensesService {
     private readonly prisma: PrismaService,
     private readonly log: AccessLogService,
     private readonly checks: ChecksService,
+    private readonly documents: DocumentsService,
     @Inject(DOCUMENT_STORAGE) private readonly storage: DocumentStorage
   ) {}
 
@@ -335,7 +355,7 @@ export class ExpensesService {
   }
 
   private async planOf(workspaceId: string, period: string) {
-    const [files, engagements, mappings, workspace] = await Promise.all([
+    const [files, engagements, mappings, workspace, receipts, choices] = await Promise.all([
       this.booksOf(workspaceId, period),
       this.engagementsOf(workspaceId),
       this.prisma.accountMapping.findMany({
@@ -346,6 +366,8 @@ export class ExpensesService {
         where: { id: workspaceId },
         select: { programNames: true },
       }),
+      this.receiptsOf(workspaceId, period),
+      this.prisma.booksBill.findMany({ where: { workspaceId, period } }),
     ])
     // One transaction once, though two exports of the month both have it.
     const seen = new Set<string>()
@@ -392,9 +414,42 @@ export class ExpensesService {
         totalCost: Number(x.totalCost),
         budgetLineId: x.budgetLineId,
         allocationNote: x.allocationNote,
+        booksBills: (x.booksBills ?? null) as BooksBillSaved[] | null,
+      })),
+      receipts: receipts.map((d) => ({
+        id: d.id,
+        fileName: d.fileName,
+        amount: d.receiptAmount == null ? null : Number(d.receiptAmount),
+        date: day(d.receiptDate),
+        vendor: d.receiptVendor,
+      })),
+      choices: choices.map((c) => ({
+        transactionId: c.transactionId,
+        documentId: c.documentId,
+        dropped: c.dropped,
       })),
     })
-    return { files, engagements, mappings, lines, existing }
+    return { files, engagements, mappings, lines, existing, receipts }
+  }
+
+  /**
+   * The receipts the books' bills are matched to (owner's decision, 2026-11-12): the month's financial receipts and
+   * invoices, the workspace's own (the zip's "Receipts" folder) and those filed to an engagement's month (emailed, or
+   * uploaded there), but not one dismissed or already the proof of a line that is not from the books.
+   */
+  private async receiptsOf(workspaceId: string, period: string) {
+    const docs = await this.prisma.document.findMany({
+      where: {
+        workspaceId,
+        period,
+        sensitivity: 'financial',
+        kind: { in: [...RECEIPT_KINDS] },
+        receiptDismissed: false,
+        NOT: { expenses: { some: { purpose: 'invoice', expense: { booksKey: null } } } },
+      },
+      orderBy: [{ fileName: 'asc' }, { id: 'asc' }],
+    })
+    return docs.filter((d) => keyInWorkspace(d))
   }
 
   private dto(
@@ -414,6 +469,20 @@ export class ExpensesService {
         budgetLines: e.budgetLines.map((b) => ({ id: b.id, name: b.name })),
       })),
       lines: plan.lines,
+      receipts: plan.receipts.map((d) => ({
+        documentId: d.id,
+        fileName: d.fileName,
+        amount: d.receiptAmount == null ? null : Number(d.receiptAmount),
+        date: day(d.receiptDate),
+        vendor: d.receiptVendor,
+        transactionIds: [
+          ...new Set(
+            plan.lines.flatMap((l) =>
+              l.bills.filter((b) => b.receipt?.documentId === d.id).map((b) => b.transactionId)
+            )
+          ),
+        ],
+      })),
       can: { change: !caller.admin && !!workspaceRole(caller, workspaceId, ['owner']) },
     }
   }
@@ -481,7 +550,31 @@ export class ExpensesService {
       allocationNote: allocationNote(l),
       budgetLineId: l.budgetLineId!,
       reportLine: lineOf(l).reportLine as ReportLine,
+      booksBills: savedBills(l) as unknown as Prisma.InputJsonValue,
     })
+    // Each bill's receipt is the line's invoice proof; a receipt Save linked before that no longer proves a bill goes.
+    const receiptsOfLine = (l: BooksLineDto) =>
+      new Set(l.bills.flatMap((b) => (b.receipt ? [b.receipt.documentId] : [])))
+    const linkReceipts = async (
+      tx: Prisma.TransactionClient,
+      expenseId: string,
+      l: BooksLineDto,
+      before: BooksBillSaved[] | null
+    ) => {
+      const want = receiptsOfLine(l)
+      const gone = (before ?? [])
+        .flatMap((b) => (b.documentId ? [b.documentId] : []))
+        .filter((id) => !want.has(id))
+      if (gone.length)
+        await tx.expenseDocument.deleteMany({
+          where: { expenseId, purpose: 'invoice', documentId: { in: gone } },
+        })
+      if (want.size)
+        await tx.expenseDocument.createMany({
+          data: [...want].map((documentId) => ({ expenseId, documentId, purpose: 'invoice' })),
+          skipDuplicates: true,
+        })
+    }
     let touched: string[]
     try {
       touched = await this.log.change(
@@ -536,6 +629,7 @@ export class ExpensesService {
           for (const l of toUpdate) {
             const x = byKey.get(l.key)!
             await tx.expense.update({ where: { id: x.id }, data: fields(l) })
+            await linkReceipts(tx, x.id, l, (x.booksBills ?? null) as BooksBillSaved[] | null)
             ids.push(x.monthlyReportId)
           }
           for (const l of toCreate) {
@@ -550,7 +644,7 @@ export class ExpensesService {
               itemNumber = `${root}-${k}`
             taken.add(`${l.engagementId}\u0000${itemNumber}\u0000${f.reportLine}`)
             const monthlyReportId = await monthOf(l)
-            await tx.expense.create({
+            const made = await tx.expense.create({
               data: {
                 ...f,
                 engagementId: l.engagementId!,
@@ -560,6 +654,7 @@ export class ExpensesService {
                 createdById: caller.userId,
               },
             })
+            await linkReceipts(tx, made.id, l, null)
             ids.push(monthlyReportId)
           }
           return [...new Set(ids)]
@@ -593,5 +688,171 @@ export class ExpensesService {
       removed: toRemove.length,
       expenses: this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period)),
     }
+  }
+
+  // ── The bills' receipts (owner's decision, 2026-11-12) ────────────────────
+
+  /**
+   * Receipts for the month's bills (the zip's "Receipts" folder, or one bill's "Attach receipt"): each checked as any
+   * upload is, read by the PDF's own text (never AI), and kept as a receipt of the workspace's month, filed to no
+   * engagement, one line each. Given `transactionId`, the one receipt is that bill's, by the owner's word. A file the
+   * month has already (the same contents) is not kept twice. Nothing is billed until Save.
+   */
+  async addReceipts(
+    caller: Caller,
+    workspaceId: string,
+    given: unknown,
+    files: Uploaded[] | undefined,
+    transactionId?: unknown
+  ): Promise<WorkspaceExpensesDto> {
+    this.owner(caller, workspaceId)
+    const period = this.period(given)
+    if (!Array.isArray(files) || !files.length)
+      throw new BadRequestException('Choose at least one receipt')
+    if (files.length > MAX_BOOKS_RECEIPTS)
+      throw new BadRequestException(`Send at most ${MAX_BOOKS_RECEIPTS} receipts at a time`)
+    const bill = transactionId == null || transactionId === '' ? null : transactionId
+    if (bill !== null && (typeof bill !== 'string' || bill.length > 100))
+      throw new BadRequestException('Name the bill by its transaction')
+    if (bill !== null && files.length !== 1)
+      throw new BadRequestException('Choose one receipt for the bill')
+    if (
+      bill !== null &&
+      !(await this.planOf(workspaceId, period)).lines.some((l) =>
+        l.bills.some((b) => b.transactionId === bill)
+      )
+    )
+      throw new NotFoundException('No such bill among the month’s lines')
+    for (const f of files) {
+      if (!RECEIPT_TYPES.includes(f.mimetype))
+        throw new BadRequestException(`${f.originalname}: receipts must be PDF, PNG or JPG files`)
+      if (f.size > MAX_RECEIPT_BYTES)
+        throw new BadRequestException(`${f.originalname}: receipts are limited to 10 MB each`)
+    }
+    const have = await this.prisma.document.findMany({
+      where: { workspaceId, engagementId: null, period, kind: { in: [...RECEIPT_KINDS] } },
+      select: { id: true, sha256: true },
+    })
+    const shaOf = (f: Uploaded) => createHash('sha256').update(f.buffer).digest('hex')
+    const known = new Map(have.map((d) => [d.sha256, d.id]))
+    const ids: string[] = []
+    const fresh: Uploaded[] = []
+    for (const f of files) {
+      const id = known.get(shaOf(f))
+      if (id) ids.push(id)
+      else if (!fresh.some((o) => shaOf(o) === shaOf(f))) fresh.push(f)
+    }
+    const staged = []
+    for (const f of fresh)
+      staged.push(await this.documents.stage(caller, f, { workspaceId, period, kind: 'receipt' }))
+    const reads: Awaited<ReturnType<typeof readReceipt>>[] = []
+    for (let i = 0; i < staged.length; i += READ_AT_ONCE)
+      reads.push(
+        ...(await Promise.all(
+          staged.slice(i, i + READ_AT_ONCE).map((s, j) =>
+            readReceipt(
+              {
+                buffer: fresh[i + j]!.buffer,
+                contentType: s.data.contentType,
+                sensitivity: s.data.sensitivity,
+              },
+              false
+            )
+          )
+        ))
+      )
+    for (const [i, s] of staged.entries()) {
+      const read = reads[i]!
+      Object.assign(s.data, {
+        receiptAmount: read.amount == null ? null : read.amount.toFixed(2),
+        receiptDate: read.date ? new Date(`${read.date}T00:00:00Z`) : null,
+        receiptVendor: read.vendor,
+        receiptReadBy: read.readBy,
+      })
+      const made = await s.commit(() =>
+        this.log.change(
+          caller,
+          (tx) => s.create(tx),
+          (d) => ({
+            workspaceId,
+            resource: 'document',
+            subjectId: d.id,
+            action: 'create',
+            description: `Uploaded ${describe(d)} for the books' bills`,
+            changes: changesOf(null, d, RECEIPT_FIELDS),
+          })
+        )
+      )
+      ids.push(made.id)
+    }
+    if (bill !== null) await this.choose(caller, workspaceId, period, bill, ids[0]!, false)
+    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period))
+  }
+
+  /**
+   * An owner's word on one bill: the receipt that proves it (`documentId`; null: as matched), or dropped for want of
+   * one (its share comes off the lines that bill it at the next Save), or neither again.
+   */
+  async setBill(
+    caller: Caller,
+    workspaceId: string,
+    input: BooksBillInput
+  ): Promise<WorkspaceExpensesDto> {
+    this.owner(caller, workspaceId)
+    const period = this.period(input?.period)
+    const bill = input?.transactionId
+    if (typeof bill !== 'string' || !bill || bill.length > 100)
+      throw new BadRequestException('Name the bill by its transaction')
+    const dropped = input.dropped ?? false
+    if (typeof dropped !== 'boolean') throw new BadRequestException('dropped must be true or false')
+    const documentId = input.documentId ?? null
+    if (documentId !== null && typeof documentId !== 'string')
+      throw new BadRequestException('Choose one of the month’s receipts')
+    if (dropped && documentId) throw new BadRequestException('A bill with a receipt is not dropped')
+    const plan = await this.planOf(workspaceId, period)
+    if (!plan.lines.some((l) => l.bills.some((b) => b.transactionId === bill)))
+      throw new NotFoundException('No such bill among the month’s lines')
+    if (documentId && !plan.receipts.some((d) => d.id === documentId))
+      throw new BadRequestException('Choose one of the month’s receipts')
+    await this.choose(caller, workspaceId, period, bill, documentId, dropped)
+    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period))
+  }
+
+  private async choose(
+    caller: Caller,
+    workspaceId: string,
+    period: string,
+    transactionId: string,
+    documentId: string | null,
+    dropped: boolean
+  ) {
+    const where = { workspaceId_period_transactionId: { workspaceId, period, transactionId } }
+    const before = await this.prisma.booksBill.findUnique({ where })
+    if ((before?.documentId ?? null) === documentId && (before?.dropped ?? false) === dropped)
+      return
+    const data = { documentId, dropped, changedById: caller.userId, changedAt: new Date() }
+    await this.log.change(
+      caller,
+      async (tx) => {
+        if (documentId === null && !dropped)
+          await tx.booksBill.deleteMany({ where: { workspaceId, period, transactionId } })
+        else
+          await tx.booksBill.upsert({
+            where,
+            create: { ...data, workspaceId, period, transactionId },
+            update: data,
+          })
+      },
+      {
+        workspaceId,
+        resource: 'expense',
+        action: 'update',
+        description: dropped
+          ? `Dropped bill ${transactionId} of the books for ${monthName(period)} for want of a receipt`
+          : documentId
+            ? `Chose the receipt of bill ${transactionId} of the books for ${monthName(period)}`
+            : `Left bill ${transactionId} of the books for ${monthName(period)} to be matched again`,
+      }
+    )
   }
 }

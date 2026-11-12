@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ProgramNames } from '@ad/types'
-import { AIT_CLASS, ISY_CLASS, expenseSampleFiles } from '../../prisma/expense-sample'
+import { AIT_CLASS, ISY_CLASS, RECEIPTS, expenseSampleFiles } from '../../prisma/expense-sample'
 import { PROGRAM_NAMES } from '../../prisma/payroll-workspace-sample'
 import { dbTestsEnabled } from '../core/testing/tenant-db'
 import { isCardStatement } from '../payroll/card-statement'
@@ -9,6 +9,7 @@ import { payLinesOf } from '../payroll/pay-lines'
 import { chargesOf, sheetLines } from '../payroll/payroll-details'
 import { proofFile } from '../payroll/payroll-match.service'
 import { readStatement } from '../payroll/statement-lines'
+import { readReceipt } from '../receipts/read-receipt'
 import { engagementOfMapping, readAccountMapping, type AccountMappingRead } from './account-mapping'
 import { booksTransactions } from './books'
 import { planBooks, type PlanEngagement } from './books-plan'
@@ -146,6 +147,67 @@ suite("the workspace payroll sample's expenses", () => {
       ['7108', 'billed', 'e-isy', 'Program Costs', 140, null, '66.67% of 210 (entry)'],
       ['7108', 'billed', 'e-ait', 'Program Costs', 70, null, '33.33% of 210 (entry)'],
       ['7109', 'no-class', null, null, 120, 'other', null],
+    ])
+  })
+
+  it("matches each receipt to its bill by its amount and date, the shared fee's too, and shows the rent's missing", async () => {
+    const read = await Promise.all(
+      file('Receipts').map(async (r, i) => ({
+        id: `r-${i}`,
+        fileName: r.name,
+        ...(await readReceipt(
+          { buffer: r.bytes, contentType: 'application/pdf', sensitivity: 'financial' },
+          false
+        )),
+      }))
+    )
+    expect(read.map((r) => [r.fileName, r.amount, r.date, r.vendor, r.readBy])).toEqual([
+      ['Pixel Tools invoice 4471.pdf', 80, '2026-09-03', 'Pixel Tools', 'text'],
+      ['PayPeople invoice 0926.pdf', 210, '2026-09-06', 'PayPeople Payroll', 'text'],
+      [
+        'Hilltop Office Supply receipt.pdf',
+        412.6,
+        RECEIPTS[2]!.date,
+        'Hilltop Office Supply',
+        'text',
+      ],
+      ['CertPath invoice 3302.pdf', 450, '2026-09-09', 'CertPath Testing', 'text'],
+    ])
+    const [books] = file('QuickBooks transactions')
+    const maps = await Promise.all(
+      file('Account mapping').map((m) => readAccountMapping(m.bytes, m.name))
+    )
+    const plan = planBooks({
+      period: '2026-09',
+      transactions: booksTransactions(await sheetLines(books!.bytes)),
+      programs: PROGRAMS,
+      engagements: ENGAGEMENTS,
+      mappings: maps.map((r, i) => ({
+        id: `m-${i}`,
+        engagementId: engagementOfMapping(r, ENGAGEMENTS)?.id ?? null,
+        read: r,
+        chosen: {},
+      })),
+      existing: [],
+      receipts: read,
+    })
+    expect(
+      plan
+        .filter((l) => l.status === 'billed')
+        .map((l) => [
+          l.transactionId,
+          l.engagementId,
+          l.bills.map((b) => `${b.transactionId}: ${b.receipt?.fileName ?? 'no receipt'}`),
+        ])
+    ).toEqual([
+      ['7101', 'e-isy', ['7101: no receipt']],
+      ['7101', 'e-ait', ['7101: no receipt']],
+      ['7102', 'e-isy', ['7102: Pixel Tools invoice 4471.pdf']],
+      ['7104', 'e-isy', ['7104: Hilltop Office Supply receipt.pdf']],
+      ['7105', 'e-ait', ['7105: CertPath invoice 3302.pdf']],
+      // Each program's share of the fee: the one bill the entry shares out, and its invoice.
+      ['7108', 'e-isy', ['7103: PayPeople invoice 0926.pdf']],
+      ['7108', 'e-ait', ['7103: PayPeople invoice 0926.pdf']],
     ])
   })
 })

@@ -25,6 +25,7 @@ import {
   OPTIONAL_FOLDERS,
   PROGRAM_NAMES_FOLDER,
   ACCOUNT_MAPPING_FOLDER,
+  RECEIPTS_FOLDER,
   filesFromZip,
   sortPayrollZip,
   type PayrollFolderKind,
@@ -1129,7 +1130,9 @@ export function UploadPanel({
     replace: boolean,
     names: File[],
     /** Its "Account mapping" files: not proof either (each engagement's account mapping). */
-    mappings: File[]
+    mappings: File[],
+    /** Its "Receipts" files: the receipts of the books' bills, for the expenses step. */
+    receipts: File[]
   ) => void
   /** Already uploaded this month: match those files again without uploading more. */
   onSkip?: () => void
@@ -1144,6 +1147,7 @@ export function UploadPanel({
   const [files, setFiles] = useState<{ file: File; kind: PayrollFolderKind; folder: string }[]>([])
   const [names, setNames] = useState<File[]>([])
   const [mappings, setMappings] = useState<File[]>([])
+  const [receipts, setReceipts] = useState<File[]>([])
   const [problems, setProblems] = useState<string[]>([])
   // Too big to take: the zip, the number of files, or one file over the server's limit. Said as it is, not as a layout problem.
   const [tooBig, setTooBig] = useState<string | null>(null)
@@ -1152,6 +1156,7 @@ export function UploadPanel({
     setFiles([])
     setNames([])
     setMappings([])
+    setReceipts([])
     setProblems([])
     setTooBig(null)
     setZipName(zip?.name ?? null)
@@ -1191,6 +1196,7 @@ export function UploadPanel({
       setFiles(sorted.files)
       setNames(sorted.names)
       setMappings(sorted.mappings)
+      setReceipts(sorted.receipts)
       setProblems(sorted.problems)
     } catch (e) {
       setProblems([(e as Error).message])
@@ -1259,6 +1265,13 @@ export function UploadPanel({
                 <span className="ad-tile-note">{mappings.length === 1 ? 'file' : 'files'}</span>
               </div>
             )}
+            {receipts.length > 0 && takesNames && (
+              <div className="ad-tile ad-tile-ok">
+                <span className="ad-tile-label">{RECEIPTS_FOLDER}</span>
+                <span className="ad-tile-value">{receipts.length}</span>
+                <span className="ad-tile-note">{receipts.length === 1 ? 'file' : 'files'}</span>
+              </div>
+            )}
           </div>
           {names.length > 0 && !takesNames && (
             <p className="text-sm text-soft">
@@ -1295,7 +1308,13 @@ export function UploadPanel({
         <Button
           kind={kind}
           onClick={() =>
-            onReady(files, replace, takesNames ? names : [], takesNames ? mappings : [])
+            onReady(
+              files,
+              replace,
+              takesNames ? names : [],
+              takesNames ? mappings : [],
+              takesNames ? receipts : []
+            )
           }
           disabled={!files.length || problems.length > 0 || !!tooBig || !!busy}
         >

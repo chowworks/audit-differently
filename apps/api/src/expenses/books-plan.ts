@@ -1,6 +1,8 @@
 import {
   programKey,
   type BooksAllocationDto,
+  type BooksBillDto,
+  type BooksBillSaved,
   type BooksLineDto,
   type BooksLineStatus,
   type ProgramNames,
@@ -9,6 +11,12 @@ import { isPayrollRow } from '../imports/imports.service'
 import { programIn } from '../payroll/payroll-details'
 import { budgetLineOfCategory, type AccountMappingRead } from './account-mapping'
 import type { BooksLine, BooksTransaction } from './books'
+import {
+  receiptsOfBills,
+  type PlanBill,
+  type PlanBillChoice,
+  type PlanReceipt,
+} from './books-receipts'
 
 /**
  * Where each of the month's books lines goes (owner's decision, 2026-11-09): to an engagement by its class (the
@@ -46,6 +54,8 @@ export interface PlanExisting {
   totalCost: number
   budgetLineId: string | null
   allocationNote: string | null
+  /** The bills Save kept with it (Expense.booksBills); null on a line written before bills were kept. */
+  booksBills?: BooksBillSaved[] | null
 }
 
 export const SKIP = 'skip'
@@ -106,6 +116,9 @@ export function planBooks(input: {
   engagements: PlanEngagement[]
   mappings: PlanMapping[]
   existing: PlanExisting[]
+  /** The month's workspace receipts, and owners' words on bills (owner's decision, 2026-11-12). */
+  receipts?: PlanReceipt[]
+  choices?: PlanBillChoice[]
 }): BooksLineDto[] {
   const { period, transactions, engagements } = input
   const groups = input.programs.map((g, id) => ({ id, names: g.names }))
@@ -124,6 +137,7 @@ export function planBooks(input: {
   const byKey = new Map(input.existing.filter((x) => x.booksKey).map((x) => [x.booksKey!, x]))
   const seen = new Map<string, number>()
   const out: BooksLineDto[] = []
+  const shares = new Map<BooksLineDto, Share>()
   for (const t of transactions) {
     const classes = new Set(t.lines.map((l) => programKey(l.className)).filter(Boolean))
     const total = cents(t.lines.reduce((s, l) => s + l.amount, 0))
@@ -182,6 +196,7 @@ export function planBooks(input: {
         budgetLineId: null,
         budgetLineName: null,
         allocation,
+        bills: [],
         saved: null,
       }
       out.push(line)
@@ -252,13 +267,9 @@ export function planBooks(input: {
         set('month-closed')
         continue
       }
-      const before = byKey.get(line.key)
-      if (before) {
-        line.saved = sameAs(before, line) ? 'same' : 'changed'
-        continue
-      }
       // Entered on the month already (typed, or imported from the books before): the same day and amount.
       if (
+        !byKey.has(line.key) &&
         input.existing.some(
           (x) =>
             !x.booksKey &&
@@ -266,22 +277,117 @@ export function planBooks(input: {
             x.date === t.date &&
             near(x.allocatedAmount, l.amount)
         )
-      )
+      ) {
         set('already-entered')
+        continue
+      }
+      shares.set(line, { entry: entry && l.amount > 0 ? entry : null, bookedAs: l.amount })
     }
+  }
+  billsOf(shares, transactions, input.receipts ?? [], input.choices ?? [])
+  for (const line of shares.keys()) {
+    const before = byKey.get(line.key)
+    if (before) line.saved = sameAs(before, line) ? 'same' : 'changed'
   }
   return out
 }
 
+/** A line's share of its bills: of the pool an allocation entry shares out, or of its own transaction. */
+interface Share {
+  entry: Entry | null
+  /** The line's amount in the books, before a bill was dropped. */
+  bookedAs: number
+}
+
+/** A bill's whole amount: what its lines come to. */
+const billOf = (t: BooksTransaction): PlanBill => ({
+  transactionId: t.id,
+  date: t.date,
+  vendor: t.vendor,
+  amount: cents(t.lines.reduce((s, l) => s + l.amount, 0)),
+})
+
+/**
+ * Each billed line's bills, with their receipts; a dropped bill's share comes off the line (owner's decision,
+ * 2026-11-12), and a line whose every bill is dropped bills nothing.
+ */
+function billsOf(
+  shares: Map<BooksLineDto, Share>,
+  transactions: BooksTransaction[],
+  receipts: PlanReceipt[],
+  choices: PlanBillChoice[]
+) {
+  const byId = new Map(transactions.map((t) => [t.id, t]))
+  const sourcesOf = (line: BooksLineDto, s: Share) =>
+    (s.entry ? s.entry.sourceIds : [line.transactionId]).flatMap((id) => byId.get(id) ?? [])
+  const bills = new Map<string, PlanBill>()
+  for (const [line, s] of shares) for (const t of sourcesOf(line, s)) bills.set(t.id, billOf(t))
+  const found = receiptsOfBills([...bills.values()], receipts, choices)
+  const fileOf = new Map(receipts.map((r) => [r.id, r.fileName]))
+  const dropped = new Set(choices.filter((c) => c.dropped).map((c) => c.transactionId))
+  for (const [line, s] of shares) {
+    const sources = sourcesOf(line, s)
+    line.bills = sources.map((t): BooksBillDto => {
+      const r = found.get(t.id)
+      return {
+        ...bills.get(t.id)!,
+        receipt: r
+          ? { documentId: r.documentId, fileName: fileOf.get(r.documentId)!, by: r.by }
+          : null,
+        dropped: dropped.has(t.id),
+      }
+    })
+    const gone = sources.filter((t) => dropped.has(t.id))
+    if (!gone.length) continue
+    const entry = s.entry
+    if (!entry) {
+      line.amount = 0
+      line.status = 'dropped'
+      continue
+    }
+    // The pool's part of each dropped bill: its lines in the pool's class and account.
+    const inPool = (t: BooksTransaction) =>
+      t.lines
+        .filter(
+          (l) => programKey(l.className) === programKey(entry.pool) && l.account === entry.account
+        )
+        .reduce((n, l) => n + l.amount, 0)
+    const off = gone.reduce((n, t) => n + inPool(t), 0)
+    line.amount = cents(s.bookedAs * (1 - off / entry.total))
+    if (line.amount <= 0) {
+      line.amount = 0
+      line.status = 'dropped'
+    }
+  }
+}
+
 /** The words an allocated line's note says: its share, of what, and how the books share it. */
-export function allocationNote(l: Pick<BooksLineDto, 'allocation' | 'className' | 'account'>) {
+export function allocationNote(
+  l: Pick<BooksLineDto, 'allocation' | 'className' | 'account'> & { bills?: BooksBillDto[] }
+) {
   const a = l.allocation
   if (!a) return null
-  const money = `$${a.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  return a.how === 'entry'
-    ? `${a.percent.toFixed(2)}% of ${money}, shared out by the books' allocation entry ${a.entryId}`
-    : `${a.percent.toFixed(2)}% of ${money}, as the books split transaction ${a.sourceIds[0]} by class`
+  const money = (n: number) =>
+    `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const note =
+    a.how === 'entry'
+      ? `${a.percent.toFixed(2)}% of ${money(a.total)}, shared out by the books' allocation entry ${a.entryId}`
+      : `${a.percent.toFixed(2)}% of ${money(a.total)}, as the books split transaction ${a.sourceIds[0]} by class`
+  const gone = (l.bills ?? []).filter((b) => b.dropped)
+  if (!gone.length) return note
+  return `${note}, less its share of ${gone.length === 1 ? 'bill' : 'bills'} ${gone.map((b) => `${b.transactionId} (${money(b.amount)})`).join(', ')}, dropped for want of a receipt`
 }
+
+/** The bills a line keeps when saved (Expense.booksBills). */
+export const savedBills = (l: Pick<BooksLineDto, 'bills'>): BooksBillSaved[] =>
+  l.bills.map((b) => ({
+    transactionId: b.transactionId,
+    date: b.date,
+    vendor: b.vendor,
+    amount: b.amount,
+    documentId: b.receipt?.documentId ?? null,
+    dropped: b.dropped,
+  }))
 
 /** What Save writes for a line, as a line written before would read: the same, or changed since. */
 function sameAs(x: PlanExisting, l: BooksLineDto) {
@@ -290,6 +396,7 @@ function sameAs(x: PlanExisting, l: BooksLineDto) {
     near(x.allocatedAmount, l.amount) &&
     near(x.totalCost, l.allocation?.total ?? l.amount) &&
     x.budgetLineId === l.budgetLineId &&
-    (x.allocationNote ?? null) === allocationNote(l)
+    (x.allocationNote ?? null) === allocationNote(l) &&
+    JSON.stringify(x.booksBills ?? null) === JSON.stringify(savedBills(l))
   )
 }

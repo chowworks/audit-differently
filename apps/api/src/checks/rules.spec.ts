@@ -1,4 +1,4 @@
-import { dueDate, runRules, type RuleExpense, type RuleMonth } from './rules'
+import { booksBillsOf, dueDate, runRules, type RuleExpense, type RuleMonth } from './rules'
 
 const expense = (overrides: Partial<RuleExpense> = {}): RuleExpense => ({
   id: 'e1',
@@ -38,6 +38,50 @@ describe('runRules', () => {
       'missing-invoice',
       'missing-proof-of-payment',
     ])
+  })
+
+  it("names a books line's bills that have no receipt, without blocking the line (owner's decision, 2026-11-12)", () => {
+    const bills = booksBillsOf([
+      {
+        transactionId: 'T1',
+        date: '2026-07-02',
+        vendor: 'PayPeople',
+        amount: 200,
+        documentId: 'd1',
+        dropped: false,
+      },
+      {
+        transactionId: 'T2',
+        date: '2026-07-09',
+        vendor: 'PayPeople',
+        amount: 46.81,
+        documentId: null,
+        dropped: false,
+      },
+      {
+        transactionId: 'T3',
+        date: '2026-07-16',
+        vendor: 'PayPeople',
+        amount: 10,
+        documentId: null,
+        dropped: true,
+      },
+    ])
+    expect(bills).toEqual({
+      bills: 2,
+      billsWithoutReceipt: [{ transactionId: 'T2', vendor: 'PayPeople', amount: 46.81 }],
+    })
+    const found = runRules(month({ expenses: [expense({ fromBooks: true, ...bills })] }))
+    expect(found.map((f) => [f.code, f.severity])).toEqual([['bills-without-receipt', 'attention']])
+    expect(found[0]!.message).toBe(
+      "T-1 (Vendor A, $100.00): 1 of 2 bills have a receipt. No receipt for T2 (PayPeople, $46.81): find it, or drop the bill on the month's expenses."
+    )
+    // With no receipt at all, the line wants its invoice as any line does.
+    expect(
+      codes(month({ expenses: [expense({ fromBooks: true, ...bills, documents: ['payment'] })] }))
+    ).toEqual(['missing-invoice'])
+    // A line saved before bills were kept reads as it did.
+    expect(booksBillsOf(null)).toEqual({})
   })
 
   it('wants a timesheet and a register on payroll lines, not an invoice', () => {

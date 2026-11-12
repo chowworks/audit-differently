@@ -75,4 +75,32 @@ describe("the payroll zip's expenses folders", () => {
     expect(problems).toHaveLength(1)
     expect(problems[0]).toContain('Account mapping/scan.pdf')
   })
+
+  it("gives the Receipts files back apart: the books' bills' receipts, not payroll proof (owner's decision, 2026-11-12)", () => {
+    const { files, receipts, problems } = sortPayrollZip(
+      [
+        f('Timesheets/t.pdf'),
+        f('Payroll registers/r.pdf'),
+        f('Bank & card statements/b.pdf'),
+        f('Receipts/Pixel Tools.pdf'),
+        f('Receipts/rent.jpg'),
+      ],
+      []
+    )
+    expect(problems).toEqual([])
+    expect(files).toHaveLength(3)
+    expect(receipts.map((x) => x.name)).toEqual(['Pixel Tools.pdf', 'rent.jpg'])
+    // A spreadsheet is no receipt: the payroll company's billing report stays out (owner's decision, 2026-11-12).
+    expect(
+      sortPayrollZip(
+        [
+          f('Timesheets/t.pdf'),
+          f('Payroll registers/r.pdf'),
+          f('Bank & card statements/b.pdf'),
+          f('Receipts/billing.csv'),
+        ],
+        []
+      ).problems
+    ).toHaveLength(1)
+  })
 })

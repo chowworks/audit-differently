@@ -328,6 +328,58 @@ export async function accountMappingXlsx(m: SampleMapping): Promise<Buffer> {
   return steady(book)
 }
 
+/**
+ * The vendors' receipts and invoices of the month's bills (owner's decision, 2026-11-12), each dated a few days before
+ * the books booked it, as invoices are: the software, the payroll company's fee (the bill the allocation entry shares
+ * out), the office supplies and the certification. The rent has none, so the expenses step shows a bill to find or drop.
+ */
+export const RECEIPTS: { transactionId: string; name: string; date: string; number: string }[] = [
+  {
+    transactionId: '7102',
+    name: 'Pixel Tools invoice 4471.pdf',
+    date: '2026-09-03',
+    number: 'PT-4471',
+  },
+  {
+    transactionId: '7103',
+    name: 'PayPeople invoice 0926.pdf',
+    date: '2026-09-06',
+    number: 'PP-0926',
+  },
+  {
+    transactionId: '7104',
+    name: 'Hilltop Office Supply receipt.pdf',
+    date: VENDOR.date,
+    number: 'HOS-1188',
+  },
+  {
+    transactionId: '7105',
+    name: 'CertPath invoice 3302.pdf',
+    date: '2026-09-09',
+    number: 'CP-3302',
+  },
+]
+
+/** A vendor's invoice for one of the month's bills: its name, the date, the number, the line and the total. */
+export function receiptPdf(r: (typeof RECEIPTS)[number]): Promise<Buffer> {
+  const t = TRANSACTIONS.find((x) => x.id === r.transactionId)!
+  const total = t.lines.reduce((n, l) => n + l.amount, 0)
+  const at = [48, 400]
+  return layoutPdf(
+    t.vendor,
+    [
+      [`Invoice ${r.number}`, `Invoice date ${us(r.date)}`],
+      [`Bill to ${COMPANY}`],
+      null,
+      { at, cells: ['Description', 'Amount'] },
+      { at, cells: [t.description, money(total)] },
+      null,
+      { at, cells: ['Total', money(total)] },
+    ],
+    SAMPLE_FOOTER
+  )
+}
+
 /** The expense files, in the zip's folders. */
 export async function expenseSampleFiles(): Promise<
   { folder: string; name: string; bytes: Buffer }[]
@@ -349,6 +401,9 @@ export async function expenseSampleFiles(): Promise<
         name: m.name,
         bytes: await accountMappingXlsx(m),
       }))
+    )),
+    ...(await Promise.all(
+      RECEIPTS.map(async (r) => ({ folder: 'Receipts', name: r.name, bytes: await receiptPdf(r) }))
     )),
   ]
 }

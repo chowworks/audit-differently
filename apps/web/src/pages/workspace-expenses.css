@@ -30,3 +30,53 @@
   gap: 8px;
   justify-content: flex-end;
 }
+.wex-receipts > summary {
+  cursor: pointer;
+  list-style: none;
+  margin-top: 4px;
+}
+.wex-bills {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.wex-bills > li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+.wex-bill-do {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.wex-bill-do select {
+  max-width: 220px;
+}
+.wex-file {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.wex-file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.wex-file-small {
+  padding: 2px 8px;
+  font-size: 0.875rem;
+}

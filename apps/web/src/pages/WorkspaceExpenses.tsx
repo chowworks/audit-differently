@@ -1,7 +1,10 @@
 import { useState } from 'react'
 import type {
   AccountMappingDto,
+  BooksBillDto,
+  BooksBillInput,
   BooksLineDto,
+  BooksReceiptDto,
   WorkspaceExpensesDto,
   WorkspaceExpensesSavedDto,
 } from '@ad/types'
@@ -12,8 +15,10 @@ import {
   engagementGroups,
   notOnEngagements,
   paidWords,
+  receiptWords,
   saveCounts,
   shareWords,
+  unmatchedReceipts,
 } from './workspace-expenses'
 import './workspace-expenses.css'
 
@@ -60,6 +65,51 @@ export function WorkspaceExpenses({
       setBusy(null)
     }
   }
+  const receiptsUrl = `/workspaces/${workspaceId}/expenses/${period}/receipts`
+  const addReceipts = async (files: File[], transactionId?: string) => {
+    if (!files.length) return
+    setError(null)
+    setBusy(transactionId ? 'Reading the receipt…' : `Reading ${many(files.length, 'receipt')}…`)
+    try {
+      for (let at = 0; at < files.length; at += 20) {
+        const form = new FormData()
+        for (const f of files.slice(at, at + 20)) form.append('files', f)
+        if (transactionId) form.append('transactionId', transactionId)
+        load.setData(await api.upload<WorkspaceExpensesDto>(receiptsUrl, form))
+      }
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(null)
+    }
+  }
+  const setBill = async (body: Omit<BooksBillInput, 'period'>) => {
+    setError(null)
+    setBusy(body.dropped ? 'Dropping the bill…' : 'Saving the receipt…')
+    try {
+      load.setData(
+        await api.put<WorkspaceExpensesDto>(`/workspaces/${workspaceId}/expenses/bills`, {
+          ...body,
+          period,
+        })
+      )
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(null)
+    }
+  }
+  const bills: BillActions | null = can
+    ? {
+        busy: !!busy,
+        open: unmatchedReceipts(d),
+        attach: (transactionId, file) => void addReceipts([file], transactionId),
+        choose: (transactionId, documentId) =>
+          void setBill({ transactionId, documentId, dropped: false }),
+        drop: (transactionId, dropped) =>
+          void setBill({ transactionId, documentId: null, dropped }),
+      }
+    : null
   const save = async () => {
     setError(null)
     setBusy('Saving the expenses…')
@@ -208,9 +258,48 @@ export function WorkspaceExpenses({
         )}
       </Card>
 
+      {d.file && (
+        <Card
+          title="Receipts"
+          aside={
+            can ? (
+              <label className="wex-file">
+                <input
+                  type="file"
+                  multiple
+                  accept=".pdf,.png,.jpg,.jpeg"
+                  disabled={!!busy}
+                  onChange={(ev) => {
+                    void addReceipts([...(ev.target.files ?? [])])
+                    ev.target.value = ''
+                  }}
+                />
+                <span>Upload receipts</span>
+              </label>
+            ) : undefined
+          }
+        >
+          <p className="text-sm">
+            Each line's bills, proved by their receipts: the zip's <b>Receipts</b> folder, receipts
+            emailed to the month, or uploaded here. A receipt is matched to a bill by its amount and
+            date; a bill with none can be dropped, and its share comes off the line.{' '}
+            <b>{many(d.receipts.length, 'receipt')}</b>,{' '}
+            {many(d.receipts.length - unmatchedReceipts(d).length, 'matched', 'matched')}.
+          </p>
+          {unmatchedReceipts(d).length > 0 && (
+            <details className="wex-why">
+              <summary>
+                <b>Not matched to a bill</b> · {many(unmatchedReceipts(d).length, 'receipt')}
+              </summary>
+              <ReceiptList receipts={unmatchedReceipts(d)} />
+            </details>
+          )}
+        </Card>
+      )}
+
       {groups.map((g) => (
         <Card key={g.id} title={g.name} aside={<b>{money(g.total)}</b>}>
-          <LineTable lines={g.lines} withLine />
+          <LineTable lines={g.lines} withLine bills={bills} />
         </Card>
       ))}
 
@@ -222,7 +311,7 @@ export function WorkspaceExpenses({
                 <summary>
                   <b>{n.label}</b> · {many(n.lines.length, 'line')} · {money(n.total)}
                 </summary>
-                <LineTable lines={n.lines} />
+                <LineTable lines={n.lines} bills={n.status === 'dropped' ? bills : null} />
               </details>
             ))}
           </div>
@@ -249,7 +338,134 @@ export function WorkspaceExpenses({
   )
 }
 
-function LineTable({ lines, withLine = false }: { lines: BooksLineDto[]; withLine?: boolean }) {
+/** What an owner may do to a bill: attach a receipt, choose one of the month's, drop it, or bring it back. */
+interface BillActions {
+  busy: boolean
+  /** The month's receipts that prove no bill yet. */
+  open: BooksReceiptDto[]
+  attach: (transactionId: string, file: File) => void
+  choose: (transactionId: string, documentId: string | null) => void
+  drop: (transactionId: string, dropped: boolean) => void
+}
+
+function ReceiptList({ receipts }: { receipts: BooksReceiptDto[] }) {
+  return (
+    <ul className="wex-bills">
+      {receipts.map((r) => (
+        <li key={r.documentId}>
+          <span className="font-semibold">{r.fileName}</span>
+          <span className="text-soft">
+            {[r.date, r.vendor, r.amount == null ? 'no amount read' : money(r.amount)]
+              .filter(Boolean)
+              .join(' · ')}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** A line's bills, each with its receipt, or none and what an owner may do. */
+function BillList({ bills, actions }: { bills: BooksBillDto[]; actions: BillActions | null }) {
+  return (
+    <ul className="wex-bills">
+      {bills.map((b) => (
+        <li key={b.transactionId}>
+          <span>
+            <span className="font-semibold">{b.vendor || 'No vendor'}</span>{' '}
+            <span className="text-soft">
+              {b.date} · {money(b.amount)} · bill {b.transactionId}
+            </span>
+          </span>
+          {b.dropped ? (
+            <span className="wex-bill-do">
+              <Chip tone="muted">Dropped</Chip>
+              {actions && (
+                <Button
+                  kind="ghost"
+                  disabled={actions.busy}
+                  onClick={() => actions.drop(b.transactionId, false)}
+                >
+                  Undo
+                </Button>
+              )}
+            </span>
+          ) : b.receipt ? (
+            <span className="wex-bill-do">
+              <Chip tone="ok">{b.receipt.fileName}</Chip>
+              {actions && b.receipt.by === 'person' && (
+                <Button
+                  kind="ghost"
+                  disabled={actions.busy}
+                  onClick={() => actions.choose(b.transactionId, null)}
+                >
+                  Match again
+                </Button>
+              )}
+            </span>
+          ) : (
+            <span className="wex-bill-do">
+              <Chip tone="warn">No receipt</Chip>
+              {actions && actions.open.length > 0 && (
+                <select
+                  aria-label={`Receipt of bill ${b.transactionId}`}
+                  value=""
+                  disabled={actions.busy}
+                  onChange={(ev) =>
+                    ev.target.value && actions.choose(b.transactionId, ev.target.value)
+                  }
+                >
+                  <option value="">Choose a receipt…</option>
+                  {actions.open.map((r) => (
+                    <option key={r.documentId} value={r.documentId}>
+                      {r.fileName}
+                      {r.amount == null ? '' : ` (${money(r.amount)})`}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {actions && (
+                <label className="wex-file wex-file-small">
+                  <input
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg"
+                    aria-label={`Attach the receipt of bill ${b.transactionId}`}
+                    disabled={actions.busy}
+                    onChange={(ev) => {
+                      const f = ev.target.files?.[0]
+                      if (f) actions.attach(b.transactionId, f)
+                      ev.target.value = ''
+                    }}
+                  />
+                  <span>Attach receipt</span>
+                </label>
+              )}
+              {actions && (
+                <Button
+                  kind="ghost"
+                  disabled={actions.busy}
+                  onClick={() => actions.drop(b.transactionId, true)}
+                >
+                  Drop
+                </Button>
+              )}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function LineTable({
+  lines,
+  withLine = false,
+  bills = null,
+}: {
+  lines: BooksLineDto[]
+  withLine?: boolean
+  bills?: BillActions | null
+}) {
   return (
     <div className="ad-tablewrap">
       <table className="ad-table wex-table">
@@ -265,6 +481,7 @@ function LineTable({ lines, withLine = false }: { lines: BooksLineDto[]; withLin
         <tbody>
           {lines.map((l) => {
             const share = shareWords(l, money)
+            const receipts = receiptWords(l)
             return (
               <tr key={l.key}>
                 <td>{l.date}</td>
@@ -281,7 +498,15 @@ function LineTable({ lines, withLine = false }: { lines: BooksLineDto[]; withLin
                   {share && <span className="ad-table-sub">{share}</span>}
                   {l.status === 'already-entered' && <Chip tone="muted">Already on the month</Chip>}
                   {l.saved === 'same' && <Chip tone="ok">Saved</Chip>}
-                  {l.saved === 'changed' && <Chip tone="warn">Changed in the books</Chip>}
+                  {l.saved === 'changed' && <Chip tone="warn">Changed since saved</Chip>}
+                  {receipts && l.bills.length > 0 && (
+                    <details className="wex-receipts">
+                      <summary>
+                        <Chip tone={receipts.complete ? 'ok' : 'warn'}>{receipts.words}</Chip>
+                      </summary>
+                      <BillList bills={l.bills} actions={bills} />
+                    </details>
+                  )}
                 </td>
                 <td className="ad-num">{money(l.amount)}</td>
               </tr>

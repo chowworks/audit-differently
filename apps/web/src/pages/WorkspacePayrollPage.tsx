@@ -42,6 +42,7 @@ import {
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { WorkspaceExpenses } from '@/pages/WorkspaceExpenses'
 import { UploadPanel } from '@/components/PayrollProof'
+import { RECEIPTS_FOLDER } from '@/lib/zip-files'
 import {
   BudgetTracking,
   FileStats,
@@ -124,6 +125,8 @@ const many = (n: number, one: string, more = `${one}s`) =>
   `${n.toLocaleString('en-US')} ${n === 1 ? one : more}`
 /** Files go up to the run 20 at a time, the server's limit for one request. */
 const BATCH = 20
+/** Receipts sent at once (the server's limit for one request). */
+const RECEIPTS_AT_ONCE = 20
 /** The progress poll gives up after this long with no file read. */
 const STALL_MS = 10 * 60_000
 const STALLED = 'No file was read in 10 minutes.'
@@ -629,7 +632,9 @@ function WorkspaceMatch({
     /** The zip's "Program names" files: merged into the workspace's program names first, so the match reads by them. */
     names: File[] = [],
     /** The zip's "Account mapping" files: each kept as its engagement's account mapping, for the expenses step. */
-    mappings: File[] = []
+    mappings: File[] = [],
+    /** The zip's "Receipts" files: the month's receipts of the books' bills, for the expenses step. */
+    receipts: File[] = []
   ): Promise<boolean> => {
     clearErrors()
     const fail = where === 'files' ? setFileError : setRunError
@@ -654,6 +659,18 @@ function WorkspaceMatch({
           await api.upload(`/workspaces/${workspaceId}/account-mappings`, form)
         } catch (e) {
           fail(`Account mapping/${file.name}: ${(e as Error).message}`)
+          return false
+        }
+      }
+      for (let at = 0; at < receipts.length; at += RECEIPTS_AT_ONCE) {
+        const batch = receipts.slice(at, at + RECEIPTS_AT_ONCE)
+        setBusy(`Reading receipts ${at + 1}–${at + batch.length} of ${receipts.length}…`)
+        const form = new FormData()
+        for (const file of batch) form.append('files', file)
+        try {
+          await api.upload(`/workspaces/${workspaceId}/expenses/${period}/receipts`, form)
+        } catch (e) {
+          fail(`${RECEIPTS_FOLDER}: ${(e as Error).message}`)
           return false
         }
       }
@@ -1056,7 +1073,8 @@ function WorkspaceMatch({
           busy,
           error: fileError,
           changeOpen: !!run,
-          onReplace: (zip, names, mappings) => upload('replace', zip, 'files', names, mappings),
+          onReplace: (zip, names, mappings, receipts) =>
+            upload('replace', zip, 'files', names, mappings, receipts),
           onAdd: (added) => upload('add', added, 'files'),
           onRemove: removeFile,
         }}
@@ -1074,7 +1092,8 @@ function WorkspaceMatch({
             busy,
             error: fileError,
             changeOpen: !!run,
-            onReplace: (zip, names, mappings) => upload('replace', zip, 'files', names, mappings),
+            onReplace: (zip, names, mappings, receipts) =>
+              upload('replace', zip, 'files', names, mappings, receipts),
             onAdd: (added) => upload('add', added, 'files'),
             onRemove: removeFile,
           }}
@@ -1103,8 +1122,8 @@ function WorkspaceMatch({
               maxFiles={MAX_WORKSPACE_PAYROLL_FILES}
               takesNames
               kind="navy"
-              onReady={(zip, _replace, names, mappings) =>
-                void upload('replace', zip, 'match', names, mappings)
+              onReady={(zip, _replace, names, mappings, receipts) =>
+                void upload('replace', zip, 'match', names, mappings, receipts)
               }
             />
           </div>
@@ -1135,8 +1154,8 @@ function WorkspaceMatch({
                 maxFiles={MAX_WORKSPACE_PAYROLL_FILES}
                 takesNames
                 kind="navy"
-                onReady={(zip, replace, names, mappings) =>
-                  void upload(replace ? 'replace' : 'add', zip, 'match', names, mappings)
+                onReady={(zip, replace, names, mappings, receipts) =>
+                  void upload(replace ? 'replace' : 'add', zip, 'match', names, mappings, receipts)
                 }
                 onSkip={() => void matchAgain()}
               />
@@ -1305,8 +1324,8 @@ function WorkspaceMatch({
                   takesNames
                   kind="navy"
                   action="Send the rest of the zip"
-                  onReady={(zip, _replace, names, mappings) =>
-                    void upload('replace', zip, 'match', names, mappings)
+                  onReady={(zip, _replace, names, mappings, receipts) =>
+                    void upload('replace', zip, 'match', names, mappings, receipts)
                   }
                 />
               </div>

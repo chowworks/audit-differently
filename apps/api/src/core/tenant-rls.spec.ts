@@ -3748,6 +3748,51 @@ suite('tenant isolation', () => {
       ).rejects.toThrow(/Expense_booksKey_check/)
     })
   })
+
+  describe("the books' bills (migration 20261112000100)", () => {
+    const bill = (id: string, ws: string, by: string, tx = id) =>
+      `INSERT INTO "BooksBill" ("id","workspaceId","period","transactionId","dropped","changedById")
+       VALUES ('${id}','${ws}','2026-09','${tx}',true,'${by}')`
+
+    it('lets an owner alone say a bill is dropped, which owners and auditors read', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(bill('BB-0', 'W1', 'owner-W1'))).rows).toBe(1)
+        expect((await attempt(bill('BB-x', 'W1', 'aud-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(bill('BB-w', 'W2', 'owner-W1'))).error).toMatch(/row-level security/)
+      })
+      await db.query(bill('BB-1', 'W1', 'owner-W1'))
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(bill('BB-b', 'W1', 'book-W1'))).error).toMatch(/row-level security/)
+        expect(await ids('BooksBill')).toEqual([])
+      })
+      await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+        expect((await attempt(`DELETE FROM "BooksBill"`)).rows).toBe(0)
+      })
+      await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+        expect(await ids('BooksBill')).toEqual([])
+      })
+      await db.query(`DELETE FROM "BooksBill"`)
+    })
+
+    it("takes a receipt of the bill's own workspace only, and never with the bill dropped", async () => {
+      await db.query(bill('BB-2', 'W1', 'owner-W1'))
+      await expect(
+        db.query(
+          `UPDATE "BooksBill" SET "dropped" = false, "documentId" = 'D-W2' WHERE "id" = 'BB-2'`
+        )
+      ).rejects.toThrow(/own workspace/)
+      await expect(
+        db.query(`UPDATE "BooksBill" SET "documentId" = 'D-W1' WHERE "id" = 'BB-2'`)
+      ).rejects.toThrow(/BooksBill_one_check/)
+      await db.query(`DELETE FROM "BooksBill"`)
+    })
+
+    it("keeps a line's bills on a books line only", async () => {
+      await expect(
+        db.query(`UPDATE "Expense" SET "booksBills" = '[]' WHERE "id" = 'X-W1'`)
+      ).rejects.toThrow(/Expense_booksBills_check/)
+    })
+  })
 })
 
 describe('touchesTenantTable', () => {

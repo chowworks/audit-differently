@@ -8,15 +8,22 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common'
-import { FileInterceptor } from '@nestjs/platform-express'
-import type { AccountMappingDto, WorkspaceExpensesDto, WorkspaceExpensesSavedDto } from '@ad/types'
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express'
+import type {
+  AccountMappingDto,
+  BooksBillInput,
+  WorkspaceExpensesDto,
+  WorkspaceExpensesSavedDto,
+} from '@ad/types'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
-import { ExpensesService } from './expenses.service'
+import { ExpensesService, MAX_BOOKS_RECEIPTS } from './expenses.service'
 
 /**
  * The month's expenses from the books (owner's decision, 2026-11-09): the lines of the accounting export in the month's
@@ -80,5 +87,39 @@ export class ExpensesController {
     @Param('period') period: string
   ): Promise<WorkspaceExpensesSavedDto> {
     return this.expenses.save(await this.callers.load(userId), id, period)
+  }
+
+  /** Receipts for the month's bills (the zip's "Receipts" folder), or one bill's receipt (`transactionId`). */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post('workspaces/:id/expenses/:period/receipts')
+  @UseInterceptors(
+    FilesInterceptor('files', MAX_BOOKS_RECEIPTS, {
+      limits: { fileSize: 10 * 1024 * 1024, files: MAX_BOOKS_RECEIPTS },
+    })
+  )
+  async addReceipts(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('period') period: string,
+    @UploadedFiles() files: Express.Multer.File[] | undefined,
+    @Body() body: { transactionId?: unknown }
+  ): Promise<WorkspaceExpensesDto> {
+    return this.expenses.addReceipts(
+      await this.callers.load(userId),
+      id,
+      period,
+      files,
+      body?.transactionId
+    )
+  }
+
+  /** An owner's word on one bill: its receipt, or dropped for want of one. */
+  @Put('workspaces/:id/expenses/bills')
+  async setBill(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Body() body: BooksBillInput
+  ): Promise<WorkspaceExpensesDto> {
+    return this.expenses.setBill(await this.callers.load(userId), id, body)
   }
 }

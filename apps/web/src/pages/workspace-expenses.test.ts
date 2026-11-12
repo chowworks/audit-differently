@@ -4,8 +4,10 @@ import {
   engagementGroups,
   notOnEngagements,
   paidWords,
+  receiptWords,
   saveCounts,
   shareWords,
+  unmatchedReceipts,
 } from './workspace-expenses'
 
 const line = (over: Partial<BooksLineDto>): BooksLineDto => ({
@@ -27,6 +29,7 @@ const line = (over: Partial<BooksLineDto>): BooksLineDto => ({
   budgetLineId: 'b-ind',
   budgetLineName: 'Indirect Costs',
   allocation: null,
+  bills: [],
   saved: null,
   ...over,
 })
@@ -99,5 +102,51 @@ describe("the month's expenses from the books, on screen", () => {
       line({ key: 'p3', status: 'allocation-pool', engagementId: null, amount: -692.09 }),
     ])
     expect(Object.is(pool!.total, 0)).toBe(true)
+  })
+
+  it("says how many of a line's bills have a receipt, dropped ones aside (owner's decision, 2026-11-12)", () => {
+    const bill = (id: string, receipt: boolean, dropped = false) => ({
+      transactionId: id,
+      date: '2026-09-08',
+      vendor: 'PayPeople',
+      amount: 10,
+      receipt: receipt
+        ? { documentId: `r-${id}`, fileName: `${id}.pdf`, by: 'auto' as const }
+        : null,
+      dropped,
+    })
+    expect(receiptWords(line({}))).toBeNull()
+    expect(receiptWords(line({ bills: [bill('1', true)] }))).toEqual({
+      words: 'Receipt',
+      complete: true,
+    })
+    expect(receiptWords(line({ bills: [bill('1', false)] }))).toEqual({
+      words: 'No receipt',
+      complete: false,
+    })
+    expect(receiptWords(line({ bills: [bill('1', false, true)] }))).toEqual({
+      words: 'Dropped: no receipt',
+      complete: false,
+    })
+    expect(
+      receiptWords(line({ bills: [bill('1', true), bill('2', false), bill('3', false, true)] }))
+    ).toEqual({ words: '1 of 2 bills have a receipt (1 dropped)', complete: false })
+    expect(receiptWords(line({ bills: [bill('1', true), bill('2', false, true)] }))?.complete).toBe(
+      true
+    )
+  })
+
+  it('lists the receipts that prove no bill yet', () => {
+    const r = (id: string, transactionIds: string[]) => ({
+      documentId: id,
+      fileName: `${id}.pdf`,
+      amount: 10,
+      date: null,
+      vendor: null,
+      transactionIds,
+    })
+    expect(
+      unmatchedReceipts({ receipts: [r('a', ['1']), r('b', [])] }).map((x) => x.documentId)
+    ).toEqual(['b'])
   })
 })

@@ -57,6 +57,7 @@ model Workspace {
   droppedPayrollDecisions    PayrollDroppedDecision[]
   payrollFileAiReadings      PayrollFileAiReading[]
   accountMappings            AccountMapping[]
+  booksBills                 BooksBill[]
 }
 
 // Something a member asked for: today, an addition to one of the workspace's lists. Kept so the product can
@@ -407,6 +408,8 @@ model Expense {
   payrollSplit      Json?
   /// Written by the month's expenses from the books: the month, transaction, account, class and place (migration 20261109000100)
   booksKey          String?
+  /// A books line's bills and the receipt of each (BooksBillSaved[] in packages/types), written by Save (migration 20261112000100)
+  booksBills        Json?
   createdById       String?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
@@ -457,6 +460,7 @@ model Document {
   wexPayments      WexPaymentDocument[]
   payLines         PayrollPayLine[]
   staffPayProofs   StaffPayProof[]
+  booksBills       BooksBill[]
 
   @@index([workspaceId, period])
   @@index([engagementId])
@@ -871,4 +875,21 @@ model AccountMapping {
   engagement   Engagement? @relation(fields: [engagementId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId])
+}
+
+/// An owner's word on one of the books' bills of a month (migration 20261112000100): the workspace receipt that proves
+/// it, or dropped for want of one (its share then comes off the lines that bill it). Read by owners and auditors.
+model BooksBill {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  period        String
+  transactionId String
+  documentId    String?
+  dropped       Boolean   @default(false)
+  changedById   String
+  changedAt     DateTime  @default(now())
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  document      Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, period, transactionId])
 }
