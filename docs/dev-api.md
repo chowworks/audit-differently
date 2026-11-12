@@ -171,7 +171,8 @@ Payroll, each with its own time report, register, a pay stub per participant, an
   ($1,440.00 and $960.00), the payroll company's $210.00 fee shared out by its month-end allocation entry ($140.00 and
   $70.00), software, the $412.60 bank payment to Hilltop Office Supply and certification vouchers; and lists on no
   engagement a Summer Youth field trip (no engagement), an advisory board lunch (not billable to In-School Youth) and
-  insurance booked from prepaid (no class).
+  insurance booked from prepaid (no class). Its Receipts folder has the invoices of the software, the fee, the office
+  supplies and the vouchers, each matched to its bill; the rent has none, so its lines show a bill to find or drop.
 
 The tour: on Engagement staffing, add the three staff, then tag Morgan to both engagements, Priya to In-School Youth and
 Sam to Adult IT; upload the sample on Workspace payroll for September 2026. Before Save, Staff shows the three matched
