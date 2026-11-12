@@ -460,7 +460,8 @@ model Document {
   wexPayments      WexPaymentDocument[]
   payLines         PayrollPayLine[]
   staffPayProofs   StaffPayProof[]
-  booksBills       BooksBill[]
+  booksBills       BooksBill[]           @relation("BooksBillReceipt")
+  booksPayments    BooksBill[]           @relation("BooksBillPayment")
 
   @@index([workspaceId, period])
   @@index([engagementId])
@@ -878,18 +879,38 @@ model AccountMapping {
 }
 
 /// An owner's word on one of the books' bills of a month (migration 20261112000100): the workspace receipt that proves
-/// it, or dropped for want of one (its share then comes off the lines that bill it). Read by owners and auditors.
+/// it, the statement line that paid it (migration 20261112000200), or dropped for want of its proof (its share then
+/// comes off the lines that bill it). Read by owners and auditors.
 model BooksBill {
-  id            String    @id @default(uuid())
-  workspaceId   String
-  period        String
-  transactionId String
-  documentId    String?
-  dropped       Boolean   @default(false)
-  changedById   String
-  changedAt     DateTime  @default(now())
-  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  document      Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  id                String    @id @default(uuid())
+  workspaceId       String
+  period            String
+  transactionId     String
+  documentId        String?
+  /// The bank or card statement that paid it, and the line on it: { page, text }
+  paymentDocumentId String?
+  paymentLine       Json?
+  dropped           Boolean   @default(false)
+  changedById       String
+  changedAt         DateTime  @default(now())
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  document          Document? @relation("BooksBillReceipt", fields: [documentId], references: [id], onDelete: SetNull)
+  paymentDocument   Document? @relation("BooksBillPayment", fields: [paymentDocumentId], references: [id], onDelete: SetNull)
 
   @@unique([workspaceId, period, transactionId])
+  @@index([paymentDocumentId])
+}
+
+// How the month's expenses from the books match each bill to its receipt and its payment (migration 20261112000200):
+// set by a platform admin in Admin tools → File Matching, append-only; the newest row is in force, none:
+// DEFAULT_EXPENSE_MATCHING.
+model ExpenseMatchingSetting {
+  id             String   @id @default(uuid())
+  /// ExpenseMatching in packages/types: each day window
+  matching       Json
+  changedById    String
+  changedByEmail String?
+  changedAt      DateTime @default(now())
+
+  @@index([changedAt])
 }

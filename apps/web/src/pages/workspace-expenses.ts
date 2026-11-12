@@ -100,6 +100,29 @@ export function receiptWords(l: Pick<BooksLineDto, 'bills'>) {
   }
 }
 
+/**
+ * A line's payments as the screen says it (owner's decision, 2026-11-12): its bills paid by a line of the month's
+ * statements, of those not dropped. Null on a line with no bills.
+ */
+export function paymentWords(l: Pick<BooksLineDto, 'bills'>) {
+  const kept = l.bills.filter((b) => !b.dropped)
+  if (!l.bills.length || !kept.length) return null
+  const paid = kept.filter((b) => b.payment).length
+  const words =
+    kept.length === 1
+      ? paid
+        ? 'Paid'
+        : 'No payment found'
+      : `${paid} of ${kept.length} bills paid`
+  return { words, complete: paid === kept.length }
+}
+
+/** A statement line as a choice says it: its file, page and words, cut short. */
+export function statementLineWords(p: { fileName: string; line: { page: number; text: string } }) {
+  const text = p.line.text.replace(/\s+/g, ' ').trim()
+  return `${p.fileName}, page ${p.line.page}: ${text.length > 80 ? `${text.slice(0, 79)}…` : text}`
+}
+
 /** The month's receipts that prove no bill yet. */
 export const unmatchedReceipts = (d: Pick<WorkspaceExpensesDto, 'receipts'>) =>
   d.receipts.filter((r) => !r.transactionIds.length)

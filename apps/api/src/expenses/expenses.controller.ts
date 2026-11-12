@@ -18,6 +18,7 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express'
 import type {
   AccountMappingDto,
   BooksBillInput,
+  BooksPaymentInput,
   WorkspaceExpensesDto,
   WorkspaceExpensesSavedDto,
 } from '@ad/types'
@@ -121,5 +122,15 @@ export class ExpensesController {
     @Body() body: BooksBillInput
   ): Promise<WorkspaceExpensesDto> {
     return this.expenses.setBill(await this.callers.load(userId), id, body)
+  }
+
+  /** An owner's word on one bill's payment: the statement line that paid it, or null to match it again. */
+  @Put('workspaces/:id/expenses/payments')
+  async setPayment(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Body() body: BooksPaymentInput
+  ): Promise<WorkspaceExpensesDto> {
+    return this.expenses.setPayment(await this.callers.load(userId), id, body)
   }
 }

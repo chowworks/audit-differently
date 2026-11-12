@@ -4,9 +4,11 @@ import {
   engagementGroups,
   notOnEngagements,
   paidWords,
+  paymentWords,
   receiptWords,
   saveCounts,
   shareWords,
+  statementLineWords,
   unmatchedReceipts,
 } from './workspace-expenses'
 
@@ -113,6 +115,9 @@ describe("the month's expenses from the books, on screen", () => {
       receipt: receipt
         ? { documentId: `r-${id}`, fileName: `${id}.pdf`, by: 'auto' as const }
         : null,
+      paidFrom: 'card' as const,
+      payment: null,
+      paymentChoices: [],
       dropped,
     })
     expect(receiptWords(line({}))).toBeNull()
@@ -148,5 +153,48 @@ describe("the month's expenses from the books, on screen", () => {
     expect(
       unmatchedReceipts({ receipts: [r('a', ['1']), r('b', [])] }).map((x) => x.documentId)
     ).toEqual(['b'])
+  })
+
+  it("says how many of a line's bills were paid, dropped ones aside (owner's decision, 2026-11-12)", () => {
+    const at = { page: 1, x: 0, y: 0, width: 1, height: 1 }
+    const bill = (id: string, paid: boolean, dropped = false) => ({
+      transactionId: id,
+      date: '2026-09-08',
+      vendor: 'PayPeople',
+      amount: 10,
+      receipt: null,
+      paidFrom: 'bank' as const,
+      payment: paid
+        ? {
+            documentId: 'bank',
+            fileName: 'Bank.pdf',
+            card: false,
+            line: { ...at, text: `09/08 ACH PAYPEOPLE ${id} 10.00` },
+            by: 'auto' as const,
+          }
+        : null,
+      paymentChoices: [],
+      dropped,
+    })
+    expect(paymentWords(line({}))).toBeNull()
+    expect(paymentWords(line({ bills: [bill('1', true)] }))).toEqual({
+      words: 'Paid',
+      complete: true,
+    })
+    expect(paymentWords(line({ bills: [bill('1', false)] }))).toEqual({
+      words: 'No payment found',
+      complete: false,
+    })
+    // Every bill dropped: nothing to pay.
+    expect(paymentWords(line({ bills: [bill('1', false, true)] }))).toBeNull()
+    expect(
+      paymentWords(line({ bills: [bill('1', true), bill('2', false), bill('3', false, true)] }))
+    ).toEqual({ words: '1 of 2 bills paid', complete: false })
+    expect(
+      statementLineWords({
+        fileName: 'Bank.pdf',
+        line: { page: 2, text: `09/08   ACH ${'X'.repeat(90)}` },
+      })
+    ).toBe(`Bank.pdf, page 2: 09/08 ACH ${'X'.repeat(69)}…`)
   })
 })

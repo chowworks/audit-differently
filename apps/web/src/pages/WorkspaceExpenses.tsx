@@ -4,6 +4,7 @@ import type {
   BooksBillDto,
   BooksBillInput,
   BooksLineDto,
+  BooksPaymentInput,
   BooksReceiptDto,
   WorkspaceExpensesDto,
   WorkspaceExpensesSavedDto,
@@ -15,7 +16,9 @@ import {
   engagementGroups,
   notOnEngagements,
   paidWords,
+  paymentWords,
   receiptWords,
+  statementLineWords,
   saveCounts,
   shareWords,
   unmatchedReceipts,
@@ -99,6 +102,22 @@ export function WorkspaceExpenses({
       setBusy(null)
     }
   }
+  const setPayment = async (body: Omit<BooksPaymentInput, 'period'>) => {
+    setError(null)
+    setBusy('Saving the payment…')
+    try {
+      load.setData(
+        await api.put<WorkspaceExpensesDto>(`/workspaces/${workspaceId}/expenses/payments`, {
+          ...body,
+          period,
+        })
+      )
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(null)
+    }
+  }
   const bills: BillActions | null = can
     ? {
         busy: !!busy,
@@ -108,6 +127,7 @@ export function WorkspaceExpenses({
           void setBill({ transactionId, documentId, dropped: false }),
         drop: (transactionId, dropped) =>
           void setBill({ transactionId, documentId: null, dropped }),
+        pay: (transactionId, payment) => void setPayment({ transactionId, payment }),
       }
     : null
   const save = async () => {
@@ -280,9 +300,11 @@ export function WorkspaceExpenses({
           }
         >
           <p className="text-sm">
-            Each line's bills, proved by their receipts: the zip's <b>Receipts</b> folder, receipts
-            emailed to the month, or uploaded here. A receipt is matched to a bill by its amount and
-            date; a bill with none can be dropped, and its share comes off the line.{' '}
+            Each line's bills, proved by their receipts (the zip's <b>Receipts</b> folder, receipts
+            emailed to the month, or uploaded here) and paid by a line of the month's bank or card
+            statements (the zip's <b>Bank &amp; card statements</b>). Each is matched to a bill by
+            its amount and date. A bill with no payment found holds the month; a bill missing either
+            can be dropped, and its share comes off the line.{' '}
             <b>{many(d.receipts.length, 'receipt')}</b>,{' '}
             {many(d.receipts.length - unmatchedReceipts(d).length, 'matched', 'matched')}.
           </p>
@@ -346,6 +368,8 @@ interface BillActions {
   attach: (transactionId: string, file: File) => void
   choose: (transactionId: string, documentId: string | null) => void
   drop: (transactionId: string, dropped: boolean) => void
+  /** The statement line that paid it, or null to match it again. */
+  pay: (transactionId: string, payment: BooksPaymentInput['payment']) => void
 }
 
 function ReceiptList({ receipts }: { receipts: BooksReceiptDto[] }) {
@@ -365,7 +389,7 @@ function ReceiptList({ receipts }: { receipts: BooksReceiptDto[] }) {
   )
 }
 
-/** A line's bills, each with its receipt, or none and what an owner may do. */
+/** A line's bills, each with its receipt and its payment, or none and what an owner may do. */
 function BillList({ bills, actions }: { bills: BooksBillDto[]; actions: BillActions | null }) {
   return (
     <ul className="wex-bills">
@@ -375,6 +399,7 @@ function BillList({ bills, actions }: { bills: BooksBillDto[]; actions: BillActi
             <span className="font-semibold">{b.vendor || 'No vendor'}</span>{' '}
             <span className="text-soft">
               {b.date} · {money(b.amount)} · bill {b.transactionId}
+              {b.paidFrom === 'card' ? ' · card' : b.paidFrom === 'bank' ? ' · bank' : ''}
             </span>
           </span>
           {b.dropped ? (
@@ -390,70 +415,130 @@ function BillList({ bills, actions }: { bills: BooksBillDto[]; actions: BillActi
                 </Button>
               )}
             </span>
-          ) : b.receipt ? (
-            <span className="wex-bill-do">
-              <Chip tone="ok">{b.receipt.fileName}</Chip>
-              {actions && b.receipt.by === 'person' && (
-                <Button
-                  kind="ghost"
-                  disabled={actions.busy}
-                  onClick={() => actions.choose(b.transactionId, null)}
-                >
-                  Match again
-                </Button>
-              )}
-            </span>
           ) : (
-            <span className="wex-bill-do">
-              <Chip tone="warn">No receipt</Chip>
-              {actions && actions.open.length > 0 && (
-                <select
-                  aria-label={`Receipt of bill ${b.transactionId}`}
-                  value=""
-                  disabled={actions.busy}
-                  onChange={(ev) =>
-                    ev.target.value && actions.choose(b.transactionId, ev.target.value)
-                  }
-                >
-                  <option value="">Choose a receipt…</option>
-                  {actions.open.map((r) => (
-                    <option key={r.documentId} value={r.documentId}>
-                      {r.fileName}
-                      {r.amount == null ? '' : ` (${money(r.amount)})`}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {actions && (
-                <label className="wex-file wex-file-small">
-                  <input
-                    type="file"
-                    accept=".pdf,.png,.jpg,.jpeg"
-                    aria-label={`Attach the receipt of bill ${b.transactionId}`}
+            <>
+              <ReceiptOfBill b={b} actions={actions} />
+              <PaymentOfBill b={b} actions={actions} />
+              {actions && (!b.receipt || !b.payment) && (
+                <span className="wex-bill-do">
+                  <Button
+                    kind="ghost"
                     disabled={actions.busy}
-                    onChange={(ev) => {
-                      const f = ev.target.files?.[0]
-                      if (f) actions.attach(b.transactionId, f)
-                      ev.target.value = ''
-                    }}
-                  />
-                  <span>Attach receipt</span>
-                </label>
+                    onClick={() => actions.drop(b.transactionId, true)}
+                  >
+                    Drop
+                  </Button>
+                </span>
               )}
-              {actions && (
-                <Button
-                  kind="ghost"
-                  disabled={actions.busy}
-                  onClick={() => actions.drop(b.transactionId, true)}
-                >
-                  Drop
-                </Button>
-              )}
-            </span>
+            </>
           )}
         </li>
       ))}
     </ul>
+  )
+}
+
+/** A bill's receipt, or none and the receipts it may be given. */
+function ReceiptOfBill({ b, actions }: { b: BooksBillDto; actions: BillActions | null }) {
+  if (b.receipt)
+    return (
+      <span className="wex-bill-do">
+        <Chip tone="ok">{b.receipt.fileName}</Chip>
+        {actions && b.receipt.by === 'person' && (
+          <Button
+            kind="ghost"
+            disabled={actions.busy}
+            onClick={() => actions.choose(b.transactionId, null)}
+          >
+            Match again
+          </Button>
+        )}
+      </span>
+    )
+  return (
+    <span className="wex-bill-do">
+      <Chip tone="warn">No receipt</Chip>
+      {actions && actions.open.length > 0 && (
+        <select
+          aria-label={`Receipt of bill ${b.transactionId}`}
+          value=""
+          disabled={actions.busy}
+          onChange={(ev) => ev.target.value && actions.choose(b.transactionId, ev.target.value)}
+        >
+          <option value="">Choose a receipt…</option>
+          {actions.open.map((r) => (
+            <option key={r.documentId} value={r.documentId}>
+              {r.fileName}
+              {r.amount == null ? '' : ` (${money(r.amount)})`}
+            </option>
+          ))}
+        </select>
+      )}
+      {actions && (
+        <label className="wex-file wex-file-small">
+          <input
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg"
+            aria-label={`Attach the receipt of bill ${b.transactionId}`}
+            disabled={actions.busy}
+            onChange={(ev) => {
+              const f = ev.target.files?.[0]
+              if (f) actions.attach(b.transactionId, f)
+              ev.target.value = ''
+            }}
+          />
+          <span>Attach receipt</span>
+        </label>
+      )}
+    </span>
+  )
+}
+
+/** A bill's payment on the month's statements, or none and the statement lines that print its amount. */
+function PaymentOfBill({ b, actions }: { b: BooksBillDto; actions: BillActions | null }) {
+  if (b.payment)
+    return (
+      <span className="wex-bill-do">
+        <Chip tone="ok">Paid</Chip>
+        <span className="text-xs text-soft wex-bill-line">{statementLineWords(b.payment)}</span>
+        {actions && b.payment.by === 'person' && (
+          <Button
+            kind="ghost"
+            disabled={actions.busy}
+            onClick={() => actions.pay(b.transactionId, null)}
+          >
+            Match again
+          </Button>
+        )}
+      </span>
+    )
+  return (
+    <span className="wex-bill-do">
+      <Chip tone="danger">No payment found</Chip>
+      {actions && b.paymentChoices.length > 0 && (
+        <select
+          aria-label={`Payment of bill ${b.transactionId}`}
+          value=""
+          disabled={actions.busy}
+          onChange={(ev) => {
+            const p = b.paymentChoices[Number(ev.target.value)]
+            if (p)
+              actions.pay(b.transactionId, {
+                documentId: p.documentId,
+                page: p.line.page,
+                text: p.line.text,
+              })
+          }}
+        >
+          <option value="">Choose the statement line…</option>
+          {b.paymentChoices.map((p, i) => (
+            <option key={`${p.documentId}-${p.line.page}-${p.line.y}`} value={i}>
+              {statementLineWords(p)}
+            </option>
+          ))}
+        </select>
+      )}
+    </span>
   )
 }
 
@@ -482,6 +567,7 @@ function LineTable({
           {lines.map((l) => {
             const share = shareWords(l, money)
             const receipts = receiptWords(l)
+            const payments = paymentWords(l)
             return (
               <tr key={l.key}>
                 <td>{l.date}</td>
@@ -503,6 +589,9 @@ function LineTable({
                     <details className="wex-receipts">
                       <summary>
                         <Chip tone={receipts.complete ? 'ok' : 'warn'}>{receipts.words}</Chip>
+                        {payments && (
+                          <Chip tone={payments.complete ? 'ok' : 'danger'}>{payments.words}</Chip>
+                        )}
                       </summary>
                       <BillList bills={l.bills} actions={bills} />
                     </details>

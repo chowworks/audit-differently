@@ -161,14 +161,17 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
     ])
     // Read back from the database, whose JSON keeps its keys in an order of its own: the same.
     const reordered = (l: (typeof first)[number]) =>
-      savedBills(l).map(({ dropped, documentId, amount, vendor, date, transactionId }) => ({
-        dropped,
-        documentId,
-        amount,
-        vendor,
-        date,
-        transactionId,
-      }))
+      savedBills(l).map(
+        ({ dropped, payment, documentId, amount, vendor, date, transactionId }) => ({
+          dropped,
+          payment,
+          documentId,
+          amount,
+          vendor,
+          date,
+          transactionId,
+        })
+      )
     expect(
       plan({ existing: [{ ...saved(first[0]!), booksBills: reordered(first[0]!) }] }).find(
         (l) => l.key === first[0]!.key

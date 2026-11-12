@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ProgramNames } from '@ad/types'
 import { AIT_CLASS, ISY_CLASS, RECEIPTS, expenseSampleFiles } from '../../prisma/expense-sample'
@@ -209,5 +209,65 @@ suite("the workspace payroll sample's expenses", () => {
       ['7108', 'e-isy', ['7103: PayPeople invoice 0926.pdf']],
       ['7108', 'e-ait', ['7103: PayPeople invoice 0926.pdf']],
     ])
+  })
+
+  it("finds each bill's payment on the month's statements, the card's on the card's and the bank's on the bank's", async () => {
+    // The zip's statements folder as the month keeps it: the bank's statement (of the payroll sample) and the card's.
+    const folder = join(DIR, 'Bank & card statements')
+    const statements = await Promise.all(
+      readdirSync(folder)
+        .sort()
+        .map(async (name, i) => {
+          const { lines } = await readStatement(readFileSync(join(folder, name)))
+          return { id: `s-${i}`, fileName: name, card: isCardStatement(lines), lines }
+        })
+    )
+    expect(statements.map((s) => [s.fileName, s.card])).toEqual([
+      ['Lakeside Business Card statement 2026-09.pdf', true],
+      ['Lakeside Community Bank statement 2026-09.pdf', false],
+    ])
+    const [books] = file('QuickBooks transactions')
+    const maps = await Promise.all(
+      file('Account mapping').map((m) => readAccountMapping(m.bytes, m.name))
+    )
+    const plan = planBooks({
+      period: '2026-09',
+      transactions: booksTransactions(await sheetLines(books!.bytes)),
+      programs: PROGRAMS,
+      engagements: ENGAGEMENTS,
+      mappings: maps.map((r, i) => ({
+        id: `m-${i}`,
+        engagementId: engagementOfMapping(r, ENGAGEMENTS)?.id ?? null,
+        read: r,
+        chosen: {},
+      })),
+      existing: [],
+      statements,
+    })
+    const bills = new Map(
+      plan
+        .filter((l) => l.status === 'billed')
+        .flatMap((l) => l.bills)
+        .map((b) => [b.transactionId, b])
+    )
+    expect(
+      [...bills.values()].map((b) => [
+        b.transactionId,
+        b.paidFrom,
+        b.payment?.fileName ?? null,
+        b.payment?.by ?? null,
+      ])
+    ).toEqual([
+      ['7101', 'card', 'Lakeside Business Card statement 2026-09.pdf', 'auto'],
+      ['7102', 'card', 'Lakeside Business Card statement 2026-09.pdf', 'auto'],
+      ['7104', 'bank', 'Lakeside Community Bank statement 2026-09.pdf', 'auto'],
+      ['7105', 'card', 'Lakeside Business Card statement 2026-09.pdf', 'auto'],
+      ['7103', 'card', 'Lakeside Business Card statement 2026-09.pdf', 'auto'],
+    ])
+    // Each found on the line that prints its amount.
+    for (const b of bills.values())
+      expect(b.payment!.line.text).toContain(
+        b.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })
+      )
   })
 })

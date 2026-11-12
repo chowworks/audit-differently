@@ -1,16 +1,25 @@
 import {
+  DEFAULT_EXPENSE_MATCHING,
   programKey,
   type BooksAllocationDto,
   type BooksBillDto,
   type BooksBillSaved,
   type BooksLineDto,
   type BooksLineStatus,
+  type ExpenseMatching,
   type ProgramNames,
 } from '@ad/types'
 import { isPayrollRow } from '../imports/imports.service'
 import { programIn } from '../payroll/payroll-details'
 import { budgetLineOfCategory, type AccountMappingRead } from './account-mapping'
 import type { BooksLine, BooksTransaction } from './books'
+import {
+  paymentChoices,
+  paymentKey,
+  paymentsOfBills,
+  type BillPayment,
+  type PlanStatement,
+} from './books-payments'
 import {
   receiptsOfBills,
   type PlanBill,
@@ -119,6 +128,10 @@ export function planBooks(input: {
   /** The month's workspace receipts, and owners' words on bills (owner's decision, 2026-11-12). */
   receipts?: PlanReceipt[]
   choices?: PlanBillChoice[]
+  /** The month's bank and card statements, read (owner's decision, 2026-11-12). */
+  statements?: PlanStatement[]
+  /** The admin's day windows; the defaults without. */
+  matching?: ExpenseMatching
 }): BooksLineDto[] {
   const { period, transactions, engagements } = input
   const groups = input.programs.map((g, id) => ({ id, names: g.names }))
@@ -284,7 +297,14 @@ export function planBooks(input: {
       shares.set(line, { entry: entry && l.amount > 0 ? entry : null, bookedAs: l.amount })
     }
   }
-  billsOf(shares, transactions, input.receipts ?? [], input.choices ?? [])
+  billsOf(
+    shares,
+    transactions,
+    input.receipts ?? [],
+    input.choices ?? [],
+    input.statements ?? [],
+    input.matching ?? DEFAULT_EXPENSE_MATCHING
+  )
   for (const line of shares.keys()) {
     const before = byKey.get(line.key)
     if (before) line.saved = sameAs(before, line) ? 'same' : 'changed'
@@ -305,37 +325,52 @@ const billOf = (t: BooksTransaction): PlanBill => ({
   date: t.date,
   vendor: t.vendor,
   amount: cents(t.lines.reduce((s, l) => s + l.amount, 0)),
+  paidFrom: t.payment?.kind ?? 'other',
 })
 
 /**
- * Each billed line's bills, with their receipts; a dropped bill's share comes off the line (owner's decision,
- * 2026-11-12), and a line whose every bill is dropped bills nothing.
+ * Each billed line's bills, with their receipts and payments; a dropped bill's share comes off the line (owner's
+ * decision, 2026-11-12), and a line whose every bill is dropped bills nothing.
  */
 function billsOf(
   shares: Map<BooksLineDto, Share>,
   transactions: BooksTransaction[],
   receipts: PlanReceipt[],
-  choices: PlanBillChoice[]
+  choices: PlanBillChoice[],
+  statements: PlanStatement[],
+  matching: ExpenseMatching
 ) {
   const byId = new Map(transactions.map((t) => [t.id, t]))
   const sourcesOf = (line: BooksLineDto, s: Share) =>
     (s.entry ? s.entry.sourceIds : [line.transactionId]).flatMap((id) => byId.get(id) ?? [])
   const bills = new Map<string, PlanBill>()
   for (const [line, s] of shares) for (const t of sourcesOf(line, s)) bills.set(t.id, billOf(t))
-  const found = receiptsOfBills([...bills.values()], receipts, choices)
+  const found = receiptsOfBills([...bills.values()], receipts, choices, matching.receiptDays)
+  const paid = paymentsOfBills([...bills.values()], statements, choices, matching.paymentDays)
+  const taken = new Set([...paid.values()].map(paymentKey))
   const fileOf = new Map(receipts.map((r) => [r.id, r.fileName]))
   const dropped = new Set(choices.filter((c) => c.dropped).map((c) => c.transactionId))
+  const paymentOf = (p: BillPayment | undefined) =>
+    p
+      ? { documentId: p.documentId, fileName: p.fileName, card: p.card, line: p.line, by: p.by }
+      : null
   for (const [line, s] of shares) {
     const sources = sourcesOf(line, s)
     line.bills = sources.map((t): BooksBillDto => {
       const r = found.get(t.id)
+      const bill = bills.get(t.id)!
+      const p = paid.get(t.id)
       return {
-        ...bills.get(t.id)!,
+        ...bill,
+        paidFrom: bill.paidFrom ?? 'other',
         receipt: r
           ? { documentId: r.documentId, fileName: fileOf.get(r.documentId)!, by: r.by }
           : null,
+        payment: paymentOf(p),
+        paymentChoices:
+          p || dropped.has(t.id) ? [] : paymentChoices(bill, statements, taken).map(paymentOf),
         dropped: dropped.has(t.id),
-      }
+      } as BooksBillDto
     })
     const gone = sources.filter((t) => dropped.has(t.id))
     if (!gone.length) continue
@@ -375,7 +410,7 @@ export function allocationNote(
       : `${a.percent.toFixed(2)}% of ${money(a.total)}, as the books split transaction ${a.sourceIds[0]} by class`
   const gone = (l.bills ?? []).filter((b) => b.dropped)
   if (!gone.length) return note
-  return `${note}, less its share of ${gone.length === 1 ? 'bill' : 'bills'} ${gone.map((b) => `${b.transactionId} (${money(b.amount)})`).join(', ')}, dropped for want of a receipt`
+  return `${note}, less its share of ${gone.length === 1 ? 'bill' : 'bills'} ${gone.map((b) => `${b.transactionId} (${money(b.amount)})`).join(', ')}, dropped for want of its receipt or payment`
 }
 
 /** The bills a line keeps when saved (Expense.booksBills). */
@@ -386,6 +421,9 @@ export const savedBills = (l: Pick<BooksLineDto, 'bills'>): BooksBillSaved[] =>
     vendor: b.vendor,
     amount: b.amount,
     documentId: b.receipt?.documentId ?? null,
+    payment: b.payment
+      ? { documentId: b.payment.documentId, page: b.payment.line.page, text: b.payment.line.text }
+      : null,
     dropped: b.dropped,
   }))
 
@@ -413,7 +451,15 @@ function sameBills(a: BooksBillSaved[] | null, b: BooksBillSaved[]) {
         x.vendor === b[i]!.vendor &&
         near(x.amount, b[i]!.amount) &&
         (x.documentId ?? null) === b[i]!.documentId &&
+        samePayment(x.payment, b[i]!.payment) &&
         !!x.dropped === b[i]!.dropped
     )
   )
+}
+
+/** The same payment: none on both (a line saved before payments were kept is not), or the same statement's line. */
+function samePayment(a: BooksBillSaved['payment'], b: BooksBillSaved['payment']) {
+  if (a === undefined) return false
+  if (!a || !b) return !a && !b
+  return a.documentId === b.documentId && a.page === b.page && a.text === b.text
 }

@@ -3793,6 +3793,60 @@ suite('tenant isolation', () => {
       ).rejects.toThrow(/Expense_booksBills_check/)
     })
   })
+
+  describe("the books' bills' payments (migration 20261112000200)", () => {
+    it("takes a statement of the bill's own workspace only, with its line, and never with the bill dropped", async () => {
+      await db.query(
+        `INSERT INTO "BooksBill" ("id","workspaceId","period","transactionId","dropped","changedById")
+         VALUES ('BB-3','W1','2026-09','BB-3',false,'owner-W1')`
+      )
+      const line = `'{"page":1,"text":"09/03 ACH DEBIT 200.00"}'`
+      await expect(
+        db.query(
+          `UPDATE "BooksBill" SET "paymentDocumentId" = 'D-W2', "paymentLine" = ${line} WHERE "id" = 'BB-3'`
+        )
+      ).rejects.toThrow(/own workspace/)
+      const lineOf = () =>
+        db.query(`SELECT "paymentLine" FROM "BooksBill" WHERE "id" = 'BB-3'`).then((r) => r.rows)
+      // A line without its statement is no line.
+      await db.query(`UPDATE "BooksBill" SET "paymentLine" = ${line} WHERE "id" = 'BB-3'`)
+      expect(await lineOf()).toEqual([{ paymentLine: null }])
+      await db.query(
+        `UPDATE "BooksBill" SET "paymentDocumentId" = 'D-W1', "paymentLine" = ${line} WHERE "id" = 'BB-3'`
+      )
+      await expect(
+        db.query(`UPDATE "BooksBill" SET "dropped" = true WHERE "id" = 'BB-3'`)
+      ).rejects.toThrow(/BooksBill_payment_check/)
+      // The statement's line goes with it.
+      await db.query(`UPDATE "BooksBill" SET "paymentDocumentId" = NULL WHERE "id" = 'BB-3'`)
+      expect(
+        await db
+          .query(`SELECT "paymentLine" FROM "BooksBill" WHERE "id" = 'BB-3'`)
+          .then((r) => r.rows)
+      ).toEqual([{ paymentLine: null }])
+      await db.query(`DELETE FROM "BooksBill"`)
+    })
+
+    it('lets only a platform admin set the day windows, in their own name, and nobody change them', async () => {
+      const add = (by: string, matching = `'{"receiptDays":7,"paymentDays":5}'`) =>
+        attempt(
+          `INSERT INTO "ExpenseMatchingSetting" ("id","matching","changedById") VALUES (gen_random_uuid()::text,${matching},'${by}')`
+        )
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await add('owner-W1')).error).toMatch(/row-level security/)
+      })
+      await as({ user: 'admin-1', admin: true }, async () => {
+        expect((await add('admin-1')).rows).toBe(1)
+        expect((await add('owner-W1')).error).toMatch(/row-level security/)
+        expect((await add('admin-1', `'[7]'`)).error).toMatch(/matching_check/)
+        expect((await attempt(`UPDATE "ExpenseMatchingSetting" SET "matching" = '{}'`)).rows).toBe(
+          0
+        )
+        expect((await attempt(`DELETE FROM "ExpenseMatchingSetting"`)).rows).toBe(0)
+      })
+      await db.query(`DELETE FROM "ExpenseMatchingSetting"`)
+    })
+  })
 })
 
 describe('touchesTenantTable', () => {

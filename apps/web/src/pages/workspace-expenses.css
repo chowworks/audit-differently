@@ -60,6 +60,14 @@
 .wex-bill-do select {
   max-width: 220px;
 }
+/* A payment's statement line: its words, wrapped, never wider than the row. */
+.wex-bill-line {
+  max-width: 360px;
+  overflow-wrap: anywhere;
+}
+.wex-receipts summary .ad-chip + .ad-chip {
+  margin-left: 4px;
+}
 .wex-file {
   position: relative;
   display: inline-flex;

@@ -3,6 +3,7 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
@@ -13,6 +14,8 @@ import {
   type BooksBillInput,
   type BooksBillSaved,
   type BooksLineDto,
+  type BooksPaymentInput,
+  type StatementMark,
   type ReportLine,
   type WorkspaceExpensesDto,
   type WorkspaceExpensesSavedDto,
@@ -25,7 +28,9 @@ import { changesOf, dollars, howMany, monthName, type Fields } from '../core/cha
 import { DocumentsService, keyInWorkspace, type Uploaded } from '../documents/documents.service'
 import { describe } from '../documents/staged-file'
 import { readReceipt } from '../receipts/read-receipt'
+import { isCardStatement } from '../payroll/card-statement'
 import { csvLines, sheetLines } from '../payroll/payroll-details'
+import { readStatement } from '../payroll/statement-lines'
 import { programNamesIn } from '../payroll/program-names'
 import { PrismaService } from '../prisma/prisma.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
@@ -37,6 +42,9 @@ import {
   type AccountMappingRead,
 } from './account-mapping'
 import { booksTransactions, type BooksTransaction } from './books'
+import type { PlanStatement } from './books-payments'
+import type { PlanBillChoice } from './books-receipts'
+import { ExpenseMatchingService } from './expense-matching.service'
 import {
   SKIP,
   allocationNote,
@@ -73,11 +81,14 @@ const RECEIPT_FIELDS: Fields = {
  */
 @Injectable()
 export class ExpensesService {
+  private readonly logger = new Logger(ExpensesService.name)
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly log: AccessLogService,
     private readonly checks: ChecksService,
     private readonly documents: DocumentsService,
+    private readonly matching: ExpenseMatchingService,
     @Inject(DOCUMENT_STORAGE) private readonly storage: DocumentStorage
   ) {}
 
@@ -355,20 +366,23 @@ export class ExpensesService {
   }
 
   private async planOf(workspaceId: string, period: string) {
-    const [files, engagements, mappings, workspace, receipts, choices] = await Promise.all([
-      this.booksOf(workspaceId, period),
-      this.engagementsOf(workspaceId),
-      this.prisma.accountMapping.findMany({
-        where: { workspaceId },
-        orderBy: { changedAt: 'asc' },
-      }),
-      this.prisma.workspace.findFirst({
-        where: { id: workspaceId },
-        select: { programNames: true },
-      }),
-      this.receiptsOf(workspaceId, period),
-      this.prisma.booksBill.findMany({ where: { workspaceId, period } }),
-    ])
+    const [files, engagements, mappings, workspace, receipts, choices, statements, matching] =
+      await Promise.all([
+        this.booksOf(workspaceId, period),
+        this.engagementsOf(workspaceId),
+        this.prisma.accountMapping.findMany({
+          where: { workspaceId },
+          orderBy: { changedAt: 'asc' },
+        }),
+        this.prisma.workspace.findFirst({
+          where: { id: workspaceId },
+          select: { programNames: true },
+        }),
+        this.receiptsOf(workspaceId, period),
+        this.prisma.booksBill.findMany({ where: { workspaceId, period } }),
+        this.statementsOf(workspaceId, period),
+        this.matching.current(),
+      ])
     // One transaction once, though two exports of the month both have it.
     const seen = new Set<string>()
     const transactions = files
@@ -423,13 +437,50 @@ export class ExpensesService {
         date: day(d.receiptDate),
         vendor: d.receiptVendor,
       })),
-      choices: choices.map((c) => ({
+      choices: choices.map((c): PlanBillChoice => ({
         transactionId: c.transactionId,
         documentId: c.documentId,
+        payment:
+          c.paymentDocumentId && c.paymentLine
+            ? {
+                documentId: c.paymentDocumentId,
+                ...(c.paymentLine as { page: number; text: string }),
+              }
+            : null,
         dropped: c.dropped,
       })),
+      statements,
+      matching,
     })
-    return { files, engagements, mappings, lines, existing, receipts }
+    return { files, engagements, mappings, lines, existing, receipts, statements }
+  }
+
+  /**
+   * The statements the bills' payments are found on (owner's decision, 2026-11-12): the month's bank and card
+   * statements saved with its payroll (the zip's "Bank & card statements" folder), each read by its own text, never AI,
+   * and once though saved twice. A card's is told from a bank's as payroll tells them (`isCardStatement`). A file that
+   * can't be read is left out, and its bills show no payment.
+   */
+  private async statementsOf(workspaceId: string, period: string): Promise<PlanStatement[]> {
+    const docs = (
+      await this.prisma.document.findMany({
+        where: { workspaceId, period, kind: 'bank-statement', contentType: 'application/pdf' },
+        orderBy: [{ engagementId: { sort: 'asc', nulls: 'first' } }, { fileName: 'asc' }],
+      })
+    ).filter((d) => keyInWorkspace(d))
+    const seen = new Set<string>()
+    const out: PlanStatement[] = []
+    for (const d of docs) {
+      if (seen.has(d.sha256)) continue
+      seen.add(d.sha256)
+      try {
+        const { lines } = await readStatement(Buffer.from(await this.storage.read(d.storageKey)))
+        out.push({ id: d.id, fileName: d.fileName, card: isCardStatement(lines), lines })
+      } catch (e) {
+        this.logger.warn(`Could not read statement ${d.id} for the bills: ${(e as Error).message}`)
+      }
+    }
+    return out
   }
 
   /**
@@ -575,6 +626,44 @@ export class ExpensesService {
           skipDuplicates: true,
         })
     }
+    // Each bill's payment is the line's proof of payment, its statement linked with the lines marked on it; a statement
+    // Save linked before that no longer pays a bill goes.
+    const linkPayments = async (
+      tx: Prisma.TransactionClient,
+      expenseId: string,
+      l: BooksLineDto,
+      before: BooksBillSaved[] | null
+    ) => {
+      const want = new Map<string, StatementMark[]>()
+      for (const b of l.bills)
+        if (b.payment) {
+          const { page, x, y, width, height } = b.payment.line
+          want.set(b.payment.documentId, [
+            ...(want.get(b.payment.documentId) ?? []),
+            { page, x, y, width, height },
+          ])
+        }
+      const gone = (before ?? [])
+        .flatMap((b) => (b.payment ? [b.payment.documentId] : []))
+        .filter((id) => !want.has(id))
+      if (gone.length)
+        await tx.expenseDocument.deleteMany({
+          where: { expenseId, purpose: 'payment', documentId: { in: gone } },
+        })
+      for (const [documentId, marks] of want) {
+        const data = {
+          purpose: 'payment',
+          mark: marks[0]! as unknown as Prisma.InputJsonValue,
+          marks: marks.slice(0, 20) as unknown as Prisma.InputJsonValue,
+          byMatch: true,
+        }
+        await tx.expenseDocument.upsert({
+          where: { expenseId_documentId: { expenseId, documentId } },
+          create: { expenseId, documentId, ...data },
+          update: data,
+        })
+      }
+    }
     let touched: string[]
     try {
       touched = await this.log.change(
@@ -630,6 +719,7 @@ export class ExpensesService {
             const x = byKey.get(l.key)!
             await tx.expense.update({ where: { id: x.id }, data: fields(l) })
             await linkReceipts(tx, x.id, l, (x.booksBills ?? null) as BooksBillSaved[] | null)
+            await linkPayments(tx, x.id, l, (x.booksBills ?? null) as BooksBillSaved[] | null)
             ids.push(x.monthlyReportId)
           }
           for (const l of toCreate) {
@@ -655,6 +745,7 @@ export class ExpensesService {
               },
             })
             await linkReceipts(tx, made.id, l, null)
+            await linkPayments(tx, made.id, l, null)
             ids.push(monthlyReportId)
           }
           return [...new Set(ids)]
@@ -785,7 +876,8 @@ export class ExpensesService {
       )
       ids.push(made.id)
     }
-    if (bill !== null) await this.choose(caller, workspaceId, period, bill, ids[0]!, false)
+    if (bill !== null)
+      await this.choose(caller, workspaceId, period, bill, { documentId: ids[0]!, dropped: false })
     return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period))
   }
 
@@ -814,27 +906,114 @@ export class ExpensesService {
       throw new NotFoundException('No such bill among the month’s lines')
     if (documentId && !plan.receipts.some((d) => d.id === documentId))
       throw new BadRequestException('Choose one of the month’s receipts')
-    await this.choose(caller, workspaceId, period, bill, documentId, dropped)
+    await this.choose(caller, workspaceId, period, bill, { documentId, dropped })
     return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period))
   }
 
+  /**
+   * An owner's word on one bill's payment: the line of the month's statements that paid it (one of the bill's
+   * choices), or null to match it again. A dropped bill has none.
+   */
+  async setPayment(
+    caller: Caller,
+    workspaceId: string,
+    input: BooksPaymentInput
+  ): Promise<WorkspaceExpensesDto> {
+    this.owner(caller, workspaceId)
+    const period = this.period(input?.period)
+    const bill = input?.transactionId
+    if (typeof bill !== 'string' || !bill || bill.length > 100)
+      throw new BadRequestException('Name the bill by its transaction')
+    const given = input.payment ?? null
+    if (
+      given !== null &&
+      (typeof given !== 'object' ||
+        typeof given.documentId !== 'string' ||
+        typeof given.text !== 'string' ||
+        given.text.length > 2000 ||
+        !Number.isInteger(given.page))
+    )
+      throw new BadRequestException('Choose one of the statement lines')
+    const plan = await this.planOf(workspaceId, period)
+    const found = plan.lines.flatMap((l) => l.bills).find((b) => b.transactionId === bill)
+    if (!found) throw new NotFoundException('No such bill among the month’s lines')
+    if (given && found.dropped) throw new BadRequestException('A dropped bill has no payment')
+    if (
+      given &&
+      !found.paymentChoices.some(
+        (p) =>
+          p.documentId === given.documentId &&
+          p.line.page === given.page &&
+          p.line.text === given.text
+      ) &&
+      !(
+        found.payment?.documentId === given.documentId &&
+        found.payment.line.page === given.page &&
+        found.payment.line.text === given.text
+      )
+    )
+      throw new BadRequestException('Choose one of the statement lines')
+    await this.choose(caller, workspaceId, period, bill, {
+      payment: given ? { documentId: given.documentId, page: given.page, text: given.text } : null,
+    })
+    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period))
+  }
+
+  /**
+   * Keeps an owner's word on a bill: what `change` gives (its receipt, its payment, dropped), the rest as it was. A
+   * dropped bill keeps neither its receipt nor its payment; a bill back to as matched keeps no row.
+   */
   private async choose(
     caller: Caller,
     workspaceId: string,
     period: string,
     transactionId: string,
-    documentId: string | null,
-    dropped: boolean
+    change: {
+      documentId?: string | null
+      dropped?: boolean
+      payment?: { documentId: string; page: number; text: string } | null
+    }
   ) {
     const where = { workspaceId_period_transactionId: { workspaceId, period, transactionId } }
     const before = await this.prisma.booksBill.findUnique({ where })
-    if ((before?.documentId ?? null) === documentId && (before?.dropped ?? false) === dropped)
+    const dropped = change.dropped ?? before?.dropped ?? false
+    const documentId = dropped
+      ? null
+      : change.documentId !== undefined
+        ? change.documentId
+        : (before?.documentId ?? null)
+    const was =
+      before?.paymentDocumentId && before.paymentLine
+        ? {
+            documentId: before.paymentDocumentId,
+            ...(before.paymentLine as { page: number; text: string }),
+          }
+        : null
+    const payment = dropped ? null : change.payment !== undefined ? change.payment : was
+    const same = (a: typeof payment, b: typeof payment) =>
+      (!a && !b) ||
+      (!!a && !!b && a.documentId === b.documentId && a.page === b.page && a.text === b.text)
+    if (
+      (before?.documentId ?? null) === documentId &&
+      (before?.dropped ?? false) === dropped &&
+      same(was, payment)
+    )
       return
-    const data = { documentId, dropped, changedById: caller.userId, changedAt: new Date() }
+    const data = {
+      documentId,
+      dropped,
+      paymentDocumentId: payment?.documentId ?? null,
+      paymentLine: payment
+        ? ({ page: payment.page, text: payment.text } as Prisma.InputJsonValue)
+        : Prisma.DbNull,
+      changedById: caller.userId,
+      changedAt: new Date(),
+    }
+    const what = `bill ${transactionId} of the books for ${monthName(period)}`
     await this.log.change(
       caller,
       async (tx) => {
-        if (documentId === null && !dropped)
+        if (documentId === null && !dropped && !payment)
           await tx.booksBill.deleteMany({ where: { workspaceId, period, transactionId } })
         else
           await tx.booksBill.upsert({
@@ -847,11 +1026,16 @@ export class ExpensesService {
         workspaceId,
         resource: 'expense',
         action: 'update',
-        description: dropped
-          ? `Dropped bill ${transactionId} of the books for ${monthName(period)} for want of a receipt`
-          : documentId
-            ? `Chose the receipt of bill ${transactionId} of the books for ${monthName(period)}`
-            : `Left bill ${transactionId} of the books for ${monthName(period)} to be matched again`,
+        description:
+          change.dropped === true
+            ? `Dropped ${what} for want of its receipt or payment`
+            : change.payment !== undefined
+              ? change.payment
+                ? `Chose the payment of ${what}`
+                : `Left the payment of ${what} to be matched again`
+              : documentId
+                ? `Chose the receipt of ${what}`
+                : `Left ${what} to be matched again`,
       }
     )
   }

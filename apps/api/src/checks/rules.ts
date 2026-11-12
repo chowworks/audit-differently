@@ -40,6 +40,11 @@ export interface RuleExpense {
    * with its receipts so far, and these named, so an owner finds them or drops them.
    */
   billsWithoutReceipt?: { transactionId: string; vendor: string; amount: number }[]
+  /**
+   * A books line's bills with no payment found on the month's statements, not dropped (owner's decision, 2026-11-12):
+   * they hold the month until an owner finds each one's statement line or drops the bill.
+   */
+  billsWithoutPayment?: { transactionId: string; vendor: string; amount: number }[]
   /** How many bills the books line has, dropped ones aside. */
   bills?: number
   /**
@@ -196,14 +201,21 @@ export function dueDate(period: string, dueDay: number): Date {
 }
 
 /** A books line's bills as the rules read them (Expense.booksBills): those still wanting a receipt, of how many. */
-export function booksBillsOf(saved: unknown): Pick<RuleExpense, 'bills' | 'billsWithoutReceipt'> {
+export function booksBillsOf(
+  saved: unknown
+): Pick<RuleExpense, 'bills' | 'billsWithoutReceipt' | 'billsWithoutPayment'> {
   if (!Array.isArray(saved)) return {}
   const kept = (saved as BooksBillSaved[]).filter((b) => !b.dropped)
+  const named = (b: BooksBillSaved) => ({
+    transactionId: b.transactionId,
+    vendor: b.vendor,
+    amount: b.amount,
+  })
   return {
     bills: kept.length,
-    billsWithoutReceipt: kept
-      .filter((b) => !b.documentId)
-      .map((b) => ({ transactionId: b.transactionId, vendor: b.vendor, amount: b.amount })),
+    billsWithoutReceipt: kept.filter((b) => !b.documentId).map(named),
+    // A line saved before payments were kept says nothing of them.
+    billsWithoutPayment: kept.filter((b) => b.payment === null).map(named),
   }
 }
 
@@ -260,6 +272,18 @@ export function runRules(month: RuleMonth): Finding[] {
         expenseId: e.id,
         message: `${label}: no bank or card statement, cancelled check or EFT confirmation attached.`,
       })
+    else if (e.billsWithoutPayment?.length) {
+      const missing = e.billsWithoutPayment
+      const of = e.bills ?? missing.length
+      findings.push({
+        code: 'bills-without-payment',
+        severity: 'blocker',
+        expenseId: e.id,
+        message: `${label}: ${of - missing.length} of ${of} bills have a payment found. No payment for ${missing
+          .map((b) => `${b.transactionId} (${b.vendor || 'no vendor'}, ${money(b.amount)})`)
+          .join(', ')}: find its statement line, or drop the bill on the month's expenses.`,
+      })
+    }
 
     if (payrollLine && e.proofs)
       for (const what of mismatches(

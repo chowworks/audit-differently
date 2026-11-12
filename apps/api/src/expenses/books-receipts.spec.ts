@@ -168,7 +168,7 @@ describe("the receipts of the books' bills (owner's decision, 2026-11-12)", () =
       ['8002', true],
     ])
     expect(allocationNote(less)).toBe(
-      "25.00% of $300.00, shared out by the books' allocation entry 8003, less its share of bill 8002 ($100.00), dropped for want of a receipt"
+      "25.00% of $300.00, shared out by the books' allocation entry 8003, less its share of bill 8002 ($100.00), dropped for want of its receipt or payment"
     )
     const none = pooled(['8001', '8002'])
     expect([none.status, none.amount]).toEqual(['dropped', 0])

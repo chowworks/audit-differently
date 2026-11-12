@@ -70,6 +70,8 @@ describe('runRules', () => {
     expect(bills).toEqual({
       bills: 2,
       billsWithoutReceipt: [{ transactionId: 'T2', vendor: 'PayPeople', amount: 46.81 }],
+      // Saved before payments were kept: none said missing.
+      billsWithoutPayment: [],
     })
     const found = runRules(month({ expenses: [expense({ fromBooks: true, ...bills })] }))
     expect(found.map((f) => [f.code, f.severity])).toEqual([['bills-without-receipt', 'attention']])
@@ -82,6 +84,55 @@ describe('runRules', () => {
     ).toEqual(['missing-invoice'])
     // A line saved before bills were kept reads as it did.
     expect(booksBillsOf(null)).toEqual({})
+  })
+
+  it("holds a books line whose bills have no payment found, naming them (owner's decision, 2026-11-12)", () => {
+    const paid = { documentId: 'bank', page: 1, text: '07/02 ACH PAYPEOPLE 100.00' }
+    const bills = booksBillsOf([
+      {
+        transactionId: 'T1',
+        date: '2026-07-02',
+        vendor: 'PayPeople',
+        amount: 100,
+        documentId: 'r1',
+        payment: paid,
+        dropped: false,
+      },
+      {
+        transactionId: 'T2',
+        date: '2026-07-09',
+        vendor: 'PayPeople',
+        amount: 46.81,
+        documentId: 'r2',
+        payment: null,
+        dropped: false,
+      },
+      {
+        transactionId: 'T3',
+        date: '2026-07-16',
+        vendor: 'PayPeople',
+        amount: 10,
+        documentId: null,
+        payment: null,
+        dropped: true,
+      },
+    ])
+    expect(bills.billsWithoutPayment).toEqual([
+      { transactionId: 'T2', vendor: 'PayPeople', amount: 46.81 },
+    ])
+    const found = runRules(
+      month({
+        expenses: [expense({ fromBooks: true, ...bills, documents: ['invoice', 'payment'] })],
+      })
+    )
+    expect(found.map((f) => [f.code, f.severity])).toEqual([['bills-without-payment', 'blocker']])
+    expect(found[0]!.message).toBe(
+      "T-1 (Vendor A, $100.00): 1 of 2 bills have a payment found. No payment for T2 (PayPeople, $46.81): find its statement line, or drop the bill on the month's expenses."
+    )
+    // With no payment at all, the line wants its proof of payment as any line does.
+    expect(
+      codes(month({ expenses: [expense({ fromBooks: true, ...bills, documents: ['invoice'] })] }))
+    ).toEqual(['missing-proof-of-payment'])
   })
 
   it('wants a timesheet and a register on payroll lines, not an invoice', () => {

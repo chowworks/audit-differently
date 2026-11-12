@@ -360,6 +360,7 @@ export const CHECK_CODES = [
   'no-budget-line',
   'payroll-counted-twice',
   'bills-without-receipt',
+  'bills-without-payment',
 ] as const
 export type CheckCode = (typeof CHECK_CODES)[number]
 
@@ -1742,6 +1743,47 @@ export interface PayrollSettingChangeDto {
   changes: string[]
 }
 
+/**
+ * How the month's expenses from the books match each bill to its proof (owner's decision, 2026-11-12), set by a
+ * platform admin in Admin tools → File Matching beside the payroll reading: how many days a receipt's date and a
+ * statement line's date may be from the bill's own.
+ */
+export interface ExpenseMatching {
+  receiptDays: number
+  paymentDays: number
+}
+
+export const DEFAULT_EXPENSE_MATCHING: ExpenseMatching = { receiptDays: 7, paymentDays: 5 }
+
+/** Each day window, with its title and a line saying what it is for. */
+export const EXPENSE_MATCHING_DAYS: { key: keyof ExpenseMatching; title: string; line: string }[] =
+  [
+    {
+      key: 'receiptDays',
+      title: 'Receipt days from a bill',
+      line: "How many days a receipt's date may be from the books' date of the bill it proves.",
+    },
+    {
+      key: 'paymentDays',
+      title: 'Payment days from a bill',
+      line: "How many days a bank or card statement line may be from the books' date of the bill it pays.",
+    },
+  ]
+
+export interface ExpenseMatchingDto {
+  matching: ExpenseMatching
+  changedByEmail: string | null
+  changedAt: string | null
+}
+
+/** One save of the expense matching, for the history. */
+export interface ExpenseMatchingChangeDto {
+  changedAt: string
+  changedByEmail: string | null
+  part: 'expenses'
+  changes: string[]
+}
+
 /** The words and days in force, and who last changed them (null: the defaults). */
 export interface PayrollReadingDto {
   reading: PayrollReading
@@ -2745,7 +2787,7 @@ export const BOOKS_LINE_STATUS_LABELS: Record<BooksLineStatus, string> = {
   credit: 'A credit or refund',
   'outside-contract': 'Outside the contract period',
   'month-closed': 'Month not a draft',
-  dropped: 'Every bill dropped for want of a receipt',
+  dropped: 'Every bill dropped for want of its proof',
 }
 
 /** A line's share of a shared cost, as the books allocate it. */
@@ -2774,7 +2816,26 @@ export interface BooksBillDto {
   amount: number
   /** The receipt that proves it: matched by its amount and date ('auto'), or chosen by an owner ('person'). */
   receipt: { documentId: string; fileName: string; by: 'auto' | 'person' } | null
+  /** Where the books say it was paid from: the bank, a card, or neither said. */
+  paidFrom: 'bank' | 'card' | 'other'
+  /**
+   * The statement line that paid it (owner's decision, 2026-11-12): the line of the month's bank or card statements with
+   * its amount on a date near its own ('auto'), or chosen by an owner ('person'). Null: none found.
+   */
+  payment: BooksPaymentDto | null
+  /** On a bill with no payment found: the statement lines that print its amount, whatever their date, to choose from. */
+  paymentChoices: BooksPaymentDto[]
   dropped: boolean
+}
+
+/** One line of a month's bank or card statement that pays a bill. */
+export interface BooksPaymentDto {
+  documentId: string
+  fileName: string
+  card: boolean
+  /** The line, its page and its box in PDF points. */
+  line: StatementLine
+  by: 'auto' | 'person'
 }
 
 /** A bill as a saved books line keeps it (Expense.booksBills). */
@@ -2784,6 +2845,8 @@ export interface BooksBillSaved {
   vendor: string
   amount: number
   documentId: string | null
+  /** The statement that paid it, and the line on it; null: none found. Missing on a line saved before payments were. */
+  payment?: { documentId: string; page: number; text: string } | null
   dropped: boolean
 }
 
@@ -2862,12 +2925,19 @@ export interface WorkspaceExpensesDto {
   can: { change: boolean }
 }
 
-/** An owner's word on one bill: the receipt that proves it (null: as matched), or dropped for want of one. */
+/** An owner's word on one bill: the receipt that proves it (null: as matched), or dropped for want of its proof. */
 export interface BooksBillInput {
   period: string
   transactionId: string
   documentId?: string | null
   dropped?: boolean
+}
+
+/** An owner's word on one bill's payment: the statement line that paid it, or null to match it again. */
+export interface BooksPaymentInput {
+  period: string
+  transactionId: string
+  payment: { documentId: string; page: number; text: string } | null
 }
 
 /** What Save of the month's expenses did. */
