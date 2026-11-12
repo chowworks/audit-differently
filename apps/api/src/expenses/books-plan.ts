@@ -397,6 +397,23 @@ function sameAs(x: PlanExisting, l: BooksLineDto) {
     near(x.totalCost, l.allocation?.total ?? l.amount) &&
     x.budgetLineId === l.budgetLineId &&
     (x.allocationNote ?? null) === allocationNote(l) &&
-    JSON.stringify(x.booksBills ?? null) === JSON.stringify(savedBills(l))
+    sameBills(x.booksBills ?? null, savedBills(l))
+  )
+}
+
+/** The same bills, field by field: the database keeps a JSON object's keys in an order of its own. */
+function sameBills(a: BooksBillSaved[] | null, b: BooksBillSaved[]) {
+  return (
+    !!a &&
+    a.length === b.length &&
+    a.every(
+      (x, i) =>
+        x.transactionId === b[i]!.transactionId &&
+        x.date === b[i]!.date &&
+        x.vendor === b[i]!.vendor &&
+        near(x.amount, b[i]!.amount) &&
+        (x.documentId ?? null) === b[i]!.documentId &&
+        !!x.dropped === b[i]!.dropped
+    )
   )
 }

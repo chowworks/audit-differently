@@ -159,6 +159,21 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
       'changed',
       null,
     ])
+    // Read back from the database, whose JSON keeps its keys in an order of its own: the same.
+    const reordered = (l: (typeof first)[number]) =>
+      savedBills(l).map(({ dropped, documentId, amount, vendor, date, transactionId }) => ({
+        dropped,
+        documentId,
+        amount,
+        vendor,
+        date,
+        transactionId,
+      }))
+    expect(
+      plan({ existing: [{ ...saved(first[0]!), booksBills: reordered(first[0]!) }] }).find(
+        (l) => l.key === first[0]!.key
+      )?.saved
+    ).toBe('same')
     // Saved before its bills were kept: saved again once, to keep them.
     const older = plan({ existing: [{ ...saved(first[0]!), booksBills: null }] })
     expect(older.find((l) => l.key === first[0]!.key)?.saved).toBe('changed')
