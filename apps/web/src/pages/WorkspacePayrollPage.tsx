@@ -238,7 +238,13 @@ export function WorkspacePayrollPage() {
           >
             ← Back to {periodLabel(period)}&apos;s summary
           </button>
-          {owner && <Stepper steps={['Upload', 'Match', 'Expenses'] as const} current="Expenses" />}
+          {owner && (
+            <Stepper
+              steps={['Upload', 'Match', 'Expenses'] as const}
+              current="Expenses"
+              lastDone={false}
+            />
+          )}
           {savedNote && <Notice tone="ok">{savedNote}</Notice>}
           <WorkspaceExpenses
             workspaceId={w.id}
