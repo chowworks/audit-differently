@@ -26,11 +26,11 @@ export function computeLines(
     return {
       line,
       label: REPORT_LINE_LABELS[line],
-      budget: b,
-      previouslyBilled: prev,
-      billedThisPeriod: now,
-      cumulative: prev + now,
-      remaining: b - prev - now,
+      budget: cents(b),
+      previouslyBilled: cents(prev),
+      billedThisPeriod: cents(now),
+      cumulative: cents(prev + now),
+      remaining: cents(b - prev - now),
     }
   })
 }
@@ -182,11 +182,19 @@ export function computeBudgetLines(
       id: l.id,
       name: l.name,
       reportLine: l.reportLine as ReportLine,
-      budget,
-      previouslyBilled: prev,
-      billedThisPeriod: now,
-      cumulative: prev + now,
-      remaining: budget - prev - now,
+      budget: cents(budget),
+      previouslyBilled: cents(prev),
+      billedThisPeriod: cents(now),
+      cumulative: cents(prev + now),
+      remaining: cents(budget - prev - now),
     }
   })
+}
+
+/**
+ * An amount to the cent: money added up in floating point is off by a hair (6,076.64 − 6,076.64 = −0.0000000001), and
+ * a line spent to the cent must read as nothing left, not as over its budget.
+ */
+function cents(n: number): number {
+  return Math.round(n * 100) / 100 + 0
 }

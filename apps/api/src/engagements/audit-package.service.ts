@@ -11,6 +11,8 @@ import {
   type DocumentPurpose,
   type ReportLine,
   type Role,
+  type BooksSplitDto,
+  type PayrollSplitDto,
   type StatementMark,
 } from '@ad/types'
 import { AccessLogService } from '../core/access-log.service'
@@ -26,6 +28,7 @@ import {
   payrollCovers,
 } from '../reports/report-lines'
 import { howMany } from '../core/changes'
+import { splitMarks } from '../expenses/books-note'
 import { itemCopy, markPlace, NOT_DRAWN } from '../payroll/mark-pdf'
 import { PrismaService } from '../prisma/prisma.service'
 import {
@@ -190,6 +193,10 @@ export class AuditPackageService {
     const seen = new Set<string>()
     // The highlights each item's own copy of a payroll proof carries, by its path in the package.
     const marks = new Map<string, StatementMark[]>()
+    // A split staff line's own copy of its pay stub opens with the note of its split, by its path.
+    const notes = new Map<string, PayrollSplitDto>()
+    // A books line's own copy of its accounting export opens with how the books charge its shared cost, by its path.
+    const booksNotes = new Map<string, BooksSplitDto>()
     const reopened: string[] = []
     /** Whether the caller may open this record: a pay stub opens to every member, other personal records to fewer. */
     const mayOpen = (d: Doc) =>
@@ -216,7 +223,11 @@ export class AuditPackageService {
         amount?: number
       },
       /** This item's highlights: the file goes in as its own copy, drawn with them alone. */
-      itemMarks?: StatementMark[]
+      itemMarks?: StatementMark[],
+      /** A split staff line's pay stub: its copy opens with the note of the split. */
+      note?: PayrollSplitDto | null,
+      /** A books line's accounting export: its copy opens with how the books charge the shared cost. */
+      booksNote?: BooksSplitDto | null
     ) => {
       let path = `${root}/${relPath}`
       let n = 2
@@ -225,6 +236,8 @@ export class AuditPackageService {
       if (!keyInWorkspace(doc)) throw new NotFoundException()
       objects.push([path, doc.storageKey, doc.size ?? 0])
       if (itemMarks?.length) marks.set(path, itemMarks)
+      if (note) notes.set(path, note)
+      if (booksNote) booksNotes.set(path, booksNote)
       placedDocs.add(doc.id)
       if (doc.sensitivity === 'personal') personalPaths.add(path)
       count++
@@ -344,14 +357,25 @@ export class AuditPackageService {
           }
           paths.push(await file(d, own, meta))
           // A payroll proof highlighted for this line: its own copy too, with only this line's highlights.
-          const mine = marksOf(ed)
-          if (mine.length && PAYROLL_KINDS.has(d.kind))
+          let mine = marksOf(ed)
+          const note =
+            d.kind === 'paystub' && d.contentType === 'application/pdf'
+              ? ((e.payrollSplit ?? null) as PayrollSplitDto | null)
+              : null
+          const booksNote =
+            d.kind === 'payroll-details' && e.booksKey
+              ? ((e.booksSplit ?? null) as BooksSplitDto | null)
+              : null
+          if (booksNote) mine = splitMarks(booksNote)
+          if ((mine.length || note || booksNote) && PAYROLL_KINDS.has(d.kind))
             paths.push(
               await add(
-                `${folder}/Payroll/${safe(`${e.itemNumber} - ${e.vendor}`)}/${purposeLabel(ed.purpose)} - ${safe(d.fileName)}`,
+                `${folder}/${e.booksKey ? 'Books' : 'Payroll'}/${safe(`${e.itemNumber} - ${e.vendor}`)}/${purposeLabel(ed.purpose)} - ${safe(d.fileName)}`,
                 d,
                 meta,
-                mine
+                mine,
+                note,
+                booksNote
               )
             )
         }
@@ -670,6 +694,8 @@ export class AuditPackageService {
       personal,
       personalPaths,
       marks,
+      notes,
+      booksNotes,
       notDrawn,
     }
   }
@@ -681,9 +707,11 @@ export class AuditPackageService {
    */
   private async object(plan: PackagePlan, key: string, path: string): Promise<Uint8Array> {
     const bytes = new Uint8Array(await this.storage.read(key))
-    const marks = plan.marks?.get(path)
-    if (!marks?.length || plan.notDrawn?.has(path)) return bytes
-    const marked = await itemCopy(bytes, marks)
+    const marks = plan.marks?.get(path) ?? []
+    const note = plan.notes?.get(path)
+    const booksNote = plan.booksNotes?.get(path)
+    if ((!marks.length && !note && !booksNote) || plan.notDrawn?.has(path)) return bytes
+    const marked = await itemCopy(bytes, marks, note, booksNote)
     if (marked.notDrawn.length) {
       this.logger.error('A statement could not be marked as its plan said it would be')
       throw new Error('A marked statement changed while the package was made')
@@ -781,4 +809,8 @@ export interface PackagePlan {
   marks?: Map<string, StatementMark[]>
   /** The highlights that cannot be drawn on an item's copy (encrypted or damaged), by path; that copy is as stored. */
   notDrawn?: Map<string, StatementMark[]>
+  /** A split staff line's own copy of its pay stub, by path: the note of the split goes first. */
+  notes?: Map<string, PayrollSplitDto>
+  /** A books line's own copy of its accounting export, by path: the note of how the books charge the cost goes first. */
+  booksNotes?: Map<string, BooksSplitDto>
 }

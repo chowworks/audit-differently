@@ -195,11 +195,22 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   bank line of every item a run paid (staff lines and work-experience payments) is the statement's line of the
   register's stated total ("Total direct deposits", else its net column added up) near its pay date
   (`pay-runs.ts`, read by both match screens); a line per person is read only when no such debit is found, and a pay
-  stub is compared with its register row, never a bank line. **A pay belongs to the month it was paid in**, by its pay
-  date (the period's end only when none is printed; a period starting in the month before is still this month's): a
-  run or stub paid in another month is flagged `other-month`, never filed. Matching is per run: a staff line gets the
-  register row, time report and debit of the run paid on its date (`runsOfLine`; a line dated otherwise, every run of
-  the month), and each pay stub makes one payment per pay period, with its own run's proofs. A file whose contents are already on an item, or filed on
+  stub is compared with its register row, never a bank line. **A pay belongs to the month its work was done in**
+  (owner's decision, 2026-11-01, replacing the pay date's month of 2026-10-19 until the accountant answers; one function,
+  `payMonthOf`), by its pay period's end (the pay date only when no period is printed): a run, stub or payroll details
+  charge of another month is flagged `other-month` (a charge is skipped), never filed. Matching is per run and per
+  person: a staff line Save wrote from payroll details (`staff:<id>:<run end>:…`) gets only that person's register
+  row, time report, pay stub and debit of that run; another staff line, the run paid on its date (`runsOfLine`; a line
+  dated otherwise, every run of the month), and each pay stub makes one payment per pay period, with its own run's
+  proofs. A staff member's own pay stub (it names one person on the staff list and no participant) is proof on their
+  lines of its run, never a payment. A time report with a program column (a job report) proves an engagement only by
+  the rows whose program is one of its names. **Program names** (`Workspace.programNames`, owner's decision,
+  2026-11-01): each program's names in the books (class) and the payroll company (project, job), merged from a mapping
+  file in the zip's optional "Program names" folder or added on the workspace page (read in memory, never stored);
+  a group is an engagement's by one of its names or an owner's link. A payroll details charge that names a program
+  (its job, else its class column) lands only on the engagement of that program, and only if the person is on it;
+  one naming no program is the person's only engagement's. Payroll details is read by its header (amount, date,
+  account, class), text dates included, and balance-sheet rows (liabilities, bank) are left out. A file whose contents are already on an item, or filed on
   its engagement month (the bookkeeper's copy), is linked as that document, never as a copy; two different files as
   one proof are flagged for the owner in the plan and the reconciliation (both stay) only when they contradict each
   other: two pay stubs by their pay, hours or dates (one whose words can't be read is flagged; owner's decision,
@@ -242,14 +253,18 @@ general>/<uuid>.<ext>` (a database trigger refuses any other key, migrations `20
   line when it is opened, never because it re-fetched after the person's own action (actions return the updated
   data), and nothing turns read logging off.
 - No document ever leaves the system by email. Notifications carry links.
-- Allowed uploads: pdf, png, jpg/jpeg, xlsx, docx, and the bytes must begin the way that type does
-  (`looksLike` in `documents.service.ts`); the browser's claimed type alone is never trusted. Record the sha256
+- Allowed uploads: pdf, png, jpg/jpeg, xlsx, docx, and csv for payroll files only (timesheet, payroll register,
+  payroll details: `CSV_DOCUMENT_KINDS`; owner's decision, 2026-11-01), and the bytes must begin the way that type does
+  (`looksLike` in `documents.service.ts`; a csv has no signature: UTF-8 with no NUL byte); the browser's claimed type
+  alone is never trusted. The payroll zip may hold a zip of pay stubs, opened in place in the browser (one level). Record the sha256
   and size of every upload. An exported transactions file (csv or xlsx, `apps/api/src/imports/`) is the one
   exception: read in memory to make expense lines, never stored as a Document; an xlsx must begin like a zip, a
   csv must be UTF-8 with no NUL byte; no row of it goes to AI (an AI guess sees real column names alone).
 - The API sets security headers on every response (helmet in `main.ts`: no-script CSP, HSTS, nosniff, no
   framing), rate-limits every client (`ThrottlerModule`, tighter on uploads, signed links and `/me`), and
-  accepts a Clerk session only when its token names one of `FRONTEND_URL`'s origins (`authorizedParties`).
+  accepts a Clerk session only when its token's `azp` is one of `FRONTEND_URL`'s origins, the list CORS answers
+  (`src/cors.ts`; dev also lists `https://audit-differently-git-*-ludakhris-projects.vercel.app` so Vercel's branch
+  previews reach `api-dev`; a `*` only in the first label of an https address, and production refuses one).
   The web app's own headers are in `apps/web/vercel.json`. The access log is read by owners and auditors.
 
 ## AI in the app
@@ -342,10 +357,12 @@ of two.
 
 ## Local development and the demo
 
-- **No local database and no demo sign-in.** A laptop runs the API and the web app against the shared `dev`
-  environment on Railway (fictional seed only) and signs in through the dev Clerk instance, exactly as the
-  deployed API does. Setup and the daily commands are in `docs/dev-api.md`; the demo people and story are in
-  `docs/dev-api.md`. The owner's reason: no real record and no production credential ever sits on a laptop.
+- **No local database, no local API and no demo sign-in.** A laptop runs the web app against `api-dev` in the
+  shared `dev` environment on Railway (fictional seed only) and signs in through the dev Clerk instance. No
+  Postgres has a public TCP proxy, dev's included: scripts that need the database run in a shell on `api-dev`
+  (`railway ssh`), and an API change is tried by deploying it (`apps/api/scripts/deploy-dev.sh`). Setup and the
+  daily commands are in `docs/dev-api.md`; the demo people and story are in `docs/dev-api.md`. The owner's reason:
+  no real record and no production credential ever sits on a laptop.
 - Railway is declared in code, `.railway/railway.ts` (same pattern as Learn Differently), applied by CI on a push
   to `main` once the project exists. Secrets are `preserve()` there and set by hand in Railway; the dev service's
   are copied from a local `.env` by `apps/api/scripts/railway-dev-vars.sh`.
@@ -510,7 +527,7 @@ read-only subagents, one per area of the diff, before merging:
 Before a feature is committed, the owner sees it working, screen by screen (owner's decision, 2026-10-17):
 
 1. **Deploy it to dev.** Say which migrations it applies to the shared database and get a yes, then deploy with
-   `apps/api/scripts/deploy-dev.sh` and point the local app at it (restart the local API).
+   `apps/api/scripts/deploy-dev.sh` (the local web app already points at it).
 2. **Give a guided tour.** Drive the browser pane yourself, one screen at a time, on the fictional seed. For each
    screen, narrate in plain words: where we are, what each part does, what is new, and anything that looks wrong.
    Go slowly, one screen per message, so the owner can take notes as you narrate. Stop at the end of each section and wait for "next", so the owner can take notes. Do the real actions (save,
@@ -526,7 +543,7 @@ Before a feature is committed, the owner sees it working, screen by screen (owne
 
 Only when the user asks for screenshots on an issue or PR:
 
-1. Start dev servers via the Preview MCP using `.claude/launch.json` (`web` on 5273, `api` on 3100, so they run beside the other Differently products).
+1. Start dev servers via the Preview MCP using `.claude/launch.json` (`web` on 5273, beside the other Differently products, against `api-dev`).
 2. For auth-gated pages do NOT try to bypass auth. Ask the user to sign in via the Preview MCP browser.
 3. Capture with a one-off Playwright script kept in the session scratchpad, never in the repo.
 4. Save PNGs to `docs/screenshots/<feature>/`, named after the feature, never a phase. Seed data only.

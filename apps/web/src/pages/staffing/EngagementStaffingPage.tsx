@@ -12,6 +12,7 @@ import type {
 import { useApi, useLoad } from '@/hooks/useApi'
 import { ApiError } from '@/services/api'
 import { engagementColors } from '@/lib/engagement-colors'
+import { EngagementMark } from '@/components/EngagementMark'
 import { periodLabel } from '@/lib/format'
 import { HandCard } from '@/components/HandCard'
 import { NotFoundPage } from '@/pages/NotFoundPage'
@@ -87,7 +88,10 @@ function EngagementView({ staff, engagements, change, busy, tag, untag }: ViewPr
           <section key={e.id} className="ad-card ss-eng-card" style={{ borderTopColor: e.color }}>
             <header>
               <div>
-                <b>{e.name}</b>
+                <b>
+                  <EngagementMark color={e.color} />
+                  {e.name}
+                </b>
                 {e.code && <small className="ss-code">{e.code}</small>}
               </div>
               <span className="ss-count">
@@ -170,7 +174,7 @@ function PersonView({ staff, engagements, change, busy, tag, untag, edit }: View
                 .filter((e) => onIt(p, e.id))
                 .map((e) => (
                   <span key={e.id} className="ss-tag" style={{ borderColor: e.color }}>
-                    <span className="ss-dot" style={{ background: e.color }} />
+                    <EngagementMark color={e.color} />
                     {e.name}
                     {change && (
                       <button

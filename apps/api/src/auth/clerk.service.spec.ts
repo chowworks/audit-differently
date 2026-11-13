@@ -1,4 +1,4 @@
-import { verifiedEmail } from './clerk.service'
+import { authorizedParty, verifiedEmail } from './clerk.service'
 
 const addr = (id: string, emailAddress: string, status: string | null) => ({
   id,
@@ -39,5 +39,22 @@ describe('verifiedEmail', () => {
       })
     ).toBeNull()
     expect(verifiedEmail({ primaryEmailAddressId: null, emailAddresses: [] })).toBeNull()
+  })
+})
+
+describe('authorizedParty', () => {
+  const list = 'http://localhost:5173,https://audit-differently-git-*-ludakhris-projects.vercel.app'
+
+  it('accepts a token made on a FRONTEND_URL address or a branch preview', () => {
+    expect(authorizedParty('http://localhost:5173', list)).toBe(true)
+    expect(
+      authorizedParty('https://audit-differently-git-a-ludakhris-projects.vercel.app', list)
+    ).toBe(true)
+  })
+
+  it('refuses a token made elsewhere, or with no azp', () => {
+    expect(authorizedParty('https://evil.vercel.app', list)).toBe(false)
+    expect(authorizedParty(undefined, list)).toBe(false)
+    expect(authorizedParty('', list)).toBe(false)
   })
 })

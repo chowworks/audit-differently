@@ -50,9 +50,14 @@ model Workspace {
   // "Bookkeepers see staff payroll" (migrations 20261017000500, renamed in 20261018000300): the owners' setting, on by
   // default. Off, a bookkeeper's month page shows the payroll proofs as labels, not links; the screen only.
   bookkeepersSeeStaffPayroll Boolean                  @default(true)
+  // Program names (migration 20261101000100): each program's names in the books and the payroll company's files
+  // ({ names, engagementId }[], ProgramNames in packages/types), merged from the payroll zip's "Program names" folder.
+  programNames               Json                     @default("[]")
   staffMembers               StaffMember[]
   droppedPayrollDecisions    PayrollDroppedDecision[]
   payrollFileAiReadings      PayrollFileAiReading[]
+  accountMappings            AccountMapping[]
+  booksBills                 BooksBill[]
 }
 
 // Something a member asked for: today, an addition to one of the workspace's lists. Kept so the product can
@@ -193,6 +198,7 @@ model Engagement {
   documents              Document[]
   inboundReceipts        InboundReceipt[]
   staffAssignments       StaffAssignment[]
+  accountMapping         AccountMapping?
 
   @@unique([workspaceId, number])
   @@unique([workspaceId, code])
@@ -242,6 +248,8 @@ model MonthlyReport {
   editsRequestedByEmail String?
   editsRequestComment   String?
   isFinal               Boolean           @default(false)
+  // When the workspace's payroll match last saved this month (draft months only): null, it was never matched.
+  payrollMatchedAt      DateTime?
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
   engagement            Engagement        @relation(fields: [engagementId], references: [id], onDelete: Cascade)
@@ -396,6 +404,14 @@ model Expense {
   /// marked on the month: counts on the budget only until the payroll match covers that kind on the month, then kept for
   /// reconciliation. Null: not one.
   payrollKind       String?
+  /// A staff payroll line's run split by program (PayrollSplitDto), when the person's pay is charged to several (migration 20261104000100)
+  payrollSplit      Json?
+  /// Written by the month's expenses from the books: the month, transaction, account, class and place (migration 20261109000100)
+  booksKey          String?
+  /// A books line's bills and the receipt of each (BooksBillSaved[] in packages/types), written by Save (migration 20261112000100)
+  booksBills        Json?
+  /// A books line's shared cost as the books charge it to every program (BooksSplitDto), written by Save (migration 20261112000300)
+  booksSplit        Json?
   createdById       String?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
@@ -407,6 +423,7 @@ model Expense {
   @@unique([engagementId, itemNumber, reportLine])
   @@unique([engagementId, importFingerprint])
   @@unique([monthlyReportId, payrollKey])
+  @@unique([engagementId, booksKey])
   @@index([workspaceId])
   @@index([monthlyReportId])
   @@index([budgetLineId])
@@ -445,6 +462,8 @@ model Document {
   wexPayments      WexPaymentDocument[]
   payLines         PayrollPayLine[]
   staffPayProofs   StaffPayProof[]
+  booksBills       BooksBill[]           @relation("BooksBillReceipt")
+  booksPayments    BooksBill[]           @relation("BooksBillPayment")
 
   @@index([workspaceId, period])
   @@index([engagementId])
@@ -742,6 +761,9 @@ model PayrollPayLine {
   notFundedAt      DateTime?
   // A pay stub's flags from the last match (StubFlag in packages/types, migration 20261018000200); flagged only.
   flags            String[]  @default([])
+  /// A bank line that is a pay run's debit: how many of the month's registers it pays (two registers of one run share
+  /// it). Set by each Save (migration 20261102000100); null on any other line.
+  registers        Int?
   createdAt        DateTime  @default(now())
   document         Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
@@ -837,4 +859,61 @@ model PayrollFileAiReading {
   readAt      DateTime  @default(now())
 
   @@unique([workspaceId, sha256])
+}
+
+// An engagement's account mapping (migration 20261109000100): its chart of accounts mapped to the categories its funder
+// bills, read from the payroll zip's "Account mapping" folder, and an owner's budget line for a category the file does
+// not tie to one. The file itself is not kept.
+model AccountMapping {
+  id           String      @id @default(uuid())
+  workspaceId  String
+  engagementId String?     @unique
+  fileName     String
+  sha256       String
+  read         Json // AccountMappingRead in apps/api/src/expenses/account-mapping.ts
+  chosen       Json        @default("{}") // category -> budget line id, or 'skip'
+  changedById  String
+  changedAt    DateTime    @default(now())
+  workspace    Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  engagement   Engagement? @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+/// An owner's word on one of the books' bills of a month (migration 20261112000100): the workspace receipt that proves
+/// it, the statement line that paid it (migration 20261112000200), or dropped for want of its proof (its share then
+/// comes off the lines that bill it). Read by owners and auditors.
+model BooksBill {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  period            String
+  transactionId     String
+  documentId        String?
+  /// The bank or card statement that paid it, and the line on it: { page, text }
+  paymentDocumentId String?
+  paymentLine       Json?
+  dropped           Boolean   @default(false)
+  changedById       String
+  changedAt         DateTime  @default(now())
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  document          Document? @relation("BooksBillReceipt", fields: [documentId], references: [id], onDelete: SetNull)
+  paymentDocument   Document? @relation("BooksBillPayment", fields: [paymentDocumentId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, period, transactionId])
+  @@index([documentId])
+  @@index([paymentDocumentId])
+}
+
+// How the month's expenses from the books match each bill to its receipt and its payment (migration 20261112000200):
+// set by a platform admin in Admin tools → File Matching, append-only; the newest row is in force, none:
+// DEFAULT_EXPENSE_MATCHING.
+model ExpenseMatchingSetting {
+  id             String   @id @default(uuid())
+  /// ExpenseMatching in packages/types: each day window
+  matching       Json
+  changedById    String
+  changedByEmail String?
+  changedAt      DateTime @default(now())
+
+  @@index([changedAt])
 }

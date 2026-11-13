@@ -1,10 +1,27 @@
-/* The bank statement viewer (StatementViewer.tsx): a page drawn by pdf.js with the marked line highlighted. */
-.ad-statement-pages {
+/* The bank statement viewer (StatementViewer.tsx): every page drawn by pdf.js, one under another in a pane that
+   scrolls, with the marked line highlighted. */
+.ad-statement-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 8px;
+}
+.ad-statement-pane {
+  position: relative;
+  max-height: 72vh;
+  /* Room for the scrollbar kept from the start, so pages drawn to the pane's width never scroll sideways. */
+  scrollbar-gutter: stable;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ad-statement-pageblock + .ad-statement-pageblock {
+  margin-top: 16px;
+}
+.ad-statement-pageno {
+  margin: 0 0 4px;
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 .ad-statement-page {
   position: relative;
@@ -31,11 +48,4 @@
   outline: 2px solid rgba(217, 140, 0, 0.9);
   border-radius: 2px;
   pointer-events: none;
-}
-
-/* Download, above the page, at its right. */
-.ad-statement-download {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 8px;
 }

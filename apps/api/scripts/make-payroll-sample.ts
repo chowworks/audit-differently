@@ -1,7 +1,7 @@
 /**
  * Writes the workspace payroll sample (GitHub issue #22): fictional text-layer PDFs for one September 2026 pay run of
  * Riverbend Youth Services (prisma/payroll-workspace-sample.ts) into docs/samples/payroll-2026-09-workspace/, in the
- * five folders the workspace payroll upload reads (Payroll details included), and zips them as apps/web/public/samples/payroll-workspace-sample.zip
+ * seven folders the workspace payroll upload reads (QuickBooks transactions, Program names and Account mapping included), and zips them as apps/web/public/samples/payroll-workspace-sample.zip
  * (the workspace payroll page's "Download a sample (zip)"). Touches no database and no storage: files on this disk only.
  * The per-engagement wizard's payroll-sample.zip is left as it is.
  *
@@ -10,16 +10,20 @@
 import { zipSync } from 'fflate'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { expenseSampleFiles } from '../prisma/expense-sample'
 import { sampleFiles } from '../prisma/payroll-workspace-sample'
 
 const ROOT = join(__dirname, '../../..')
 const DIR = join(ROOT, 'docs/samples/payroll-2026-09-workspace')
 const ZIP = join(ROOT, 'apps/web/public/samples/payroll-workspace-sample.zip')
-// A fixed time on every entry, so the same sample always makes the same zip.
-const MTIME = new Date('2026-10-01T12:00:00Z')
+// A fixed time on every entry, so the same sample always makes the same zip; in local terms, since a zip stores local
+// clock time, so every time zone makes the same bytes.
+const MTIME = new Date(2026, 9, 1, 12, 0, 0)
 
 async function main() {
-  const files = await sampleFiles()
+  // The expenses' files (prisma/expense-sample.ts) join the same zip: the card's statement, the books' transactions and
+  // each engagement's account mapping.
+  const files = [...(await sampleFiles()), ...(await expenseSampleFiles())]
   rmSync(DIR, { recursive: true, force: true })
   const zip: Record<string, [Uint8Array, { mtime: Date }]> = {}
   for (const f of files) {

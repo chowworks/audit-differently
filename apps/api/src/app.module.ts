@@ -20,6 +20,7 @@ import { AdminModule } from './admin/admin.module'
 import { ImportsModule } from './imports/imports.module'
 import { ReceiptsModule } from './receipts/receipts.module'
 import { PayrollModule } from './payroll/payroll.module'
+import { ExpensesModule } from './expenses/expenses.module'
 import { InboundModule } from './inbound/inbound.module'
 import { StaffModule } from './staff/staff.module'
 import { TenantMiddleware } from './core/tenant.middleware'
@@ -47,6 +48,7 @@ import { TenantMiddleware } from './core/tenant.middleware'
     ImportsModule,
     ReceiptsModule,
     PayrollModule,
+    ExpensesModule,
     StaffModule,
     InboundModule,
   ],

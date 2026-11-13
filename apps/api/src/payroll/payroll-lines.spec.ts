@@ -59,6 +59,23 @@ describe('payrollLinesOf', () => {
     expect(skipped).toEqual([])
   })
 
+  it("keeps the run's split by program on a line whose person's pay is charged to several, and none on one that is not", () => {
+    const { writes } = payrollLinesOf({
+      charges,
+      staff,
+      participants,
+      months: [month('isy'), month('ait')],
+    })
+    const morgan = writes.find(
+      (w) => w.engagementId === 'e-isy' && w.who === 'Morgan Lee' && w.kind === 'staff-pay'
+    )!
+    expect(morgan.split!.kind).toBe('pay')
+    expect(morgan.split!.rows.filter((r) => r.mine).map((r) => r.amount)).toEqual([morgan.amount])
+    expect(morgan.split!.rows).toHaveLength(2)
+    const priya = writes.find((w) => w.who === 'Priya Shah' && w.kind === 'staff-pay')!
+    expect(priya.split).toBeNull()
+  })
+
   it("puts the employer's taxes on Staff taxes and benefits, and the participants' taxes per run on Participant taxes", () => {
     const { writes } = payrollLinesOf({
       charges,
@@ -101,6 +118,39 @@ describe('payrollLinesOf', () => {
     )
   })
 
+  it('totals the payroll no budget line takes, by engagement month and kind, for the page to flag', () => {
+    const lined = payrollLinesOf({
+      charges,
+      staff,
+      participants,
+      months: [month('isy'), month('ait')],
+    })
+    // Every line taken: nothing to flag.
+    expect(lined.unbudgeted).toEqual([])
+    const onAit = (kind: string) =>
+      lined.writes
+        .filter((w) => w.reportId === 'r-ait' && w.kind === kind)
+        .reduce((t, w) => Math.round((t + w.amount) * 100) / 100, 0)
+    const { writes, unbudgeted } = payrollLinesOf({
+      charges,
+      staff,
+      participants,
+      months: [month('isy'), month('ait', { lines: [{ id: 'ait-program', payroll: [] }] })],
+    })
+    // What would have been Adult IT Training's lines, by kind, left off and said.
+    expect(unbudgeted).toEqual([
+      { reportId: 'r-ait', engagementId: 'e-ait', kind: 'staff-pay', amount: onAit('staff-pay') },
+      {
+        reportId: 'r-ait',
+        engagementId: 'e-ait',
+        kind: 'staff-taxes',
+        amount: onAit('staff-taxes'),
+      },
+    ])
+    expect(onAit('staff-pay')).toBeGreaterThan(0)
+    expect(writes.some((w) => w.reportId === 'r-ait')).toBe(false)
+  })
+
   it("puts a participant's taxes on the engagement the job names when they are on two, and says when none is named", () => {
     const tax = (job: string | null, end: string): PayrollCharge => ({
       name: 'Jordan Sample',
@@ -111,6 +161,7 @@ describe('payrollLinesOf', () => {
       date: end,
       start: null,
       end,
+      program: null,
       pay: false,
       wex: true,
       line: { page: 1, text: 'Jordan Sample', x: 0, y: 0, width: 0, height: 0 },
@@ -130,17 +181,61 @@ describe('payrollLinesOf', () => {
     expect(skipped).toEqual([{ who: 'Jordan Sample', end: '2026-01-24', why: 'no-engagement' }])
   })
 
-  it("finds a shared person's engagement only by the job's name, and their own one alone", () => {
+  it("finds a person's engagement by the program the charge names, and their own one alone when it names none", () => {
     const names = new Map([
-      ['e-isy', 'In-School Youth Coding Pathway'],
-      ['e-ait', 'Adult IT Training'],
+      ['e-isy', ['In-School Youth Coding Pathway']],
+      ['e-ait', ['Adult IT Training', 'Adults - Board AIT (2026)']],
     ])
-    expect(engagementOfCharge('Board (Adult IT Training)', ['e-isy', 'e-ait'], names)).toBe('e-ait')
-    expect(engagementOfCharge('General operations', ['e-isy', 'e-ait'], names)).toBeNull()
-    expect(engagementOfCharge(null, ['e-isy'], names)).toBe('e-isy')
+    const of = (job: string | null, ids: string[], program: string | null = null) =>
+      engagementOfCharge({ job, program }, ids, names)
+    expect(of('Board (Adult IT Training)', ['e-isy', 'e-ait'])).toEqual({ id: 'e-ait' })
+    // The class column names it by another of its names (the workspace's program names).
+    expect(of(null, ['e-isy', 'e-ait'], 'Adults - Board AIT (2026)')).toEqual({ id: 'e-ait' })
+    // A program that is not one of ours is no one's here, even for a person on one engagement.
+    expect(of('General operations', ['e-isy', 'e-ait'])).toEqual({ id: null, why: 'other-program' })
+    expect(of('General operations', ['e-isy'])).toEqual({ id: null, why: 'other-program' })
+    // Another engagement's program is not this person's to carry.
+    expect(of('Adult IT Training', ['e-isy'])).toEqual({ id: null, why: 'other-program' })
+    expect(of(null, ['e-isy'])).toEqual({ id: 'e-isy' })
+    expect(of(null, ['e-isy', 'e-ait'])).toEqual({ id: null, why: 'no-engagement' })
   })
 
-  it('numbers each line PR-<pay date>-<whose>, taxes with T', () => {
+  it('leaves out a run of another month (the month its work was done) and a run that nets to nothing', () => {
+    const pay = (end: string, date: string, amount: number): PayrollCharge => ({
+      name: 'Priya Shah',
+      type: 'Salary',
+      job: 'In-School Youth Coding Pathway',
+      account: 'Salaries - Employees',
+      amount,
+      date,
+      start: null,
+      end,
+      program: null,
+      pay: true,
+      wex: false,
+      line: { page: 1, text: 'Priya Shah', x: 0, y: 0, width: 0, height: 0 },
+    })
+    const { writes, skipped } = payrollLinesOf({
+      charges: [
+        // August's second half, accrued, reversed and booked again in September: August's.
+        pay('2026-08-31', '2026-09-01', -300),
+        pay('2026-08-31', '2026-09-04', 300),
+        // September's second half, paid in October: September's.
+        pay('2026-09-30', '2026-09-30', 410),
+        // Booked and reversed in the month: nothing to write.
+        pay('2026-09-15', '2026-09-17', 200),
+        pay('2026-09-15', '2026-09-20', -200),
+      ],
+      staff,
+      participants,
+      months: [month('isy')],
+      period: '2026-09',
+    })
+    expect(writes.map((w) => [w.end, w.amount])).toEqual([['2026-09-30', 410]])
+    expect(skipped).toContainEqual({ who: 'Priya Shah', end: '2026-08-31', why: 'other-month' })
+  })
+
+  it('numbers each line PR-<run end>-<whose>, taxes with T', () => {
     const { writes } = payrollLinesOf({
       charges,
       staff,
@@ -152,7 +247,7 @@ describe('payrollLinesOf', () => {
       writes.length
     )
     expect(payrollItemNumber(writes.find((w) => w.kind === 'participant-taxes')!)).toBe(
-      `PR-${RUN1.payDate.replace(/-/g, '')}-PART-T`
+      `PR-${RUN1.end.replace(/-/g, '')}-PART-T`
     )
   })
 })

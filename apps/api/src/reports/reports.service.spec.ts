@@ -239,6 +239,7 @@ function service(status = 'draft', over: Record<string, unknown> = {}) {
   ]
   return {
     service: new ReportsService(prisma as never, checks as never, log as never),
+    checks,
     prisma,
     log,
     writes,
@@ -315,6 +316,7 @@ describe('ReportsService', () => {
     await expect(s.approveClosing(who, 'r-1', closing)).rejects.toThrow(NotFoundException)
     await expect(s.sendBack(who, 'r-1', 'Wrong rent')).rejects.toThrow(NotFoundException)
     await expect(s.reopen(who, 'r-1', 'Typo')).rejects.toThrow(NotFoundException)
+    await expect(s.recheck(who, 'r-1')).rejects.toThrow(NotFoundException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
   })
@@ -366,8 +368,16 @@ describe('ReportsService', () => {
     await expect(s.attachToWex(who, 'wx-1', 'payment', 'd-1')).rejects.toThrow(ForbiddenException)
     await expect(s.submit(who, 'r-1')).rejects.toThrow(ForbiddenException)
     await expect(s.approveClosing(who, 'r-1', closing)).rejects.toThrow(ForbiddenException)
+    await expect(s.recheck(who, 'r-1')).rejects.toThrow(ForbiddenException)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
+  })
+
+  it("lets an owner or bookkeeper run a draft's checks again, changing nothing in it", async () => {
+    const { service: s, checks, writes } = service()
+    await s.recheck(member('bookkeeper'), 'r-1')
+    expect(checks.refresh).toHaveBeenCalledWith('r-1')
+    for (const w of writes) expect(w).not.toHaveBeenCalled()
   })
 
   it('lets an auditor neither approve a month-end closing nor send one back', async () => {
@@ -1282,6 +1292,23 @@ describe('ReportsService', () => {
     expect(detail.id).toBe('r-1')
     expect(prisma.expense.update).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
+  })
+
+  it("refuses to change or remove a line from the books by hand, and still takes a person's proof on it", async () => {
+    const who = member('bookkeeper')
+    const { service: s, prisma, log, writes } = service()
+    const fromBooks = { ...stored, booksKey: '2026-09:9003:60301:Youth Coding Program:1' }
+    prisma.expense.findFirst.mockResolvedValue(fromBooks)
+    const words =
+      "This line comes from the books: change it in QuickBooks or on the month's expenses"
+    await expect(
+      s.updateExpense(who, 'x-1', { ...expense, vendor: 'Another vendor' })
+    ).rejects.toThrow(new BadRequestException(words))
+    await expect(s.deleteExpense(who, 'x-1')).rejects.toThrow(new BadRequestException(words))
+    for (const w of writes) expect(w).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
+    await s.attachToExpense(who, 'x-1', 'invoice', 'd-bank')
+    expect(prisma.expenseDocument.create).toHaveBeenCalled()
   })
 
   it('logs nothing when the document is already in that slot, and a move when it is in another', async () => {

@@ -6,12 +6,13 @@ import { layoutPdf, type PdfRow } from './pdf'
  * The workspace payroll sample (GitHub issue #22): fictional September 2026 payroll for Riverbend Youth Services, for
  * demos and the owner's tour of the workspace payroll page. Like a real month it holds two pay runs (owner's decision,
  * 2026-10-19), each with its own register, its own time report for its pay period, a pay stub per participant, and its
- * own two bank debits: one for the run's net pay and one for its taxes. Run 1's pay period starts in August, but it is
- * paid in September, so it is September's pay (a pay belongs to the month of its pay date). Three staff, shared between
+ * own two bank debits: one for the run's net pay and one for its taxes. Run 1's pay period starts in August, but it
+ * ends in September, so it is September's pay (a pay belongs to the month its work was done, by its period's end). Three staff, shared between
  * the demo's two engagements once the owner tags them, and the three work-experience participants of In-School Youth
  * Coding Pathway, paid in both runs; and, so the tour shows both kinds of pay that land on no engagement, a program
  * assistant who is not on the tour's staff list (both runs) and a participant on no engagement's participant list (run 2).
- * The bank statement never has a line per person. Every page is footed as a sample, and read by the app's own readers
+ * A Program names file ties each program's name in the books to its name in payroll. The bank statement never has a
+ * line per person. Every page is footed as a sample, and read by the app's own readers
  * in `src/payroll/payroll-workspace-sample.spec.ts`. `scripts/make-payroll-sample.ts` writes the files and the zip.
  * Fictional people, companies and amounts only (CLAUDE.md, "Data rules").
  */
@@ -415,13 +416,32 @@ export async function payrollDetailsXlsx(): Promise<Buffer> {
   sheet.addRow([])
   sheet.addRow([SAMPLE_FOOTER])
   // The library stamps each part of the file with the time it was written: repacked at a fixed time, so the same sample
-  // always makes the same bytes.
+  // always makes the same bytes. A zip stores local clock time, so the time is given in local terms: the same bytes in
+  // every time zone (CI runs in UTC).
   const parts = unzipSync(new Uint8Array(await book.xlsx.writeBuffer()))
-  const at = new Date('2026-10-01T12:00:00Z')
+  const at = new Date(2026, 9, 1, 12, 0, 0)
   return Buffer.from(
     zipSync(Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, [v, { mtime: at }]])))
   )
 }
+
+/**
+ * The program names file (owner's decision, 2026-11-01): each program as the books' class calls it and as the payroll
+ * company's time report calls it, one program per row, a header first. The workspace keeps it as its Program names list;
+ * an owner links each to an engagement on the workspace page. Summer Youth is no engagement of the demo's.
+ */
+export const PROGRAM_NAMES: [string, string][] = [
+  [PROGRAM_JOBS.isy, 'In-School Youth'],
+  [PROGRAM_JOBS.ait, 'Adult IT Training'],
+  ['Demo Workforce Board (Summer Youth)', 'Summer Youth (WEX)'],
+]
+export const programNamesCsv = () =>
+  Buffer.from(
+    [
+      'In the books (class),In payroll (project)',
+      ...PROGRAM_NAMES.map((r) => r.map((c) => `"${c}"`).join(',')),
+    ].join('\r\n') + '\r\n'
+  )
 
 /** The sample's files: the zip's folder, the file's name, and its bytes. Each run's files, then the statement. */
 export async function sampleFiles(): Promise<{ folder: string; name: string; bytes: Buffer }[]> {
@@ -445,14 +465,15 @@ export async function sampleFiles(): Promise<{ folder: string; name: string; byt
       })
   }
   out.push({
-    folder: 'Bank statements',
+    folder: 'Bank & card statements',
     name: 'Lakeside Community Bank statement 2026-09.pdf',
     bytes: await bankStatementPdf(),
   })
   out.push({
-    folder: 'Payroll details',
+    folder: 'QuickBooks transactions',
     name: 'Payroll details 2026-09.xlsx',
     bytes: await payrollDetailsXlsx(),
   })
+  out.push({ folder: 'Program names', name: 'Program names.csv', bytes: programNamesCsv() })
   return out
 }

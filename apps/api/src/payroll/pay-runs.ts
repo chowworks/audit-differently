@@ -26,18 +26,52 @@ const iso = (y: number, m: number, d: number) =>
     ? `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     : null
 
-/** Every date written in the text, as yyyy-mm-dd: 09/07/2026, 9.7.26, 2026-09-07 and 20260907. */
-export function datesOf(text: string): string[] {
-  const out: string[] = []
-  for (const m of text.matchAll(/(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/g))
-    out.push(iso(+m[1]!, +m[2]!, +m[3]!) ?? '')
-  for (const m of text.matchAll(/(?<![\d-])(\d{1,2})[/.](\d{1,2})[/.](\d{4}|\d{2})(?!\d)/g)) {
-    const y = m[3]!.length === 2 ? 2000 + +m[3]! : +m[3]!
-    out.push(iso(y, +m[1]!, +m[2]!) ?? '')
+const MONTH_WORDS = [
+  'jan',
+  'feb',
+  'mar',
+  'apr',
+  'may',
+  'jun',
+  'jul',
+  'aug',
+  'sep',
+  'oct',
+  'nov',
+  'dec',
+]
+const MONTH = '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?'
+/** "Oct 6, 2026", "September 16th 2026", and a range in one month or two: "Sep 16 – 30, 2026", "Sep 28 – Oct 3, 2026". */
+const NAMED = new RegExp(
+  `(?<![A-Za-z0-9])${MONTH}\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s*[-–—]\\s*(?:${MONTH}\\s+)?(\\d{1,2})(?:st|nd|rd|th)?)?,?\\s+((?:19|20)\\d{2})(?!\\d)`,
+  'gi'
+)
+
+/** The dates a month written in words gives, each with where it starts: one, or a range's two. */
+function namedDates(text: string): { at: number; date: string }[] {
+  const out: { at: number; date: string }[] = []
+  for (const m of text.matchAll(NAMED)) {
+    const year = +m[5]!
+    const first = MONTH_WORDS.indexOf(m[1]!.slice(0, 3).toLowerCase()) + 1
+    const a = iso(year, first, +m[2]!)
+    if (a) out.push({ at: m.index ?? 0, date: a })
+    if (m[4]) {
+      const second = m[3] ? MONTH_WORDS.indexOf(m[3].slice(0, 3).toLowerCase()) + 1 : first
+      // A range across the new year ("Dec 28 – Jan 10, 2027") starts in the year before.
+      if (a && second < first) out[out.length - 1]!.date = iso(year - 1, first, +m[2]!)!
+      const b = iso(year, second, +m[4])
+      if (b) out.push({ at: (m.index ?? 0) + 1, date: b })
+    }
   }
-  for (const m of text.matchAll(/(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)/g))
-    out.push(iso(+m[1]!, +m[2]!, +m[3]!) ?? '')
-  return out.filter(Boolean)
+  return out
+}
+
+/**
+ * Every date written in the text, as yyyy-mm-dd, in reading order: 09/07/2026, 9.7.26, 2026-09-07, 20260907, and a
+ * month in words ("Oct 6, 2026"; a range "Sep 16 – 30, 2026" gives both).
+ */
+export function datesOf(text: string): string[] {
+  return datesInOrder(text)
 }
 
 /** A bank line's dates: full dates, or a month and day alone (09/24) in the given year, as statements often print. */
@@ -178,7 +212,7 @@ export function payRunsOf(files: RunFile[]): PayRun[] {
         .filter((l): l is StatementLine => !!l)
         .map((line) => ({ fileId: f.id, line }))
     )
-  return files
+  const runs = files
     .filter((f) => f.kind === 'payroll-register')
     .map((f) => {
       const run = payRunOf(f)
@@ -210,6 +244,23 @@ export function payRunsOf(files: RunFile[]): PayRun[] {
         }
       return { ...run, debit }
     })
+  // Two files of one run (the same pay date and period: a payments report and its per-person register) share the one
+  // debit either found: a register whose total misreads, or that states none, is still that run's.
+  const sameRun = (a: PayRun, b: PayRun) =>
+    !!a.payDate &&
+    !!a.start &&
+    !!a.end &&
+    a.payDate === b.payDate &&
+    a.start === b.start &&
+    a.end === b.end
+  return runs.map((r) => {
+    if (r.debit) return r
+    const found = runs
+      .filter((o) => o.debit && sameRun(r, o))
+      .map((o) => o.debit!)
+      .filter((d, i, all) => all.findIndex((x) => x.line === d.line) === i)
+    return found.length === 1 ? { ...r, debit: found[0]! } : r
+  })
 }
 
 /**
@@ -235,11 +286,12 @@ export function debitOfStub(
 // ── Which month a pay is in ────────────────────────────────────────────────
 
 /**
- * The month a pay run is paid in, yyyy-mm (owner's decision, 2026-10-19): its pay date's, never its pay period's, so a
- * period that starts in August and is paid in September is September's. With no pay date printed, its period's end.
+ * The month a pay run counts in, yyyy-mm: the month the work was done, its pay period's end (owner's decision,
+ * 2026-11-01, replacing the pay date's month of 2026-10-19 until the accountant answers), so the second half of
+ * September, paid on October 6th, is September's, as the books accrue it. With no period printed, its pay date's.
  */
 export const payMonthOf = (run: { payDate: string | null; end: string | null }): string | null =>
-  (run.payDate ?? run.end)?.slice(0, 7) ?? null
+  (run.end ?? run.payDate)?.slice(0, 7) ?? null
 
 /** How many lines below a label its value may be printed (a label on its own line, the value under it). */
 const BELOW_LABEL = 3
@@ -273,6 +325,7 @@ function datesInOrder(text: string): string[] {
     add(m, iso(m[3]!.length === 2 ? 2000 + +m[3]! : +m[3]!, +m[1]!, +m[2]!))
   for (const m of text.matchAll(/(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)/g))
     add(m, iso(+m[1]!, +m[2]!, +m[3]!))
+  found.push(...namedDates(text))
   return found.sort((a, b) => a.at - b.at).map((x) => x.date)
 }
 
@@ -329,15 +382,23 @@ export function periodOn(file: {
   return { start, end }
 }
 
+/**
+ * One run of these, when they are one: the same pay date and period printed by two of its files (a payroll company's
+ * payments report and its register), the first of them; null when none, or when they are different runs.
+ */
+const oneRun = (rs: PayRun[]): PayRun | null => {
+  const distinct = new Set(rs.map((r) => `${r.payDate}|${r.start}|${r.end}`))
+  return rs.length && distinct.size === 1 ? rs[0]! : null
+}
+
 /** The run a file of that pay period belongs to (a timesheet, a pay stub), by its period; null when none or several. */
 export function runOfPeriod(runs: PayRun[], period: { start: string; end: string } | null) {
   if (!period) return null
-  const same = runs.filter((r) => r.start === period.start && r.end === period.end)
-  return same.length === 1 ? same[0]! : null
+  return oneRun(runs.filter((r) => r.start === period.start && r.end === period.end))
 }
 
 /**
- * The runs that paid a staff payroll line of a month (owner's decision, 2026-10-19): of the runs paid in that month,
+ * The runs that paid a staff payroll line of a month (owner's decision, 2026-10-19): of the runs of that month (`payMonthOf`),
  * the one whose pay date is the line's date (within the admin's days, `chargeDaysFromPayDate`); a line dated otherwise
  * (a month-end charge) is paid by every run of the month.
  */
@@ -372,8 +433,7 @@ export function runOfFile(
   const lines = Array.isArray(file.lines) ? file.lines : []
   const paid = new Set(lines.flatMap((l) => payDatesOn(runs, l.text)))
   if (file.ai?.payDate) for (const r of runs) if (r.payDate === file.ai.payDate) paid.add(r)
-  if (paid.size === 1) return [...paid][0]!
-  if (paid.size > 1) return null
+  if (paid.size >= 1) return oneRun([...paid])
   return runOfPeriod(runs, periodOn(file))
 }
 
@@ -384,7 +444,7 @@ export function runOfLine(
   line: StatementLine | null
 ): PayRun | null {
   const on = line ? payDatesOn(runs, line.text) : []
-  return on.length === 1 ? on[0]! : runOfFile(runs, file)
+  return oneRun(on) ?? runOfFile(runs, file)
 }
 
 /** The month's runs as the registers print them: each register's pay date and period, when it prints both. */

@@ -13,6 +13,7 @@ import {
   printedName,
   registerPerson,
   severalPeopleLines,
+  stubName,
   type MatchFile,
   type MatchMonth,
   type MatchWex,
@@ -600,5 +601,169 @@ describe('staff-match: the owner’s review (2026-10-18)', () => {
         takesOverTyped: false,
       })
     })
+  })
+})
+
+describe('staff-match: original files, as the payroll company exports them (owner, 2026-11-01)', () => {
+  const runReport = file('f-pay', 'payroll-register', [
+    'Pay period 09/16/2026 - 09/30/2026',
+    'Pay date 10/06/2026',
+    'Total direct deposits 5,000.00',
+  ])
+  const bankOct = file('f-bank', 'bank-statement', [
+    '10/05/2026 ACH DEBIT PAYPEOPLE PAYROLL 5,000.00',
+  ])
+  // A job report: a row per person and project, a person's total with no project.
+  const jobs = file('f-jobs', 'timesheet', [
+    'Pay date | 10/06/2026',
+    'Employee | Client Projects | Salary Amount',
+    'Morgan Lee |  | 3000.00',
+    'Morgan Lee | Board (In-School Youth 2026) | 1000.00',
+    'Morgan Lee | Adult IT Training | 2000.00',
+    'Priya Shah |  | 2000.00',
+    'Priya Shah | Adult IT Training | 2000.00',
+  ])
+  const priya: StaffRow = { id: 's-priya', name: 'Priya Shah', engagementIds: ['e-isy'] }
+  const stubOf = (name: string) =>
+    file(`f-stub-${name}`, 'paystub', [
+      `Employee: ${name}`,
+      'Pay period 09/16/2026 - 09/30/2026',
+      'Pay date 10/06/2026',
+      'Gross pay 3,000.00',
+      'Net pay 2,200.00',
+    ])
+  const isy = (items: MatchMonth['staffItems']): MatchMonth => ({
+    reportId: 'r-isy',
+    engagementId: 'e-isy',
+    engagementName: 'In-School Youth Coding Pathway',
+    names: ['Board (In-School Youth 2026)'],
+    status: 'draft',
+    staffItems: items,
+  })
+  const plan = (items: MatchMonth['staffItems'], files: MatchFile[]) =>
+    planMatch({
+      files,
+      period: '2026-09',
+      staff: [{ ...morgan, engagementIds: ['e-isy'] }, priya],
+      participants: [],
+      months: [isy(items)],
+      wex: [],
+      highlight: DEFAULT_HIGHLIGHTS,
+      // The workspace's list holds the engagement's own names too: still its rows, never a tie.
+      programs: ['Adult IT Training', 'Board (In-School Youth 2026)'],
+    })
+  const proofs = (p: ReturnType<typeof plan>, item: string) =>
+    p.links
+      .filter((l) => l.itemId === item)
+      .map((l) => `${l.slot}:${l.fileId}${l.slot === 'timesheet' ? `:${l.mark?.text}` : ''}`)
+      .sort()
+
+  it("links each person's line to their own proofs of its own run, and a job report's row of its program only", () => {
+    const p = plan(
+      [
+        { id: 'x-morgan', date: '2026-09-30', staffId: morgan.id, end: '2026-09-30' },
+        { id: 'x-priya', date: '2026-09-30', staffId: 's-priya', end: '2026-09-30' },
+      ],
+      [runReport, bankOct, jobs]
+    )
+    expect(proofs(p, 'x-morgan')).toEqual([
+      'bank:f-bank',
+      'register:f-pay',
+      'timesheet:f-jobs:Morgan Lee | Board (In-School Youth 2026) | 1000.00',
+    ])
+    // Priya has no row of the program: her total and another program's row prove nothing here.
+    expect(proofs(p, 'x-priya')).toEqual(['bank:f-bank', 'register:f-pay'])
+  })
+
+  it("takes a staff member's pay stub as proof on their own line of its run, never as a participant's payment", () => {
+    const p = plan(
+      [
+        { id: 'x-morgan', date: '2026-09-30', staffId: morgan.id, end: '2026-09-30' },
+        { id: 'x-priya', date: '2026-09-30', staffId: 's-priya', end: '2026-09-30' },
+      ],
+      [runReport, stubOf('Morgan Lee')]
+    )
+    const s = p.stubs[0]!
+    expect([s.staff?.id, s.flags, s.action, s.named]).toEqual([morgan.id, [], 'none', 'Morgan Lee'])
+    expect(proofs(p, 'x-morgan')).toContain('stub:f-stub-Morgan Lee')
+    expect(proofs(p, 'x-priya')).not.toContain('stub:f-stub-Morgan Lee')
+  })
+})
+
+describe('staff-match, reviewed (2026-11-01)', () => {
+  const isy: MatchMonth = {
+    reportId: 'r-isy',
+    engagementId: 'e-isy',
+    engagementName: 'In-School Youth Coding Pathway',
+    status: 'draft',
+    staffItems: [{ id: 'x-morgan', date: '2026-09-30', staffId: morgan.id, end: '2026-09-30' }],
+  }
+  const ait: MatchMonth = {
+    reportId: 'r-ait',
+    engagementId: 'e-ait',
+    engagementName: 'Adult IT Training',
+    status: 'draft',
+    staffItems: [{ id: 'x-morgan-ait', date: '2026-09-30', staffId: morgan.id, end: '2026-09-30' }],
+  }
+  const both: StaffRow = { ...morgan, engagementIds: ['e-isy', 'e-ait'] }
+  const plan = (files: MatchFile[], staff = [both]) =>
+    planMatch({
+      files,
+      period: '2026-09',
+      staff,
+      participants: [],
+      months: [isy, ait],
+      wex: [],
+      highlight: DEFAULT_HIGHLIGHTS,
+    })
+
+  it("proves each engagement's line with its own program's pay from payroll details, never the person's total", () => {
+    const details = file('f-det', 'payroll-details', [
+      '2026-09-30 | [PayPeople] Salary for In-School Youth Coding Pathway jobs for Morgan Lee. Payroll run: Sep 16 - Sep 30: Riverbend | 63102 Payroll Expenses:Salaries | 612.50',
+      '2026-09-30 | [PayPeople] Salary for Adult IT Training jobs for Morgan Lee. Payroll run: Sep 16 - Sep 30: Riverbend | 63102 Payroll Expenses:Salaries | 300.00',
+      '2026-08-31 | [PayPeople] Salary for In-School Youth Coding Pathway jobs for Morgan Lee. Payroll run: Aug 16 - Aug 31: Riverbend | 63102 Payroll Expenses:Salaries | 400.00',
+    ])
+    details.lines = details.lines.map((l) => ({ ...l, x: 0 }))
+    const p = plan([details])
+    const register = (item: string) =>
+      p.links.filter((l) => l.itemId === item && l.slot === 'register').map((l) => l.mark?.text)
+    expect(register('x-morgan')).toEqual([details.lines[0]!.text])
+    expect(register('x-morgan-ait')).toEqual([details.lines[1]!.text])
+    expect(p.staff[0]!.charged).toEqual([
+      { start: '2026-09-16', end: '2026-09-30', amount: 612.5 },
+      { start: '2026-09-16', end: '2026-09-30', amount: 300 },
+    ])
+  })
+
+  it('links a PDF time report of the line’s period with no register to the line of that run', () => {
+    const report = file('f-tr', 'timesheet', [
+      'Time report',
+      'Pay period 09/16/2026 - 09/30/2026',
+      'Morgan Lee 80.0 In-School Youth',
+    ])
+    const p = plan([report], [{ ...morgan, engagementIds: ['e-isy'] }])
+    expect(p.links.some((l) => l.itemId === 'x-morgan' && l.slot === 'timesheet')).toBe(true)
+  })
+
+  it("takes a stub as a staff member's own only when it is paid to them, and reads a name beside a second column's label", () => {
+    const approved = file('f-st1', 'paystub', [
+      'Employee: Casey Unlisted',
+      'Pay period 09/16/2026 - 09/30/2026',
+      'Gross pay 300.00',
+      'Approved by: Morgan Lee',
+    ])
+    const twoColumns = file('f-st2', 'paystub', [
+      'PAY PERIOD:',
+      '9/16/2026 - 9/30/2026',
+      'PAID TO: T NET PAY:',
+      'Morgan Lee $1,452.10',
+      'Gross Pay $2,050.00',
+    ])
+    expect(stubName(twoColumns.lines)).toBe('Morgan Lee')
+    const p = plan([approved, twoColumns], [{ ...morgan, engagementIds: ['e-isy'] }])
+    expect(p.stubs.map((x) => [x.fileId, x.staff?.id ?? null, x.flags])).toEqual([
+      ['f-st1', null, ['no-participant']],
+      ['f-st2', morgan.id, []],
+    ])
   })
 })

@@ -28,7 +28,8 @@ import { autoPick, keyOf, lacksLine, slotKey, slotsOf, type Picks } from '@/page
  * each item gets, and what Save will do, worked out from the run's plan and the owner's own choices on the table.
  */
 
-type Run = Pick<WorkspacePayrollRunDto, 'items' | 'files' | 'plan' | 'pays' | 'slots'>
+type Run = Pick<WorkspacePayrollRunDto, 'items' | 'files' | 'plan' | 'pays' | 'slots'> &
+  Partial<Pick<WorkspacePayrollRunDto, 'totalsOnly'>>
 type Links = PayrollMatchSaveInput['links']
 
 const count = (n: number, one: string, more = `${one}s`) =>
@@ -280,7 +281,8 @@ export interface ParticipantRow {
 /** The pay stubs by person, as the staff are: one row each, the stubs of every payroll run that paid them. */
 export function participantRows(run: Run): ParticipantRow[] {
   const rows = new Map<string, StubPayDto[]>()
-  for (const x of run.plan.stubs) {
+  // A staff member's own pay stub is proof on their payroll lines, not a participant's payment.
+  for (const x of run.plan.stubs.filter((y) => !y.staff)) {
     const key = x.participant
       ? `p-${x.participant.id}`
       : x.named
@@ -574,31 +576,26 @@ export function itemBlocks(
 
 /** The last block: lines naming nobody (the payroll tax debit), pay stubs naming nobody, files matched to nothing. */
 export function nobodyBlock(run: Run, chosen: Links): WhyBlock | null {
-  // A register's summary lines (taxes, deductions, totals) name no one: the register shows once (owner's decision,
-  // 2026-10-19).
+  // A register naming nobody on the lists is the run's company totals: it shows once (owner's decisions, 2026-10-19
+  // and 2026-10-20). A register that names people shows each row on no list as it is.
   const nowhere = paysNowhere(run)
-  const registers = [
-    ...new Set(nowhere.filter((p) => p.kind === 'payroll-register').map((p) => p.fileId)),
-  ]
   const rows: WhyRow[] = [
-    ...registers.map((id): WhyRow => ({
+    ...(run.totalsOnly ?? []).map((id): WhyRow => ({
       label: kindWord('payroll-register'),
       tone: 'missing',
       file: run.files.find((f) => f.id === id)?.fileName,
-      text: 'Company totals only: the register names no one.',
+      text: 'Company totals only: the register names no one on your lists. It still proves its run.',
     })),
-    ...nowhere
-      .filter((p) => p.kind !== 'payroll-register')
-      .map((p): WhyRow => ({
-        label: kindWord(p.kind),
-        tone: 'missing',
-        file: p.fileName,
-        text: `${p.mark ? `“${p.mark.text}” on page ${p.mark.page}` : 'The whole file (scanned)'}: ${
-          p.flags.length ? flagWords(p.flags) : 'On no engagement'
-        }.`,
-      })),
+    ...nowhere.map((p): WhyRow => ({
+      label: kindWord(p.kind),
+      tone: 'missing',
+      file: p.fileName,
+      text: `${p.mark ? `“${p.mark.text}” on page ${p.mark.page}` : 'The whole file (scanned)'}: ${
+        p.flags.length ? flagWords(p.flags) : 'On no engagement'
+      }.`,
+    })),
     ...run.plan.stubs
-      .filter((x) => !x.participant)
+      .filter((x) => !x.participant && !x.staff)
       .map((x): WhyRow => ({
         label: SLOT_LABEL.stub,
         tone: 'missing',

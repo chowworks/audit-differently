@@ -37,8 +37,8 @@ export interface ProofItem {
   start: string
   end: string
   /**
-   * The month it is on, yyyy-mm: a register or pay stub paid in another month (by its pay date, else its period's end)
-   * is not its proof (owner's decision, 2026-10-19). Unknown: not checked.
+   * The month it is on, yyyy-mm: a register or pay stub of another month's work (by its period's end, else its pay
+   * date, `payMonthOf`; owner's decision, 2026-11-01) is not its proof. Unknown: not checked.
    */
   month?: string
 }
@@ -265,8 +265,8 @@ export function candidateFor(
             p.gross !== null &&
             cents(p.gross) === cents(item.amount) &&
             (!item.name || nameIn(p.name, item.name)) &&
-            // A pay belongs to the month it was paid in.
-            !(item.month && p.payDate && p.payDate.slice(0, 7) !== item.month)
+            // A pay belongs to the month its work was done (`payMonthOf`).
+            !(item.month && (p.end || p.payDate) && payMonthOf(p) !== item.month)
         )
   if (fact)
     return {
@@ -278,12 +278,21 @@ export function candidateFor(
       ),
       ai: true,
     }
-  // A pay belongs to the month it was paid in: a register or pay stub paid in another month is not this month's.
+  // A pay belongs to the month its work was done (`payMonthOf`: its pay period, else its pay date): a register or pay
+  // stub of another month's work is not this month's.
   if (item.month && (slot === 'register' || slot === 'stub')) {
     const run = slot === 'register' ? payRunOf(file) : null
-    const paid = run ? (run.payDate ?? run.end) : (payDateOn(lines) ?? periodOn(file)?.end ?? null)
-    if (paid && paid.slice(0, 7) !== item.month)
-      return out(null, 1, false, `Paid on ${us(paid)}: another month's pay.`)
+    const paid = run ?? { payDate: payDateOn(lines), end: periodOn(file)?.end ?? null }
+    const month = payMonthOf(paid)
+    if (month && month !== item.month)
+      return out(
+        null,
+        1,
+        false,
+        paid.end
+          ? `For work through ${us(paid.end)}: another month's pay.`
+          : `Paid on ${us(paid.payDate!)}: another month's pay.`
+      )
   }
   const amount = money(item.amount)
 

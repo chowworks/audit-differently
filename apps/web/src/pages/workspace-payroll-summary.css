@@ -23,13 +23,6 @@
   color: var(--danger);
   font-weight: 700;
 }
-.wps-dot {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  margin-right: 8px;
-}
 /* The month's payroll files table (WorkspacePayrollFiles.tsx, WorkspacePayrollReview.tsx). */
 .wpc-remove {
   color: var(--danger);
@@ -43,10 +36,135 @@
   opacity: 0.5;
   cursor: default;
 }
+/* A file's view and download, beside its date. */
+.wpc-open {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+.wpc-open:hover {
+  text-decoration: underline;
+}
 /* The month's payroll files: a long set scrolls inside its card. */
 .wpc-files {
-  max-height: 360px;
+  max-height: 480px;
   overflow-y: auto;
+}
+/* As the zip lays them out: a folder per kind, its files under it on a guide line. */
+.wpc-tree,
+.wpc-leaves {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wpc-tree {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 4px;
+}
+.wpc-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px 2px 4px;
+  border-radius: 6px;
+}
+.wpc-folder-row:hover {
+  background: color-mix(in srgb, var(--line) 35%, transparent);
+}
+.wpc-folder-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-weight: 700;
+  font-size: 14px;
+  text-align: left;
+}
+.wpc-folder-name:disabled {
+  cursor: default;
+  color: inherit;
+}
+.wpc-caret {
+  width: 12px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+/* A folder tab drawn in CSS: no icon font. */
+.wpc-folder-icon {
+  position: relative;
+  width: 16px;
+  height: 12px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent, #2f855a) 70%, transparent);
+  flex: none;
+}
+.wpc-folder-icon::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 0;
+  width: 7px;
+  height: 4px;
+  border-radius: 2px 2px 0 0;
+  background: inherit;
+}
+.wpc-count {
+  font-weight: 400;
+  font-size: 12px;
+  opacity: 0.65;
+}
+.wpc-add {
+  color: var(--accent, #2f855a);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.wpc-add:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.wpc-leaves {
+  margin: 0 0 6px 13px;
+  border-left: 1px solid var(--line);
+}
+.wpc-leaf {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 8px 5px 22px;
+  font-size: 14px;
+  border-radius: 6px;
+}
+.wpc-leaf::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 14px;
+  border-top: 1px solid var(--line);
+}
+.wpc-leaf:hover {
+  background: color-mix(in srgb, var(--line) 35%, transparent);
+}
+.wpc-leaf-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wpc-leaf-date {
+  font-size: 12px;
+  opacity: 0.65;
+  white-space: nowrap;
+}
+@media (max-width: 560px) {
+  .wpc-leaf-date {
+    display: none;
+  }
 }
 .wpd-actions {
   list-style: none;
@@ -274,4 +392,17 @@
 
 .ad-tile.wpd-tile-grey {
   border-top-color: #9aa5b1;
+}
+/* A card whose month started after the last match: its payroll is not on it until the files are matched again. */
+.wpd-unmatched {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--warn);
+  background: var(--warn-tint);
 }

@@ -37,9 +37,13 @@ import type { PageItem } from './statement-lines'
 import { COPIED_TYPES, itemCopy } from './mark-pdf'
 import { overPayLineCap } from './pay-lines'
 import { workspaceItems } from './workspace-items'
+import { isCardStatement } from './card-statement'
 import { countsOnBudget, holdsPayroll, payrollCovers } from '../reports/report-lines'
 
-/** A file of the run as the matcher reads it: its lines and its text runs. */
+/**
+ * A file of the run as the matcher reads it: its lines and its text runs. A card's statement in the bank statements
+ * folder is read as a card's (owner's decision, 2026-11-09): never a bank line of anyone's pay.
+ */
 export const proofFile = (f: {
   id: string
   kind: string
@@ -49,7 +53,9 @@ export const proofFile = (f: {
   ai?: AiFileFacts | null
 }): ProofFile => ({
   id: f.id,
-  kind: f.kind as PayrollDocumentKind,
+  kind: (f.kind === 'bank-statement' && isCardStatement(f.lines)
+    ? 'card-statement'
+    : f.kind) as PayrollDocumentKind,
   fileName: f.fileName,
   lines: f.lines as StatementLine[],
   items: f.items as PageItem[],
@@ -689,7 +695,7 @@ export class PayrollMatchService {
         where: { monthlyReportId: reportId },
         include: { participant: true },
       }),
-      // The month: a pay belongs to the month it was paid in (owner's decision, 2026-10-19).
+      // The month: a pay belongs to the month its work was done (`payMonthOf`, owner's decision, 2026-11-01).
       this.prisma.monthlyReport.findFirst({
         where: { id: reportId },
         select: { period: true, engagementId: true },
@@ -709,7 +715,8 @@ export class PayrollMatchService {
     ).get(reportId)
     return [
       ...expenses
-        .filter((e) => PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine))
+        // A line from the books' expenses is a bill on whatever line it is: never a payroll item.
+        .filter((e) => PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine) && !e.booksKey)
         .filter((e) => !e.payrollKind || countsOnBudget(e, cover))
         .map((e) => ({
           target: 'expense' as const,

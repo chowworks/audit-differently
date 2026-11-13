@@ -1,6 +1,10 @@
-import type { PayrollBudgetKind } from '@ad/types'
+import type { PayrollBudgetKind, PayrollSplitDto } from '@ad/types'
 import { personIn } from './match-proof'
-import type { PayrollCharge } from './payroll-details'
+import { payMonthOf } from './pay-runs'
+import { engagementOfCharge, type PayrollCharge } from './payroll-details'
+import { splitOf, type ProgramHours } from './payroll-split'
+
+export { engagementOfCharge }
 import { printedName, type ParticipantRow, type StaffRow } from './staff-match'
 
 /**
@@ -16,6 +20,11 @@ export interface LineMonth {
   reportId: string
   engagementId: string
   engagementName: string
+  /**
+   * Every name the engagement goes by in payroll and accounting files: its own, and the program names (the workspace's
+   * list, `programNamesOf`) of its program. Its name alone when left out.
+   */
+  names?: string[]
   /** Its budget lines: the payroll each holds. */
   lines: { id: string; payroll: string[] }[]
   /** The pay dates (yyyy-mm-dd) of the staff payroll lines already on the month that the match did not write. */
@@ -39,40 +48,26 @@ export interface PayrollLineWrite {
   /** As the line's description says it: the person's name, or "Participants". */
   who: string
   account: string
+  /** A staff line's run split by program, when the person's pay is charged to several; else null. */
+  split?: PayrollSplitDto | null
 }
 
 /** Why a charge reached no line, said once per person and run on the plan. */
 export interface PayrollLineSkip {
   who: string
   end: string
-  why: 'no-engagement' | 'no-month' | 'no-line' | 'entered'
+  why: 'no-engagement' | 'other-program' | 'other-month' | 'no-month' | 'no-line' | 'entered'
+}
+
+/** Payroll an engagement's month is charged that no budget line takes: none is ticked for its kind. Never saved. */
+export interface PayrollLineUnbudgeted {
+  reportId: string
+  engagementId: string
+  kind: PayrollBudgetKind
+  amount: number
 }
 
 const cents = (n: number) => Math.round(n * 100) / 100
-const plain = (s: string) =>
-  s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-
-/**
- * The engagement a charge is for: the person's own when they are on one; on several, the one the charge's job names
- * ("Salary for Demo Workforce Board (In-School Youth Coding Pathway) jobs for …"); null when it names none of theirs.
- */
-export function engagementOfCharge(
-  job: string | null,
-  ids: string[],
-  names: Map<string, string>
-): string | null {
-  if (ids.length === 1) return ids[0]!
-  const j = plain(job ?? '')
-  if (!j) return null
-  const hits = ids.filter((id) => {
-    const n = plain(names.get(id) ?? '')
-    return !!n && j.includes(n)
-  })
-  return hits.length === 1 ? hits[0]! : null
-}
 
 /** The line ticked for a kind on an engagement's month; null when no line holds it. */
 const lineFor = (m: LineMonth, kind: PayrollBudgetKind) =>
@@ -83,15 +78,48 @@ export function payrollLinesOf(input: {
   staff: StaffRow[]
   participants: ParticipantRow[]
   months: LineMonth[]
-}): { writes: PayrollLineWrite[]; skipped: PayrollLineSkip[] } {
-  const names = new Map(input.months.map((m) => [m.engagementId, m.engagementName]))
+  /** The month matched, yyyy-mm: a charge of a run of another month (`payMonthOf`) is that month's, never this one's. */
+  period?: string
+  /** Hours by person and program from the time reports (`hoursOf`): each program's hours on a line's split. */
+  hours?: ProgramHours[]
+  /** The workspace's programs by every name each goes by, for a line's split. */
+  programs?: string[][]
+}): {
+  writes: PayrollLineWrite[]
+  skipped: PayrollLineSkip[]
+  unbudgeted: PayrollLineUnbudgeted[]
+} {
+  const names = new Map(
+    input.months.map((m) => [m.engagementId, [m.engagementName, ...(m.names ?? [])]])
+  )
   const monthOf = new Map(input.months.map((m) => [m.engagementId, m]))
   const writes = new Map<string, PayrollLineWrite>()
   const skipped: PayrollLineSkip[] = []
+  const unbudgeted = new Map<string, PayrollLineUnbudgeted>()
+  const noLine = (m: LineMonth, kind: PayrollBudgetKind, amount: number) => {
+    const key = `${m.reportId}|${kind}`
+    const had = unbudgeted.get(key)
+    if (had) had.amount = cents(had.amount + amount)
+    else
+      unbudgeted.set(key, {
+        reportId: m.reportId,
+        engagementId: m.engagementId,
+        kind,
+        amount: cents(amount),
+      })
+  }
   const skip = (s: PayrollLineSkip) => {
     if (!skipped.some((x) => x.who === s.who && x.end === s.end && x.why === s.why)) skipped.push(s)
   }
-  const add = (w: Omit<PayrollLineWrite, 'amount'>, amount: number) => {
+  // The charges each line is made of, for its split.
+  const madeOf = new Map<string, Set<PayrollCharge>>()
+  const printedOf = new Map<string, string>()
+  const add = (w: Omit<PayrollLineWrite, 'amount'>, amount: number, c?: PayrollCharge) => {
+    if (c)
+      madeOf.set(
+        `${w.reportId}|${w.key}`,
+        (madeOf.get(`${w.reportId}|${w.key}`) ?? new Set()).add(c)
+      )
     const had = writes.get(`${w.reportId}|${w.key}`)
     if (had) had.amount = cents(had.amount + amount)
     else writes.set(`${w.reportId}|${w.key}`, { ...w, amount: cents(amount) })
@@ -100,12 +128,18 @@ export function payrollLinesOf(input: {
   for (const c of input.charges) {
     if (!c.end || !c.amount) continue
     const date = c.date ?? c.end
+    const otherMonth =
+      !!input.period && payMonthOf({ payDate: c.date, end: c.end }) !== input.period
     if (!c.wex) {
       const person = input.staff.find((s) => personIn(c.name, printedName(s.name)))
       if (!person) continue
-      const id = engagementOfCharge(c.job, person.engagementIds, names)
+      const { id, why } = engagementOfCharge(c, person.engagementIds, names)
       if (!id) {
-        skip({ who: person.name, end: c.end, why: 'no-engagement' })
+        skip({ who: person.name, end: c.end, why: why ?? 'no-engagement' })
+        continue
+      }
+      if (otherMonth) {
+        skip({ who: person.name, end: c.end, why: 'other-month' })
         continue
       }
       const m = monthOf.get(id)
@@ -122,6 +156,7 @@ export function payrollLinesOf(input: {
       const budgetLineId = lineFor(m, kind)
       if (!budgetLineId) {
         skip({ who: person.name, end: c.end, why: 'no-line' })
+        noLine(m, kind, c.amount)
         continue
       }
       add(
@@ -138,8 +173,10 @@ export function payrollLinesOf(input: {
           who: person.name,
           account: c.account,
         },
-        c.amount
+        c.amount,
+        c
       )
+      printedOf.set(person.id, printedName(person.name))
       continue
     }
     // A participant's pay counts from their payment; their employer taxes, the run's together, are a line.
@@ -147,9 +184,13 @@ export function payrollLinesOf(input: {
     // A name on several engagements goes by the charge's job, as a staff member's does; never the first row found.
     const rows = input.participants.filter((x) => personIn(c.name, printedName(x.displayName)))
     if (!rows.length) continue
-    const id = engagementOfCharge(c.job, [...new Set(rows.map((x) => x.engagementId))], names)
+    const { id, why } = engagementOfCharge(c, [...new Set(rows.map((x) => x.engagementId))], names)
     if (!id) {
-      skip({ who: rows[0]!.displayName, end: c.end, why: 'no-engagement' })
+      skip({ who: rows[0]!.displayName, end: c.end, why: why ?? 'no-engagement' })
+      continue
+    }
+    if (otherMonth) {
+      skip({ who: 'Participants', end: c.end, why: 'other-month' })
       continue
     }
     const m = monthOf.get(id)
@@ -157,6 +198,7 @@ export function payrollLinesOf(input: {
     const budgetLineId = lineFor(m, 'participant-taxes')
     if (!budgetLineId) {
       skip({ who: 'Participants', end: c.end, why: 'no-line' })
+      noLine(m, 'participant-taxes', c.amount)
       continue
     }
     add(
@@ -176,16 +218,36 @@ export function payrollLinesOf(input: {
       c.amount
     )
   }
+  for (const [k, w] of writes) {
+    if (!w.staffId) continue
+    w.split = splitOf({
+      who: w.who,
+      printed: printedOf.get(w.staffId) ?? w.who,
+      end: w.end,
+      start: w.start,
+      pay: w.kind === 'staff-pay',
+      charges: input.charges,
+      mine: madeOf.get(k) ?? new Set(),
+      hours: input.hours ?? [],
+      programs: input.programs ?? [],
+    })
+  }
   return {
-    writes: [...writes.values()].sort(
-      (a, b) => a.reportId.localeCompare(b.reportId) || a.key.localeCompare(b.key)
-    ),
+    // A run booked and reversed in the same file (an accrual and its reversal) nets to nothing: no line of $0.00.
+    writes: [...writes.values()]
+      .filter((w) => w.amount !== 0)
+      .sort((a, b) => a.reportId.localeCompare(b.reportId) || a.key.localeCompare(b.key)),
     skipped,
+    // A run booked and reversed nets to nothing: nothing is missing for it.
+    unbudgeted: [...unbudgeted.values()].filter((u) => u.amount !== 0),
   }
 }
 
-/** The line's item number, short and unique on its engagement: PR-<pay date>-<whose>, with T for taxes. */
+/**
+ * The line's item number, short and unique on its engagement: PR-<run end>-<whose>, with T for taxes. By the run's
+ * end, the line's key, never its date: one journal entry may book two runs on one day.
+ */
 export function payrollItemNumber(w: PayrollLineWrite): string {
   const whose = w.staffId ? w.staffId.replace(/-/g, '').slice(0, 6).toUpperCase() : 'PART'
-  return `PR-${w.date.replace(/-/g, '')}-${whose}${w.kind.endsWith('taxes') ? '-T' : ''}`
+  return `PR-${w.end.replace(/-/g, '')}-${whose}${w.kind.endsWith('taxes') ? '-T' : ''}`
 }

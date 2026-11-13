@@ -156,12 +156,15 @@ export function MoneyInput({
 }
 
 export function Card({
+  id,
   eyebrow,
   title,
   aside,
   children,
   className = '',
 }: {
+  /** An anchor a link can open the page at (`#id`). */
+  id?: string
   /** A small line over the title, e.g. "Don't miss a date". */
   eyebrow?: string
   title?: React.ReactNode
@@ -170,7 +173,7 @@ export function Card({
   className?: string
 }) {
   return (
-    <section className={`ad-card ${className}`}>
+    <section id={id} className={`ad-card ${className}`}>
       {(title || aside) && (
         <header className="ad-card-head">
           <div>
@@ -346,11 +349,20 @@ export function Empty({ children }: { children: React.ReactNode }) {
 
 /**
  * A flow's steps, as the month page's stepper: each done step green with its number and a ✓ before its name, the
- * current one outlined in navy, the rest grey. The last step counts as done once reached.
+ * current one outlined in navy, the rest grey. The last step counts as done once reached, unless it is work still to do
+ * (`lastDone` false: the workspace payroll's Expenses step).
  */
-export function Stepper<S extends string>({ steps, current }: { steps: readonly S[]; current: S }) {
+export function Stepper<S extends string>({
+  steps,
+  current,
+  lastDone = true,
+}: {
+  steps: readonly S[]
+  current: S
+  lastDone?: boolean
+}) {
   const at = steps.indexOf(current)
-  const last = at === steps.length - 1
+  const last = lastDone && at === steps.length - 1
   return (
     <ol className="ad-stepper" aria-label="Steps">
       {steps.map((s, i) => {

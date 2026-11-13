@@ -47,23 +47,36 @@ export function recheckNotice(saved: Pick<BudgetChange, 'backToDraft'>): string 
 export function BudgetLineModal({
   engagement: c,
   line,
+  preset,
   onClose,
   onSaved,
 }: {
   engagement: EngagementDetail
   /** The line to change; none to add one. */
   line?: Line
+  /** Opened for payroll no line takes (the payroll page): its report line and the payroll ticked to start with. */
+  preset?: { reportLine: ReportLine; payroll: PayrollBudgetKind[] }
   onClose: () => void
   /** Gets the engagement as saved, so the page shows it without fetching it again. */
   onSaved: (saved: BudgetChange) => void
 }) {
   const api = useApi()
-  const [reportLine, setReportLine] = useState<ReportLine | ''>(line?.reportLine ?? '')
-  const [name, setName] = useState(line?.name ?? '')
+  const [reportLine, setReportLine] = useState<ReportLine | ''>(
+    line?.reportLine ?? preset?.reportLine ?? ''
+  )
+  const [name, setName] = useState(
+    line?.name ?? (preset ? REPORT_LINE_LABELS[preset.reportLine] : '')
+  )
   const [amount, setAmount] = useState<number | null>(line ? line.amount : null)
   const [narrative, setNarrative] = useState(line?.narrative ?? '')
   // A new line left as it is takes its report line's payroll by default (the server's); ticked, it is sent.
-  const [payroll, setPayroll] = useState<PayrollBudgetKind[] | null>(line ? line.payroll : null)
+  const [payroll, setPayroll] = useState<PayrollBudgetKind[] | null>(
+    preset
+      ? [...new Set([...(line?.payroll ?? []), ...preset.payroll])]
+      : line
+        ? line.payroll
+        : null
+  )
   /** The other line holding each kind now: ticking it here moves it. */
   const heldBy = (k: PayrollBudgetKind) =>
     c.budgetLines.find((b) => b.id !== line?.id && b.payroll.includes(k))

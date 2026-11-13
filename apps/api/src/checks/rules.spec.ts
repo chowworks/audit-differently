@@ -1,4 +1,4 @@
-import { dueDate, runRules, type RuleExpense, type RuleMonth } from './rules'
+import { booksBillsOf, dueDate, runRules, type RuleExpense, type RuleMonth } from './rules'
 
 const expense = (overrides: Partial<RuleExpense> = {}): RuleExpense => ({
   id: 'e1',
@@ -38,6 +38,101 @@ describe('runRules', () => {
       'missing-invoice',
       'missing-proof-of-payment',
     ])
+  })
+
+  it("names a books line's bills that have no receipt, without blocking the line (owner's decision, 2026-11-12)", () => {
+    const bills = booksBillsOf([
+      {
+        transactionId: 'T1',
+        date: '2026-07-02',
+        vendor: 'PayPeople',
+        amount: 200,
+        documentId: 'd1',
+        dropped: false,
+      },
+      {
+        transactionId: 'T2',
+        date: '2026-07-09',
+        vendor: 'PayPeople',
+        amount: 46.81,
+        documentId: null,
+        dropped: false,
+      },
+      {
+        transactionId: 'T3',
+        date: '2026-07-16',
+        vendor: 'PayPeople',
+        amount: 10,
+        documentId: null,
+        dropped: true,
+      },
+    ])
+    expect(bills).toEqual({
+      bills: 2,
+      billsWithoutReceipt: [{ transactionId: 'T2', vendor: 'PayPeople', amount: 46.81 }],
+      // Saved before payments were kept: none said missing.
+      billsWithoutPayment: [],
+    })
+    const found = runRules(month({ expenses: [expense({ fromBooks: true, ...bills })] }))
+    expect(found.map((f) => [f.code, f.severity])).toEqual([['bills-without-receipt', 'attention']])
+    expect(found[0]!.message).toBe(
+      "T-1 (Vendor A, $100.00): 1 of 2 bills have a receipt. No receipt for T2 (PayPeople, $46.81): find it, or drop the bill on the month's expenses."
+    )
+    // With no receipt at all, the line wants its invoice as any line does.
+    expect(
+      codes(month({ expenses: [expense({ fromBooks: true, ...bills, documents: ['payment'] })] }))
+    ).toEqual(['missing-invoice'])
+    // A line saved before bills were kept reads as it did.
+    expect(booksBillsOf(null)).toEqual({})
+  })
+
+  it("holds a books line whose bills have no payment found, naming them (owner's decision, 2026-11-12)", () => {
+    const paid = { documentId: 'bank', page: 1, text: '07/02 ACH PAYPEOPLE 100.00' }
+    const bills = booksBillsOf([
+      {
+        transactionId: 'T1',
+        date: '2026-07-02',
+        vendor: 'PayPeople',
+        amount: 100,
+        documentId: 'r1',
+        payment: paid,
+        dropped: false,
+      },
+      {
+        transactionId: 'T2',
+        date: '2026-07-09',
+        vendor: 'PayPeople',
+        amount: 46.81,
+        documentId: 'r2',
+        payment: null,
+        dropped: false,
+      },
+      {
+        transactionId: 'T3',
+        date: '2026-07-16',
+        vendor: 'PayPeople',
+        amount: 10,
+        documentId: null,
+        payment: null,
+        dropped: true,
+      },
+    ])
+    expect(bills.billsWithoutPayment).toEqual([
+      { transactionId: 'T2', vendor: 'PayPeople', amount: 46.81 },
+    ])
+    const found = runRules(
+      month({
+        expenses: [expense({ fromBooks: true, ...bills, documents: ['invoice', 'payment'] })],
+      })
+    )
+    expect(found.map((f) => [f.code, f.severity])).toEqual([['bills-without-payment', 'blocker']])
+    expect(found[0]!.message).toBe(
+      "T-1 (Vendor A, $100.00): 1 of 2 bills have a payment found. No payment for T2 (PayPeople, $46.81): find its statement line, or drop the bill on the month's expenses."
+    )
+    // With no payment at all, the line wants its proof of payment as any line does.
+    expect(
+      codes(month({ expenses: [expense({ fromBooks: true, ...bills, documents: ['invoice'] })] }))
+    ).toEqual(['missing-proof-of-payment'])
   })
 
   it('wants a timesheet and a register on payroll lines, not an invoice', () => {
@@ -257,6 +352,35 @@ describe('runRules', () => {
     // The same larger amount, not matched as the run's debit, is no proof of this line's.
     expect(found({ words: ['09/24', '$6,339.17'] })).toContain('proof-mismatch')
     expect(found({ words: ['09/24', '$2,100.00'] })).not.toContain('proof-mismatch')
+  })
+
+  it("does not look for a match line's share on the pay stub, which shows the person's whole pay", () => {
+    const found = (shareOfRun: boolean) =>
+      codes(
+        month({
+          expenses: [
+            expense({
+              reportLine: 'staff-salaries',
+              totalCost: 193.5,
+              allocatedAmount: 193.5,
+              documents: ['timesheet', 'register', 'payment'],
+              fromPayroll: true,
+              shareOfRun,
+              proofs: [
+                {
+                  purpose: 'payment',
+                  kind: 'paystub',
+                  words: ['Gross Pay $1,250.00 Net Pay $980.12'],
+                },
+              ],
+            }),
+          ],
+          highlights: { paystub: ['amount'] },
+        })
+      )
+    expect(found(true)).not.toContain('proof-mismatch')
+    // A line entered by hand with the stub attached: its amount is the pay, so the stub must show it.
+    expect(found(false)).toContain('proof-mismatch')
   })
 
   it('computes the due date and notes a late submission', () => {

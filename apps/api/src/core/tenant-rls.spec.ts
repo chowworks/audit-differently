@@ -3710,6 +3710,217 @@ suite('tenant isolation', () => {
       })
     })
   })
+
+  describe("the books' expenses (migration 20261109000100)", () => {
+    const mapping = (id: string, ws: string, by: string, engagement = 'NULL') =>
+      `INSERT INTO "AccountMapping" ("id","workspaceId","engagementId","fileName","sha256","read","changedById")
+       VALUES ('${id}','${ws}',${engagement},'m.xlsx','${'e'.repeat(64)}','{"accounts":{}}','${by}')`
+
+    it('lets an owner alone keep an account mapping, which owners and auditors read', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(mapping('AM-0', 'W1', 'owner-W1', `'E-W1'`))).rows).toBe(1)
+        expect((await attempt(mapping('AM-x', 'W1', 'aud-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(mapping('AM-w', 'W2', 'owner-W1'))).error).toMatch(
+          /row-level security/
+        )
+      })
+      // Kept by the database owner, so each role below finds it there.
+      await db.query(mapping('AM-1', 'W1', 'owner-W1', `'E-W1'`))
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(mapping('AM-b', 'W1', 'book-W1'))).error).toMatch(
+          /row-level security/
+        )
+        expect(await ids('AccountMapping')).toEqual([])
+      })
+      await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+        expect(await ids('AccountMapping')).toEqual(['AM-1'])
+        expect((await attempt(`DELETE FROM "AccountMapping"`)).rows).toBe(0)
+      })
+      await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+        expect(await ids('AccountMapping')).toEqual([])
+      })
+      await db.query(`DELETE FROM "AccountMapping"`)
+    })
+
+    it('keeps a line from the books apart from payroll lines', async () => {
+      await expect(
+        db.query(`UPDATE "Expense" SET "booksKey" = 'k', "payrollKey" = 'p' WHERE "id" = 'X-W1'`)
+      ).rejects.toThrow(/Expense_booksKey_check/)
+    })
+  })
+
+  describe("the books' bills (migration 20261112000100)", () => {
+    const bill = (id: string, ws: string, by: string, tx = id) =>
+      `INSERT INTO "BooksBill" ("id","workspaceId","period","transactionId","dropped","changedById")
+       VALUES ('${id}','${ws}','2026-09','${tx}',true,'${by}')`
+
+    it('lets an owner alone say a bill is dropped, which owners and auditors read', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await attempt(bill('BB-0', 'W1', 'owner-W1'))).rows).toBe(1)
+        expect((await attempt(bill('BB-x', 'W1', 'aud-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(bill('BB-w', 'W2', 'owner-W1'))).error).toMatch(/row-level security/)
+      })
+      await db.query(bill('BB-1', 'W1', 'owner-W1'))
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(bill('BB-b', 'W1', 'book-W1'))).error).toMatch(/row-level security/)
+        expect(await ids('BooksBill')).toEqual([])
+      })
+      await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+        expect((await attempt(`DELETE FROM "BooksBill"`)).rows).toBe(0)
+      })
+      await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+        expect(await ids('BooksBill')).toEqual([])
+      })
+      await db.query(`DELETE FROM "BooksBill"`)
+    })
+
+    it("takes a receipt of the bill's own workspace only, and never with the bill dropped", async () => {
+      await db.query(bill('BB-2', 'W1', 'owner-W1'))
+      await expect(
+        db.query(
+          `UPDATE "BooksBill" SET "dropped" = false, "documentId" = 'D-W2' WHERE "id" = 'BB-2'`
+        )
+      ).rejects.toThrow(/own workspace/)
+      await expect(
+        db.query(`UPDATE "BooksBill" SET "documentId" = 'D-W1' WHERE "id" = 'BB-2'`)
+      ).rejects.toThrow(/BooksBill_one_check/)
+      await db.query(`DELETE FROM "BooksBill"`)
+    })
+
+    it("keeps a line's bills on a books line only", async () => {
+      await expect(
+        db.query(`UPDATE "Expense" SET "booksBills" = '[]' WHERE "id" = 'X-W1'`)
+      ).rejects.toThrow(/Expense_booksBills_check/)
+    })
+  })
+
+  describe("the books' bills' payments (migration 20261112000200)", () => {
+    it("takes a statement of the bill's own workspace only, with its line, and never with the bill dropped", async () => {
+      await db.query(
+        `INSERT INTO "BooksBill" ("id","workspaceId","period","transactionId","dropped","changedById")
+         VALUES ('BB-3','W1','2026-09','BB-3',false,'owner-W1')`
+      )
+      const line = `'{"page":1,"text":"09/03 ACH DEBIT 200.00"}'`
+      await expect(
+        db.query(
+          `UPDATE "BooksBill" SET "paymentDocumentId" = 'D-W2', "paymentLine" = ${line} WHERE "id" = 'BB-3'`
+        )
+      ).rejects.toThrow(/own workspace/)
+      const lineOf = () =>
+        db.query(`SELECT "paymentLine" FROM "BooksBill" WHERE "id" = 'BB-3'`).then((r) => r.rows)
+      // A line without its statement is no line.
+      await db.query(`UPDATE "BooksBill" SET "paymentLine" = ${line} WHERE "id" = 'BB-3'`)
+      expect(await lineOf()).toEqual([{ paymentLine: null }])
+      await db.query(
+        `UPDATE "BooksBill" SET "paymentDocumentId" = 'D-W1', "paymentLine" = ${line} WHERE "id" = 'BB-3'`
+      )
+      await expect(
+        db.query(`UPDATE "BooksBill" SET "dropped" = true WHERE "id" = 'BB-3'`)
+      ).rejects.toThrow(/BooksBill_payment_check/)
+      // The statement's line goes with it.
+      await db.query(`UPDATE "BooksBill" SET "paymentDocumentId" = NULL WHERE "id" = 'BB-3'`)
+      expect(
+        await db
+          .query(`SELECT "paymentLine" FROM "BooksBill" WHERE "id" = 'BB-3'`)
+          .then((r) => r.rows)
+      ).toEqual([{ paymentLine: null }])
+      await db.query(`DELETE FROM "BooksBill"`)
+    })
+
+    it('lets only a platform admin set the day windows, in their own name, and nobody change them', async () => {
+      const add = (by: string, matching = `'{"receiptDays":7,"paymentDays":5}'`) =>
+        attempt(
+          `INSERT INTO "ExpenseMatchingSetting" ("id","matching","changedById") VALUES (gen_random_uuid()::text,${matching},'${by}')`
+        )
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect((await add('owner-W1')).error).toMatch(/row-level security/)
+      })
+      await as({ user: 'admin-1', admin: true }, async () => {
+        expect((await add('admin-1')).rows).toBe(1)
+        expect((await add('owner-W1')).error).toMatch(/row-level security/)
+        expect((await add('admin-1', `'[7]'`)).error).toMatch(/matching_check/)
+        expect((await attempt(`UPDATE "ExpenseMatchingSetting" SET "matching" = '{}'`)).rows).toBe(
+          0
+        )
+        expect((await attempt(`DELETE FROM "ExpenseMatchingSetting"`)).rows).toBe(0)
+      })
+      await db.query(`DELETE FROM "ExpenseMatchingSetting"`)
+    })
+  })
+
+  describe("the books' review fixes (migration 20261112000400)", () => {
+    it("lets a bill's receipt and statement go together, as deleting a workspace removes them", async () => {
+      for (const id of ['D-R1', 'D-S1'])
+        await insert(db, 'Document', { id, workspaceId: 'W1', storageKey: `W1/workspace/${id}` })
+      await db.query(
+        `INSERT INTO "BooksBill" ("id","workspaceId","period","transactionId","documentId","paymentDocumentId","paymentLine","changedById")
+         VALUES ('BB-9','W1','2026-09','BB-9','D-R1','D-S1','{"page":1,"text":"09/03 200.00"}','owner-W1')`
+      )
+      await db.query(`DELETE FROM "Document" WHERE "id" IN ('D-R1','D-S1')`)
+      expect(
+        (
+          await db.query(
+            `SELECT "documentId","paymentDocumentId","paymentLine" FROM "BooksBill" WHERE "id" = 'BB-9'`
+          )
+        ).rows
+      ).toEqual([{ documentId: null, paymentDocumentId: null, paymentLine: null }])
+      await db.query(`DELETE FROM "BooksBill"`)
+    })
+
+    it("refuses an account mapping that names another workspace's engagement", async () => {
+      await expect(
+        db.query(
+          `INSERT INTO "AccountMapping" ("id","workspaceId","engagementId","fileName","sha256","read","changedById")
+           VALUES ('AM-9','W1','E-W2','m.xlsx','${'f'.repeat(64)}','{"accounts":{}}','owner-W1')`
+        )
+      ).rejects.toThrow(/its own workspace/)
+    })
+  })
+
+  describe("the books' split of a shared cost (migration 20261112000300)", () => {
+    it('keeps a split on a books line only, as an object', async () => {
+      const split = `'{"how":"entry","rows":[],"at":[]}'`
+      await expect(
+        db.query(`UPDATE "Expense" SET "booksSplit" = ${split} WHERE "id" = 'X-W1'`)
+      ).rejects.toThrow(/Expense_booksSplit_check/)
+      await db.query(`UPDATE "Expense" SET "booksKey" = '2026-09:k' WHERE "id" = 'X-W1'`)
+      await expect(
+        db.query(`UPDATE "Expense" SET "booksSplit" = '[]' WHERE "id" = 'X-W1'`)
+      ).rejects.toThrow(/Expense_booksSplit_check/)
+      await db.query(`UPDATE "Expense" SET "booksSplit" = ${split} WHERE "id" = 'X-W1'`)
+      await db.query(
+        `UPDATE "Expense" SET "booksSplit" = NULL, "booksKey" = NULL WHERE "id" = 'X-W1'`
+      )
+    })
+
+    it('links the export as the allocation worksheet as Save does, with no marks of its own', async () => {
+      const where = `WHERE "expenseId" = 'X-W1' AND "documentId" = 'D-W1'`
+      const [before] = (
+        await db.query<{ purpose: string; mark: unknown; marks: unknown; byMatch: boolean }>(
+          `SELECT "purpose","mark","marks","byMatch" FROM "ExpenseDocument" ${where}`
+        )
+      ).rows
+      // What Save writes: the purpose, no mark and no marks.
+      await db.query(
+        `UPDATE "ExpenseDocument" SET "purpose" = 'allocation', "mark" = NULL, "marks" = '[]', "byMatch" = true ${where}`
+      )
+      // An allocation worksheet takes no marks: its rows are highlighted from the line's split.
+      await expect(
+        db.query(
+          `UPDATE "ExpenseDocument" SET "marks" = '[{"page":1,"x":0,"y":2,"width":1,"height":1}]' ${where}`
+        )
+      ).rejects.toThrow(/ExpenseDocument_marks_check|marked on a payroll file/)
+      await db.query(
+        `UPDATE "ExpenseDocument" SET "purpose" = $1, "mark" = $2, "marks" = $3, "byMatch" = $4 ${where}`,
+        [
+          before!.purpose,
+          before!.mark === null ? null : JSON.stringify(before!.mark),
+          JSON.stringify(before!.marks),
+          before!.byMatch,
+        ]
+      )
+    })
+  })
 })
 
 describe('touchesTenantTable', () => {

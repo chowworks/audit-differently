@@ -1,6 +1,8 @@
 import { sheetCopy } from './payroll-details'
 import { PDFArray, PDFDict, PDFDocument, PDFName, rgb } from 'pdf-lib'
-import type { StatementMark } from '@ad/types'
+import type { BooksSplitDto, PayrollSplitDto, StatementMark } from '@ad/types'
+import { withBooksNote } from '../expenses/books-note'
+import { addSplitNote } from './split-note'
 
 /** What marking did: the copy's bytes, and the marks that could not be drawn on it. */
 export interface MarkedPdf {
@@ -40,7 +42,7 @@ function stripPointers(pdf: PDFDocument) {
 export async function markPdf(
   bytes: Uint8Array,
   marks: StatementMark[],
-  options: { strip?: boolean } = {}
+  options: { strip?: boolean; note?: PayrollSplitDto | null } = {}
 ): Promise<MarkedPdf> {
   let pdf: PDFDocument
   try {
@@ -70,6 +72,14 @@ export async function markPdf(
       borderOpacity: 0.9,
     })
   }
+  // A split staff line's pay stub: the note of its split first, once the marks are on the stub's own pages.
+  if (options.note) {
+    try {
+      await addSplitNote(pdf, options.note)
+    } catch {
+      // A note that cannot be drawn leaves the copy as it is: the stub still proves the pay.
+    }
+  }
   try {
     return { bytes: await pdf.save(), notDrawn }
   } catch {
@@ -89,11 +99,25 @@ export const markPlace = (m: StatementMark) =>
  * the copy stands on its own for the auditor (owner's decision, 2026-10-16); a spreadsheet's marked rows filled yellow.
  * The stored original is never changed.
  */
-export const itemCopy = async (bytes: Uint8Array, marks: StatementMark[]): Promise<MarkedPdf> =>
+export const itemCopy = async (
+  bytes: Uint8Array,
+  marks: StatementMark[],
+  /** A split staff line's pay stub: its split, drawn as the copy's first page. */
+  note?: PayrollSplitDto | null,
+  /** A books line's accounting export: how the books charge its shared cost, the copy's first sheet. */
+  booksNote?: BooksSplitDto | null
+): Promise<MarkedPdf> => {
   // Payroll details is a spreadsheet (an xlsx begins like a zip): its marks are rows and cells, filled yellow (#22).
-  isSheet(bytes)
-    ? { bytes: new Uint8Array(await sheetCopy(bytes, marks)), notDrawn: [] }
-    : markPdf(bytes, marks, { strip: true })
+  if (!isSheet(bytes)) return markPdf(bytes, marks, { strip: true, note })
+  const marked = await sheetCopy(bytes, marks)
+  if (!booksNote) return { bytes: new Uint8Array(marked), notDrawn: [] }
+  try {
+    return { bytes: new Uint8Array(await withBooksNote(marked, booksNote)), notDrawn: [] }
+  } catch {
+    // A note that cannot be drawn leaves the copy as it is: the highlighted rows still show the split.
+    return { bytes: new Uint8Array(marked), notDrawn: [] }
+  }
+}
 
 /** The files an item's own copy is drawn for: PDFs, and payroll details' spreadsheets. */
 export const COPIED_TYPES = [

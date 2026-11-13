@@ -142,6 +142,12 @@ export class ReportsController {
     )
   }
 
+  /** Runs the month's checks again as the rules now stand: a change to the rules shows without a change to the month. */
+  @Post('reports/:id/recheck')
+  async recheck(@UserId() userId: string, @Param('id') id: string): Promise<ReportDetail> {
+    return this.reports.recheck(await this.callers.load(userId), id)
+  }
+
   @Post('reports/:id/submit')
   async submit(@UserId() userId: string, @Param('id') id: string): Promise<ReportDetail> {
     return this.reports.submit(await this.callers.load(userId), id)
