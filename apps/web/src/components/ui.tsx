@@ -349,11 +349,20 @@ export function Empty({ children }: { children: React.ReactNode }) {
 
 /**
  * A flow's steps, as the month page's stepper: each done step green with its number and a ✓ before its name, the
- * current one outlined in navy, the rest grey. The last step counts as done once reached.
+ * current one outlined in navy, the rest grey. The last step counts as done once reached, unless it is work still to do
+ * (`lastDone` false: the workspace payroll's Expenses step).
  */
-export function Stepper<S extends string>({ steps, current }: { steps: readonly S[]; current: S }) {
+export function Stepper<S extends string>({
+  steps,
+  current,
+  lastDone = true,
+}: {
+  steps: readonly S[]
+  current: S
+  lastDone?: boolean
+}) {
   const at = steps.indexOf(current)
-  const last = at === steps.length - 1
+  const last = lastDone && at === steps.length - 1
   return (
     <ol className="ad-stepper" aria-label="Steps">
       {steps.map((s, i) => {

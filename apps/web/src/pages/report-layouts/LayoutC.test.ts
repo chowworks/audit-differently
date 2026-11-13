@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CheckDto, ReportDetail } from '@ad/types'
-import { placeChecks, proofsShown } from './LayoutC'
+import { placeChecks, proofsShown, tablesOfLine } from './LayoutC'
 
 const check = (id: string, on: Partial<CheckDto>): CheckDto => ({
   id,
@@ -73,5 +73,29 @@ describe('proofsShown', () => {
       have: new Map([['payment', bank]]),
       extra: [],
     })
+  })
+})
+
+describe("a budget line's filter", () => {
+  const r = {
+    budgetLines: [
+      { id: 'fringe', reportLine: 'staff-fringe' },
+      { id: 'salaries', reportLine: 'staff-salaries' },
+      { id: 'supplies', reportLine: 'supplies' },
+    ],
+    expenses: [
+      { id: 'tax', reportLine: 'staff-fringe', budgetLineId: 'fringe', fromPayroll: true },
+      { id: 'fee', reportLine: 'staff-fringe', budgetLineId: 'fringe', fromBooks: true },
+      { id: 'pay', reportLine: 'staff-salaries', budgetLineId: 'salaries', fromPayroll: true },
+    ],
+  } as unknown as ReportDetail
+
+  it("filters the expenses too when a payroll line has the books' expenses on it", () => {
+    expect(tablesOfLine(r, 'fringe')).toEqual({ payroll: true, expenses: true })
+  })
+
+  it('filters only its own table otherwise', () => {
+    expect(tablesOfLine(r, 'salaries')).toEqual({ payroll: true, expenses: false })
+    expect(tablesOfLine(r, 'supplies')).toEqual({ payroll: false, expenses: true })
   })
 })

@@ -115,13 +115,14 @@ export interface BudgetChange extends EngagementDetail {
 
 // ── Expenses and documents ──────────────────────────────────────────────────
 
-export const ALLOCATION_TYPES = ['direct', 'payroll', 'usage'] as const
+export const ALLOCATION_TYPES = ['direct', 'payroll', 'usage', 'books'] as const
 export type AllocationType = (typeof ALLOCATION_TYPES)[number]
 /** How the expense form and the access log name each allocation type. */
 export const ALLOCATION_TYPE_LABELS: Record<AllocationType, string> = {
   direct: 'Direct (all of it)',
   payroll: 'Shared, by payroll hours',
   usage: 'Shared, by usage',
+  books: 'Shared, as the books allocate it',
 }
 
 export const DOCUMENT_KINDS = [
@@ -358,6 +359,8 @@ export const CHECK_CODES = [
   'proof-mismatch',
   'no-budget-line',
   'payroll-counted-twice',
+  'bills-without-receipt',
+  'bills-without-payment',
 ] as const
 export type CheckCode = (typeof CHECK_CODES)[number]
 
@@ -596,15 +599,26 @@ export interface ExpenseDto extends ExpenseInput {
   payrollKind: PayrollBudgetKind | null
   /** Whether it counts on the budget now: false for a books' payroll transaction the match has covered. */
   counts: boolean
+  /**
+   * Written by the month's expenses from the books (the zip's accounting export): a bill, proved by its invoice and
+   * payment, whatever its budget line (a payroll fee on Fringe is no one's pay).
+   */
+  fromBooks?: boolean
 }
 
-/** A payroll line: on a payroll line of the funder's form, or written by the payroll match (on Program Costs, say). */
+/**
+ * A payroll line: on a payroll line of the funder's form, or written by the payroll match (on Program Costs, say). A
+ * line from the books' expenses is a bill on whatever line it is.
+ */
 export const isPayrollLine = (e: {
   reportLine: string
   fromPayroll?: boolean
   payrollKind?: string | null
+  fromBooks?: boolean
 }) =>
-  PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine) || e.fromPayroll === true || !!e.payrollKind
+  (PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine) && e.fromBooks !== true) ||
+  e.fromPayroll === true ||
+  !!e.payrollKind
 
 export interface CheckDto {
   id: string
@@ -1729,6 +1743,47 @@ export interface PayrollSettingChangeDto {
   changes: string[]
 }
 
+/**
+ * How the month's expenses from the books match each bill to its proof (owner's decision, 2026-11-12), set by a
+ * platform admin in Admin tools → File Matching beside the payroll reading: how many days a receipt's date and a
+ * statement line's date may be from the bill's own.
+ */
+export interface ExpenseMatching {
+  receiptDays: number
+  paymentDays: number
+}
+
+export const DEFAULT_EXPENSE_MATCHING: ExpenseMatching = { receiptDays: 7, paymentDays: 5 }
+
+/** Each day window, with its title and a line saying what it is for. */
+export const EXPENSE_MATCHING_DAYS: { key: keyof ExpenseMatching; title: string; line: string }[] =
+  [
+    {
+      key: 'receiptDays',
+      title: 'Receipt days from a bill',
+      line: "How many days a receipt's date may be from the books' date of the bill it proves.",
+    },
+    {
+      key: 'paymentDays',
+      title: 'Payment days from a bill',
+      line: "How many days a bank or card statement line may be from the books' date of the bill it pays.",
+    },
+  ]
+
+export interface ExpenseMatchingDto {
+  matching: ExpenseMatching
+  changedByEmail: string | null
+  changedAt: string | null
+}
+
+/** One save of the expense matching, for the history. */
+export interface ExpenseMatchingChangeDto {
+  changedAt: string
+  changedByEmail: string | null
+  part: 'expenses'
+  changes: string[]
+}
+
 /** The words and days in force, and who last changed them (null: the defaults). */
 export interface PayrollReadingDto {
   reading: PayrollReading
@@ -2693,3 +2748,235 @@ export const namesOfEngagement = (
   list: ProgramNames[],
   engagement: { id: string; name: string }
 ): string[] => [engagement.name, ...(programOf(list, engagement)?.names ?? [])]
+
+// ── The month's expenses from the books (owner's decision, 2026-11-09) ────────────────────────────────────────────
+// The zip's accounting export holds the whole month; payroll takes the rows of a person's pay run, and every other line
+// booked to an expense account is an expense. Each is routed to an engagement by its class (program names) and to a
+// budget line by its account (the engagement's account mapping file, in the zip's "Account mapping" folder).
+
+/** Why a books line is, or is not, on an engagement. */
+export const BOOKS_LINE_STATUSES = [
+  'billed',
+  'already-entered',
+  'allocation-pool',
+  'no-class',
+  'no-program',
+  'not-ours',
+  'no-mapping',
+  'not-billable',
+  'no-budget-line',
+  'payroll-account',
+  'credit',
+  'outside-contract',
+  'month-closed',
+  'dropped',
+] as const
+export type BooksLineStatus = (typeof BOOKS_LINE_STATUSES)[number]
+
+export const BOOKS_LINE_STATUS_LABELS: Record<BooksLineStatus, string> = {
+  billed: 'On the engagement',
+  'already-entered': 'Already on the month',
+  'allocation-pool': 'Shared out by an allocation entry',
+  'no-class': 'No class',
+  'no-program': 'Class not in the program names',
+  'not-ours': 'Program of no engagement',
+  'no-mapping': 'No account mapping for the engagement',
+  'not-billable': 'Account not billable to the engagement',
+  'no-budget-line': 'Category with no budget line',
+  'payroll-account': 'On a payroll account',
+  credit: 'A credit or refund',
+  'outside-contract': 'Outside the contract period',
+  'month-closed': 'Month not a draft',
+  dropped: 'Every bill dropped for want of its proof',
+}
+
+/** A line's share of a shared cost, as the books allocate it. */
+export interface BooksAllocationDto {
+  /** The whole cost shared. */
+  total: number
+  /** This line's share of it, 0-100. */
+  percent: number
+  /** 'entry': a journal entry shares out a pool (its id); 'split': the transaction itself is split by class. */
+  how: 'entry' | 'split'
+  entryId: string | null
+  /** The transactions whose cost is shared (the pool's, or the split one). */
+  sourceIds: string[]
+}
+
+/**
+ * How the books charge a shared cost to every program (owner's decision, 2026-11-12): the dollars the allocation entry
+ * (or the split bill) gives each class, this line's row marked. The books record the share, so the dollars are the
+ * proof; the note shows them, never a rate. A dropped bill's part comes off this line's row.
+ */
+export interface BooksSplitDto {
+  how: 'entry' | 'split'
+  /** The transaction whose rows give the split: the allocation entry, or the bill split by class. */
+  transactionId: string
+  /** yyyy-mm-dd */
+  date: string
+  /** The account the cost is on, as the books name it. */
+  account: string
+  /** The whole cost shared: what the rows come to. */
+  total: number
+  rows: { className: string; amount: number; mine: boolean }[]
+  /** Bills dropped for want of proof: each bill's part of the cost, and what comes off this line for it. */
+  less: { transactionId: string; amount: number; off: number }[]
+  /** What this line bills: its row, less the dropped bills' parts. */
+  billed: number
+  /** Where the split's rows are in the export (its sheet and row), the pool's row too: highlighted on its copy. */
+  at: { page: number; row: number }[]
+}
+
+/**
+ * A bill behind a books line (owner's decision, 2026-11-12): the transaction whose cost the line is, or one of the
+ * pool's an allocation entry shares out. Its receipt proves it; an owner may drop one that has none, and the line then
+ * bills its share of the rest.
+ */
+export interface BooksBillDto {
+  transactionId: string
+  date: string
+  vendor: string
+  /** The whole bill, as its receipt shows it. */
+  amount: number
+  /** The receipt that proves it: matched by its amount and date ('auto'), or chosen by an owner ('person'). */
+  receipt: { documentId: string; fileName: string; by: 'auto' | 'person' } | null
+  /** Where the books say it was paid from: the bank, a card, or neither said. */
+  paidFrom: 'bank' | 'card' | 'other'
+  /**
+   * The statement line that paid it (owner's decision, 2026-11-12): the line of the month's bank or card statements with
+   * its amount on a date near its own ('auto'), or chosen by an owner ('person'). Null: none found.
+   */
+  payment: BooksPaymentDto | null
+  /** On a bill with no payment found: the statement lines that print its amount, whatever their date, to choose from. */
+  paymentChoices: BooksPaymentDto[]
+  dropped: boolean
+}
+
+/** One line of a month's bank or card statement that pays a bill. */
+export interface BooksPaymentDto {
+  documentId: string
+  fileName: string
+  card: boolean
+  /** The line, its page and its box in PDF points. */
+  line: StatementLine
+  by: 'auto' | 'person'
+}
+
+/** A bill as a saved books line keeps it (Expense.booksBills). */
+export interface BooksBillSaved {
+  transactionId: string
+  date: string
+  vendor: string
+  amount: number
+  documentId: string | null
+  /** The statement that paid it, and the line on it; null: none found. Missing on a line saved before payments were. */
+  payment?: { documentId: string; page: number; text: string } | null
+  dropped: boolean
+}
+
+/** A receipt of the month's workspace receipts (the zip's "Receipts" folder), as the expenses read it. */
+export interface BooksReceiptDto {
+  documentId: string
+  fileName: string
+  amount: number | null
+  date: string | null
+  vendor: string | null
+  /** The bills it proves. None: unmatched. */
+  transactionIds: string[]
+}
+
+export interface BooksLineDto {
+  /** Stable across saves of the same file: the transaction, the account, the class and the line's place among alike. */
+  key: string
+  transactionId: string
+  date: string
+  type: string
+  vendor: string
+  description: string
+  account: string
+  accountNo: string | null
+  className: string
+  amount: number
+  /** Where it was paid from: the bank or a card, by the books' other side; null when the books do not say. */
+  paidFrom: { account: string; kind: 'bank' | 'card' | 'other' } | null
+  status: BooksLineStatus
+  engagementId: string | null
+  engagementName: string | null
+  category: string | null
+  budgetLineId: string | null
+  budgetLineName: string | null
+  allocation: BooksAllocationDto | null
+  /** How the books charge the shared cost to every program: on an allocated line, null on the rest. */
+  split: BooksSplitDto | null
+  /** The bills behind it (on a line of an engagement; none on the rest), with their receipts. */
+  bills: BooksBillDto[]
+  /** A line Save wrote before: unchanged, or changed since. Null: new. */
+  saved: 'same' | 'changed' | null
+}
+
+/** A category of a mapping and the engagement's budget line it bills to. */
+export interface AccountMappingCategoryDto {
+  category: string
+  accounts: number
+  budgetLineId: string | null
+  budgetLineName: string | null
+  /** Chosen by an owner, not read from the file. */
+  chosen: boolean
+}
+
+export interface AccountMappingDto {
+  id: string
+  fileName: string
+  title: string
+  engagementId: string | null
+  engagementName: string | null
+  uploadedAt: string
+  categories: AccountMappingCategoryDto[]
+}
+
+export interface WorkspaceExpensesDto {
+  workspaceId: string
+  period: string
+  /** The accounting export the lines are read from; null when the month's files have none. */
+  file: { id: string; fileName: string } | null
+  mappings: AccountMappingDto[]
+  engagements: {
+    id: string
+    name: string
+    budgetLines: { id: string; name: string }[]
+  }[]
+  lines: BooksLineDto[]
+  /** The month's workspace receipts and the bills each proves. */
+  receipts: BooksReceiptDto[]
+  /**
+   * Lines Save wrote before that the books no longer bill (a bill dropped, an account no longer billed, a line gone
+   * from the export), on a month still a draft: Save removes them.
+   */
+  toRemove: { id: string; itemNumber: string; vendor: string; amount: number }[]
+  /** Files of the month's QuickBooks transactions that could not be read as an export: left out, by name. */
+  unread: string[]
+  can: { change: boolean }
+}
+
+/** An owner's word on one bill: the receipt that proves it (null: as matched), or dropped for want of its proof. */
+export interface BooksBillInput {
+  period: string
+  transactionId: string
+  documentId?: string | null
+  dropped?: boolean
+}
+
+/** An owner's word on one bill's payment: the statement line that paid it, or null to match it again. */
+export interface BooksPaymentInput {
+  period: string
+  transactionId: string
+  payment: { documentId: string; page: number; text: string } | null
+}
+
+/** What Save of the month's expenses did. */
+export interface WorkspaceExpensesSavedDto {
+  created: number
+  updated: number
+  removed: number
+  expenses: WorkspaceExpensesDto
+}

@@ -24,6 +24,8 @@ import {
   PAYROLL_FOLDERS,
   OPTIONAL_FOLDERS,
   PROGRAM_NAMES_FOLDER,
+  ACCOUNT_MAPPING_FOLDER,
+  RECEIPTS_FOLDER,
   filesFromZip,
   sortPayrollZip,
   type PayrollFolderKind,
@@ -1093,10 +1095,30 @@ const ZIP_MAX_FILES = 200
 const NAMES_MAX_BYTES = 5 * 1024 * 1024
 /** The server's limit for one file (MAX_UPLOAD_BYTES in the API). */
 export const FILE_MAX_BYTES = 25 * 1024 * 1024
-const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`
+/** The server's limit for an account mapping file (the account-mappings upload in the API). */
+export const MAPPING_MAX_BYTES = 5 * 1024 * 1024
+/** The server's limit for one receipt (the expenses receipts upload in the API). */
+export const RECEIPT_MAX_BYTES = 10 * 1024 * 1024
+export const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`
 
 /**
- * Step 1: one zip with the sample's folders (Timesheets, Payroll registers, Bank statements; Pay stubs, Payroll details and Program names when the team has them), opened in the
+ * The zip's expense files over the server's limits, by folder and name: left out of the upload, never in the way of the
+ * payroll files. Null when none is.
+ */
+export function oversizeExpenseFiles(mappings: File[], receipts: File[]) {
+  const big = [
+    ...mappings
+      .filter((f) => f.size > MAPPING_MAX_BYTES)
+      .map((f) => `${ACCOUNT_MAPPING_FOLDER}/${f.name} (over ${mb(MAPPING_MAX_BYTES)})`),
+    ...receipts
+      .filter((f) => f.size > RECEIPT_MAX_BYTES)
+      .map((f) => `${RECEIPTS_FOLDER}/${f.name} (over ${mb(RECEIPT_MAX_BYTES)})`),
+  ]
+  return big.length ? big : null
+}
+
+/**
+ * Step 1: one zip with the sample's folders (Timesheets, Payroll registers, Bank & card statements; Pay stubs, QuickBooks transactions, Program names and Account mapping when the team has them), opened in the
  * browser. Each folder sets its files' type; a zip laid out any other way is refused, with every problem at once.
  * The files then go up to the server, 20 at a time, to be read and matched; nothing is filed until Save.
  */
@@ -1126,7 +1148,11 @@ export function UploadPanel({
   onReady: (
     files: { file: File; kind: PayrollFolderKind }[],
     replace: boolean,
-    names: File[]
+    names: File[],
+    /** Its "Account mapping" files: not proof either (each engagement's account mapping). */
+    mappings: File[],
+    /** Its "Receipts" files: the receipts of the books' bills, for the expenses step. */
+    receipts: File[]
   ) => void
   /** Already uploaded this month: match those files again without uploading more. */
   onSkip?: () => void
@@ -1140,6 +1166,8 @@ export function UploadPanel({
   const [zipName, setZipName] = useState<string | null>(null)
   const [files, setFiles] = useState<{ file: File; kind: PayrollFolderKind; folder: string }[]>([])
   const [names, setNames] = useState<File[]>([])
+  const [mappings, setMappings] = useState<File[]>([])
+  const [receipts, setReceipts] = useState<File[]>([])
   const [problems, setProblems] = useState<string[]>([])
   // Too big to take: the zip, the number of files, or one file over the server's limit. Said as it is, not as a layout problem.
   const [tooBig, setTooBig] = useState<string | null>(null)
@@ -1147,6 +1175,8 @@ export function UploadPanel({
   const choose = async (zip: File | undefined) => {
     setFiles([])
     setNames([])
+    setMappings([])
+    setReceipts([])
     setProblems([])
     setTooBig(null)
     setZipName(zip?.name ?? null)
@@ -1183,6 +1213,8 @@ export function UploadPanel({
         )
       setFiles(sorted.files)
       setNames(sorted.names)
+      setMappings(sorted.mappings)
+      setReceipts(sorted.receipts)
       setProblems(sorted.problems)
     } catch (e) {
       setProblems([(e as Error).message])
@@ -1202,7 +1234,7 @@ export function UploadPanel({
         </p>
       )}
       <Field
-        label="One zip with the folders Timesheets, Payroll registers and Bank statements (and Pay stubs, Payroll details and Program names, when you have them), as in the sample above. Files as your payroll company and books export them: PDF, XLSX or CSV, and a zip of pay stubs as it comes."
+        label="One zip with the folders Timesheets, Payroll registers and Bank & card statements (and Pay stubs, QuickBooks transactions, Program names and Account mapping, when you have them), as in the sample above. Files as your payroll company and books export them: PDF, XLSX or CSV, and a zip of pay stubs as it comes."
         required
         hint={`Up to ${mb(ZIP_MAX_BYTES)} and ${maxFiles.toLocaleString('en-US')} files; each file up to ${mb(FILE_MAX_BYTES)}.`}
       >
@@ -1244,7 +1276,30 @@ export function UploadPanel({
                 <span className="ad-tile-note">{names.length === 1 ? 'file' : 'files'}</span>
               </div>
             )}
+            {mappings.length > 0 && takesNames && (
+              <div className="ad-tile ad-tile-ok">
+                <span className="ad-tile-label">{ACCOUNT_MAPPING_FOLDER}</span>
+                <span className="ad-tile-value">{mappings.length}</span>
+                <span className="ad-tile-note">{mappings.length === 1 ? 'file' : 'files'}</span>
+              </div>
+            )}
+            {receipts.length > 0 && takesNames && (
+              <div className="ad-tile ad-tile-ok">
+                <span className="ad-tile-label">{RECEIPTS_FOLDER}</span>
+                <span className="ad-tile-value">{receipts.length}</span>
+                <span className="ad-tile-note">{receipts.length === 1 ? 'file' : 'files'}</span>
+              </div>
+            )}
           </div>
+          {takesNames &&
+            (() => {
+              const big = oversizeExpenseFiles(mappings, receipts)
+              return big ? (
+                <Notice tone="warn">
+                  Too large to read, left out (the payroll files still go up): {big.join(', ')}.
+                </Notice>
+              ) : null
+            })()}
           {names.length > 0 && !takesNames && (
             <p className="text-sm text-soft">
               The {PROGRAM_NAMES_FOLDER} folder is read only when an owner uploads the zip on Month
@@ -1279,7 +1334,15 @@ export function UploadPanel({
         )}
         <Button
           kind={kind}
-          onClick={() => onReady(files, replace, takesNames ? names : [])}
+          onClick={() =>
+            onReady(
+              files,
+              replace,
+              takesNames ? names : [],
+              takesNames ? mappings : [],
+              takesNames ? receipts : []
+            )
+          }
           disabled={!files.length || problems.length > 0 || !!tooBig || !!busy}
         >
           {busy ?? action}

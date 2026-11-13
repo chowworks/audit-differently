@@ -60,8 +60,8 @@ describe('filesFromZip', () => {
     )
     expect(problems).toEqual([
       'The zip has no "Payroll registers" folder, or it is empty.',
-      'The zip has no "Bank statements" folder, or it is empty.',
-      '"Stubs" is not one of the folders: use Timesheets, Payroll registers, Pay stubs, Bank statements, Payroll details and Program names.',
+      'The zip has no "Bank & card statements" folder, or it is empty.',
+      '"Stubs" is not one of the folders: use Timesheets, Payroll registers, Pay stubs, Bank & card statements, QuickBooks transactions, Program names, Account mapping and Receipts.',
       '2 files are not inside one of the folders (loose.pdf, Pay stubs/a/deep.pdf).',
       '1 file is not a PDF, PNG, JPG, XLSX, DOCX, CSV or ZIP (Timesheets/notes.txt).',
     ])
@@ -110,7 +110,7 @@ describe('filesFromZip', () => {
       []
     )
     expect(problems).toEqual([
-      '1 file is in a folder that does not take its type: a CSV goes in Timesheets, Payroll registers, Payroll details or Program names, and Program names takes an XLSX or CSV (Bank statements/b.csv).',
+      '1 file is in a folder that does not take its type: a CSV goes in Timesheets, Payroll registers, QuickBooks transactions, Program names or Account mapping, Program names and Account mapping take an XLSX or CSV, and Receipts a PDF, PNG or JPG (Bank statements/b.csv).',
     ])
   })
 

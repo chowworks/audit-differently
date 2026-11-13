@@ -17,8 +17,8 @@ const KIND: Record<string, string> = {
   Timesheets: 'timesheet',
   'Payroll registers': 'payroll-register',
   'Pay stubs': 'paystub',
-  'Bank statements': 'bank-statement',
-  'Payroll details': 'payroll-details',
+  'Bank & card statements': 'bank-statement',
+  'QuickBooks transactions': 'payroll-details',
 }
 const ISY = { id: 'e-isy', name: 'In-School Youth Coding Pathway' }
 const AIT = { id: 'e-ait', name: 'Adult IT Training' }

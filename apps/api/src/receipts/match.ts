@@ -56,10 +56,15 @@ const daysBetween = (a: string, b: string) =>
 
 /**
  * How well a receipt fits an expense, or null when it is no suggestion at all. The amount counts most (50 exact, 40
- * within a cent; another amount is no match), then the date (30 on the day, less each day, nothing past 7 days), then
- * the vendor's name (up to 20). A receipt whose amount could not be read is suggested on date and vendor alone.
+ * within a cent; another amount is no match), then the date (30 on the day, less each day, nothing past `days`, 7 unless
+ * a caller says), then the vendor's name (up to 20). A receipt whose amount could not be read is suggested on date and
+ * vendor alone.
  */
-export function score(r: ReceiptFacts, e: ExpenseFacts): MatchSuggestion | null {
+export function score(
+  r: ReceiptFacts,
+  e: ExpenseFacts,
+  days: number = SUGGEST_DAYS
+): MatchSuggestion | null {
   let points = 0
   let amount: MatchSuggestion['amount'] = null
   if (r.amount != null) {
@@ -72,8 +77,8 @@ export function score(r: ReceiptFacts, e: ExpenseFacts): MatchSuggestion | null 
   let daysApart: number | null = null
   if (r.date) {
     daysApart = daysBetween(r.date, e.date)
-    if (daysApart > SUGGEST_DAYS) return null
-    points += Math.round((30 * (SUGGEST_DAYS + 1 - daysApart)) / (SUGGEST_DAYS + 1))
+    if (daysApart > days) return null
+    points += Math.round((30 * (days + 1 - daysApart)) / (days + 1))
   }
   const vendor = vendorSimilarity(r.vendor, e.vendor)
   points += Math.round(20 * vendor)
