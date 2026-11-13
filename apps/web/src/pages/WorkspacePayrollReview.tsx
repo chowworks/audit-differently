@@ -16,6 +16,7 @@ import {
   type WorkspacePayrollRunDto,
 } from '@ad/types'
 import { money, shortDate } from '@/lib/format'
+import { AddPayrollBudgetLine } from '@/components/AddPayrollBudgetLine'
 import { Chip, Empty } from '@/components/ui'
 import { FoundProof, Resolve, Tally, foundWords } from '@/components/payroll-match/MatchParts'
 import { SLOT_LABEL } from '@/components/payroll-match/why'
@@ -440,6 +441,7 @@ export function PlanWords({
   chosen,
   proof,
   reopen,
+  onBudget,
 }: {
   run: WorkspacePayrollRunDto
   /** The owner's own choices on the table. */
@@ -447,12 +449,49 @@ export function PlanWords({
   /** The proof Save attaches, the owner's choices included (`proofList`). */
   proof: PlanProofDto[]
   reopen: WorkspacePayrollMonthDto[]
+  /** A budget line was added or changed here: the page reads the run again. */
+  onBudget?: () => void
 }) {
   const { plan } = run
   return (
     <section aria-label="What Save will do">
       <h3 className="mx-work-title">What Save will do</h3>
       <ul className="grid list-disc gap-1 pl-5 text-sm">
+        {(run.setup ?? []).length > 0 && (
+          <li className="text-danger">
+            <b>⚠ Not set up for payroll</b> (its pay cannot reach it until this is fixed; then match
+            again):
+            <ul className="mt-1 grid gap-1">
+              {run.setup!.map((x) => (
+                <li key={x.engagementId} className="flex flex-wrap items-center gap-2">
+                  <span>
+                    {x.engagementName}:{' '}
+                    {x.missing
+                      .map((m) =>
+                        m === 'people'
+                          ? 'no staff tagged to it and no participants'
+                          : 'no budget line holds payroll'
+                      )
+                      .join('; ')}
+                  </span>
+                  {x.missing.includes('people') && (
+                    <Link to={`/workspaces/${run.workspaceId}/staff`}>Tag staff →</Link>
+                  )}
+                  {x.missing.includes('budget') &&
+                    (onBudget ? (
+                      <AddPayrollBudgetLine
+                        engagementId={x.engagementId}
+                        kind="staff-pay"
+                        onAdded={onBudget}
+                      />
+                    ) : (
+                      <Link to={`/engagements/${x.engagementId}`}>Open its budget →</Link>
+                    ))}
+                </li>
+              ))}
+            </ul>
+          </li>
+        )}
         <li>
           <b>Files:</b> {filesWords(run, chosen).line}.
         </li>
@@ -480,6 +519,28 @@ export function PlanWords({
           <li>
             <b>Staff payroll on the budget:</b> {plan.payrollLines.write}{' '}
             {plan.payrollLines.write === 1 ? 'line' : 'lines'} from payroll details.
+          </li>
+        )}
+        {plan.payrollLines.unbudgeted.length > 0 && (
+          <li className="text-danger">
+            <b>⛔ Not on the budget</b> (no budget line takes it, so Save leaves it off):
+            <ul className="mt-1 grid gap-1">
+              {plan.payrollLines.unbudgeted.map((u) => (
+                <li key={`${u.reportId}-${u.kind}`} className="flex flex-wrap items-center gap-2">
+                  <span>
+                    {u.engagementName}: {money(u.amount)} of{' '}
+                    {PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}
+                  </span>
+                  {onBudget && (
+                    <AddPayrollBudgetLine
+                      engagementId={u.engagementId}
+                      kind={u.kind}
+                      onAdded={onBudget}
+                    />
+                  )}
+                </li>
+              ))}
+            </ul>
           </li>
         )}
         {plan.payrollLines.keep.length > 0 && (

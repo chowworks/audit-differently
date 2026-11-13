@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common'
 import {
   MAX_PAY_LINES,
+  mergeProgramNames,
+  namesOfEngagement,
   PAYROLL_BUDGET_KIND_LABELS,
   DOCUMENT_SENSITIVITY,
   MAX_WORKSPACE_PAYROLL_FILES,
@@ -26,6 +28,8 @@ import {
   type PayLineLinkInput,
   type PayLineState,
   type PayrollDocumentKind,
+  personalRolesFor,
+  type Role,
   type PayrollMatchFileDto,
   type PayrollMatchProgress,
   type PayrollReconciliationDto,
@@ -47,10 +51,13 @@ import {
   type WorkspacePayrollPeriodDto,
   type WorkspacePayrollPlanDto,
   type WorkspacePayrollRunDto,
+  type WorkspacePayrollSetupDto,
   type WorkspacePayrollSaveInput,
   type WorkspacePayrollStartInput,
+  type ProgramNames,
+  type ProgramNamesDto,
 } from '@ad/types'
-import type { Document, Prisma } from '@prisma/client'
+import { Prisma, type Document } from '@prisma/client'
 import { ChecksService } from '../checks/checks.service'
 import { AccessLogService, type LogEntry } from '../core/access-log.service'
 import { allow, staffName, tenantWhere, workspaceRole, type Caller } from '../core/caller'
@@ -64,6 +71,7 @@ import {
 } from '../documents/documents.service'
 import { describe, type StagedFile } from '../documents/staged-file'
 import { PrismaService } from '../prisma/prisma.service'
+import { dueDate } from '../checks/rules'
 import { refuseLocked, ReportsService, WEX_FIELDS } from '../reports/reports.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
 import { highlightsFor } from './highlights'
@@ -113,16 +121,24 @@ import {
   type StaffFound,
   type StaffRow,
 } from './staff-match'
-import { amountsOn, payDateOn, payMonthOf, payRunsOf, runOfLine, suggestedRuns } from './pay-runs'
+import { amountsOn, payMonthOf, payRunsOf, periodOn, runOfLine, suggestedRuns } from './pay-runs'
 import { chargesOf } from './payroll-details'
+import { cleanProgramNames, programNameRows, programNamesIn } from './program-names'
 import {
   payrollItemNumber,
   payrollLinesOf,
   type LineMonth,
   type PayrollLineWrite,
 } from './payroll-lines'
+import { hoursOf } from './payroll-split'
 import { readStatement, type PageItem } from './statement-lines'
-import { proved, slotOfLink, workspaceItems, type WorkspaceItem } from './workspace-items'
+import {
+  lineOfKey,
+  proved,
+  slotOfLink,
+  workspaceItems,
+  type WorkspaceItem,
+} from './workspace-items'
 
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
 /** A file's sha256, as staging records it: how a file sent again is known. */
@@ -322,9 +338,40 @@ export class WorkspacePayrollService {
         sha256: d.sha256,
         uploadedAt: d.uploadedAt.toISOString(),
         personal: d.sensitivity === 'personal',
+        contentType: d.contentType,
       })),
       can: { change: workspaceRole(caller, workspaceId, ['owner']) },
     }
+  }
+
+  /**
+   * One file of the month's set as it was uploaded, to view or download from the files card. Owners and auditors read
+   * the set; a personal file opens to its roles (personalRolesFor) alone. Each open is one read line.
+   */
+  async setFile(
+    caller: Caller,
+    workspaceId: string,
+    period: unknown,
+    documentId: string
+  ): Promise<{ bytes: Uint8Array; contentType: string; fileName: string }> {
+    this.reader(caller, workspaceId)
+    const p = this.period(period)
+    const doc = (await this.setOf(workspaceId, p)).find((d) => d.id === documentId)
+    if (!doc) throw new NotFoundException()
+    if (
+      doc.sensitivity === 'personal' &&
+      !workspaceRole(caller, workspaceId, [...personalRolesFor(doc.kind)] as Role[])
+    )
+      throw new NotFoundException()
+    const bytes = await this.storage.read(doc.storageKey)
+    await this.log.log(caller, {
+      workspaceId,
+      resource: 'document',
+      subjectId: doc.id,
+      action: 'read',
+      description: `Opened ${describe(doc)} from the workspace's payroll files`,
+    })
+    return { bytes: new Uint8Array(bytes), contentType: doc.contentType, fileName: doc.fileName }
   }
 
   /**
@@ -380,7 +427,7 @@ export class WorkspacePayrollService {
    * Read as the caller: an owner reads both (an auditor never runs a match).
    */
   private async lists(workspaceId: string) {
-    const [staff, participants] = await Promise.all([
+    const [staff, participants, workspace] = await Promise.all([
       this.prisma.staffMember.findMany({
         where: { workspaceId },
         orderBy: { name: 'asc' },
@@ -389,6 +436,10 @@ export class WorkspacePayrollService {
       this.prisma.participant.findMany({
         where: { workspaceId },
         select: { id: true, engagementId: true, displayName: true, participantId: true },
+      }),
+      this.prisma.workspace.findFirst({
+        where: { id: workspaceId },
+        select: { programNames: true },
       }),
     ])
     const rows: StaffRow[] = staff.map((s) => ({
@@ -399,7 +450,12 @@ export class WorkspacePayrollService {
     const engagementNames = new Map(
       staff.flatMap((s) => s.assignments.map((a) => [a.engagement.id, a.engagement.name] as const))
     )
-    return { staff: rows, participants: participants as ParticipantRow[], engagementNames }
+    return {
+      staff: rows,
+      participants: participants as ParticipantRow[],
+      engagementNames,
+      programs: programNamesIn(workspace?.programNames),
+    }
   }
 
   /**
@@ -430,7 +486,7 @@ export class WorkspacePayrollService {
     items: WorkspaceItem[],
     months: WorkspacePayrollMonthDto[]
   ) {
-    const [{ staff, participants, engagementNames }, highlight, set] = await Promise.all([
+    const [{ staff, participants, engagementNames, programs }, highlight, set] = await Promise.all([
       this.lists(run.workspaceId),
       this.highlights.current(),
       this.setOf(run.workspaceId, run.period),
@@ -443,12 +499,13 @@ export class WorkspacePayrollService {
     }))
     const matchMonths: MatchMonth[] = months.map((m) => ({
       ...m,
+      names: namesOfEngagement(programs, { id: m.engagementId, name: m.engagementName }),
       staffItems: items
         .filter(
           (i) =>
             i.target === 'expense' && i.month.reportId === m.reportId && isStaffLine(i.reportLine)
         )
-        .map((i) => ({ id: i.id, date: i.proof.start })),
+        .map((i) => ({ id: i.id, date: i.proof.start, ...lineOfKey(i.payrollKey) })),
     }))
     const wexItems = items.filter((i) => i.target === 'wex' && i.wex)
     const wex: MatchWex[] = wexItems.map((i) => ({
@@ -469,6 +526,7 @@ export class WorkspacePayrollService {
       months: matchMonths,
       wex,
       highlight,
+      programs: programs.flatMap((g) => g.names),
     })
     const docOf = new Map(change.matching.map((f) => [f.id, f.documentId]))
     const byKey = new Map(items.map((i) => [`${i.target}-${i.id}`, i]))
@@ -712,8 +770,10 @@ export class WorkspacePayrollService {
       plan,
       staff,
       participants,
-      months,
-      paidMonths
+      matchMonths,
+      paidMonths,
+      run.period,
+      programs.map((g) => g.names)
     )
     // The files proving the payroll lines reach those lines' months, as a link to any other item does.
     const asFile = new Map(files.map((f) => [f.id, f.id] as const))
@@ -957,6 +1017,7 @@ export class WorkspacePayrollService {
         timesheet: x.timesheet ? spot(x.timesheet) : null,
         register: x.register ? spot(x.register) : null,
         named: x.named,
+        staff: x.staff ? { id: x.staff.id, name: x.staff.name } : null,
       })),
       links: p.creates.length + p.updates.length + p.fresh.length,
       unlinks: p.deletes.length + p.leavingLinks.length,
@@ -994,6 +1055,10 @@ export class WorkspacePayrollService {
         keep: [...p.payrollLines.keep, ...p.payrollLines.books].map((e) => ({
           ...e,
           engagementName: engagementsOf([e.reportId])[0]?.name ?? '',
+        })),
+        unbudgeted: p.payrollLines.unbudgeted.map((u) => ({
+          ...u,
+          engagementName: engagementsOf([u.reportId])[0]?.name ?? '',
         })),
       },
       dropped: p.dropped.map((d) => ({ ...d, id: null, by: null, at: null })),
@@ -1185,6 +1250,7 @@ export class WorkspacePayrollService {
     // The set's size first: a refusal changes nothing, the caller's unsaved uploads included.
     const set = await this.setOf(workspaceId, period)
     if (set.length > MAX) throw new BadRequestException(TOO_MANY(set.length))
+    await this.startMonths(caller, workspaceId, period)
     const mine = await this.prisma.payrollMatchRun.findMany({
       where: { workspaceId, period, monthlyReportId: null, createdById: caller.userId },
       include: { files: true },
@@ -1252,6 +1318,82 @@ export class WorkspacePayrollService {
     )
     if (keep.length) this.worker.kick()
     return this.dto(caller, (await this.load(caller, runId)) as WorkspaceRun)
+  }
+
+  /**
+   * Every engagement of the workspace whose contract covers the month gets its month, started as its own page starts it
+   * (owner's decision, 2026-11-03): the match never misses an engagement for want of one. A closed engagement, or one
+   * without its contract period, is left alone; a month started meanwhile is no error.
+   */
+  private async startMonths(caller: Caller, workspaceId: string, period: string) {
+    const missing = await this.prisma.engagement.findMany({
+      where: {
+        workspaceId,
+        status: { not: 'closed' },
+        periodStart: { not: null },
+        periodEnd: { not: null },
+        monthlyReports: { none: { period } },
+      },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, periodStart: true, periodEnd: true, reportDueDay: true },
+    })
+    for (const e of missing) {
+      const from = e.periodStart!.toISOString().slice(0, 7)
+      const to = e.periodEnd!.toISOString().slice(0, 7)
+      if (period < from || period > to) continue
+      const due = dueDate(period, e.reportDueDay)
+      const made = await this.log
+        .change(
+          caller,
+          (tx) => tx.monthlyReport.create({ data: { engagementId: e.id, period, dueDate: due } }),
+          (r) => ({
+            workspaceId,
+            resource: 'report',
+            subjectId: r.id,
+            action: 'create',
+            description: `Started ${monthName(period)} of ${e.name} for the workspace's payroll`,
+            changes: [{ field: 'Due on', after: due.toISOString().slice(0, 10) }],
+          })
+        )
+        .catch((err: unknown) => {
+          if ((err as { code?: string }).code === 'P2002') return null
+          throw err
+        })
+      if (made) await this.checks.refresh(made.id)
+    }
+  }
+
+  /**
+   * What each month's engagement still needs for its payroll to reach it: staff tagged to it (or participants listed),
+   * and a budget line that holds payroll. The review asks the owner to fix these.
+   */
+  private async setupOf(
+    months: WorkspacePayrollMonthDto[],
+    staff: StaffRow[],
+    participants: ParticipantRow[]
+  ): Promise<WorkspacePayrollSetupDto[]> {
+    const ids = [...new Set(months.map((m) => m.engagementId))]
+    const lines = ids.length
+      ? await this.prisma.budgetLine.findMany({
+          where: { engagementId: { in: ids } },
+          select: { engagementId: true, payroll: true },
+        })
+      : []
+    return months
+      .map((m) => ({
+        engagementId: m.engagementId,
+        engagementName: m.engagementName,
+        missing: [
+          ...(staff.some((x) => x.engagementIds.includes(m.engagementId)) ||
+          participants.some((x) => x.engagementId === m.engagementId)
+            ? []
+            : (['people'] as const)),
+          ...(lines.some((l) => l.engagementId === m.engagementId && l.payroll.length)
+            ? []
+            : (['budget'] as const)),
+        ],
+      }))
+      .filter((x) => x.missing.length)
   }
 
   /**
@@ -1579,6 +1721,12 @@ export class WorkspacePayrollService {
     })
     const stubFlags = new Map(plan.stubs.map((x) => [x.fileId, x.flags]))
     const away = awayLines(planned.files, run.period)
+    // A bank line that is a pay run's debit: how many registers it pays (two registers of one run share it).
+    const payRuns = payRunsOf(planned.files)
+    const registersOf = (fileId: string, mark: StatementLine | null) =>
+      (mark &&
+        payRuns.filter((r) => r.debit?.fileId === fileId && sameLine(r.debit.line, mark)).length) ||
+      null
     const kindOf = new Map(planned.files.map((f) => [f.id, f.kind]))
     const proofRows = staffProofRows(plan, docIds, run.period, items, kindOf)
     const unchangedStubs = change.matching.filter((f) => f.documentId && f.kind === 'paystub')
@@ -1673,6 +1821,12 @@ export class WorkspacePayrollService {
             })),
           })
         await tx.payrollMatchRun.delete({ where: { id: run.id } })
+        // Each draft month the match covered is matched as of now: one started after this shows it is not yet.
+        if (months.length)
+          await tx.monthlyReport.updateMany({
+            where: { id: { in: months.map((m) => m.reportId) }, status: 'draft' },
+            data: { payrollMatchedAt: new Date() },
+          })
         if (leavingDocs.length) {
           await tx.document.deleteMany({ where: { id: { in: leavingIds } } })
           for (const l of change.leaving) {
@@ -1711,6 +1865,7 @@ export class WorkspacePayrollService {
                 period: run.period,
                 kind: f.kind,
                 ...(l ? { mark: cleanMark(l) as object } : {}),
+                ...(f.kind === 'bank-statement' ? { registers: registersOf(f.id, l) } : {}),
                 flags: [
                   ...(stubFlags.get(f.id) ?? []),
                   ...(l && unclear.has(l) ? (['pay-unclear'] as const) : []),
@@ -1742,20 +1897,25 @@ export class WorkspacePayrollService {
         if (unchangedBanks.length) {
           const kept = await tx.payrollPayLine.findMany({
             where: { documentId: { in: unchangedBanks.map((f) => f.documentId!) } },
-            select: { id: true, documentId: true, mark: true, flags: true },
+            select: { id: true, documentId: true, mark: true, flags: true, registers: true },
           })
           for (const l of kept) {
             const file = unchangedBanks.find((f) => f.documentId === l.documentId)!
             const mark = l.mark as StatementLine | null
             const want = !!mark && away.isDebit(file.id, mark)
             const has = l.flags.includes('other-month')
-            if (want === has) continue
+            const registers = registersOf(file.id, mark)
+            if (want === has && registers === l.registers) continue
             await tx.payrollPayLine.update({
               where: { id: l.id },
               data: {
-                flags: want
-                  ? [...l.flags, 'other-month']
-                  : l.flags.filter((x) => x !== 'other-month'),
+                flags:
+                  want === has
+                    ? l.flags
+                    : want
+                      ? [...l.flags, 'other-month']
+                      : l.flags.filter((x) => x !== 'other-month'),
+                registers,
               },
             })
           }
@@ -1993,8 +2153,6 @@ export class WorkspacePayrollService {
           const before = await tx.expense.findFirst({ where: { id: c.id } })
           if (!before) throw new ConflictException(UPLOAD_CHANGED)
           await tx.expense.update({ where: { id: c.id }, data })
-          await tx.expenseDocument.deleteMany({ where: { expenseId: c.id, byMatch: true } })
-          written.push({ id: c.id, write: c.write })
           const changes = changesOf(before, data, PAYROLL_LINE_FIELDS)
           if (changes.length)
             line({
@@ -2071,10 +2229,15 @@ export class WorkspacePayrollService {
     plan: Plan,
     staff: StaffRow[],
     participants: ParticipantRow[],
-    months: WorkspacePayrollMonthDto[],
+    months: (WorkspacePayrollMonthDto & { names?: string[] })[],
     /** The months that have participants' payments once Save is done (kept or made from stubs). */
-    paidMonths: Set<string>
+    paidMonths: Set<string>,
+    /** The month matched: a charge of another month's run is not this month's line. */
+    period: string,
+    /** The workspace's programs by every name each goes by: a line's split shows each program once. */
+    programs: string[][] = []
   ) {
+    const runs = payRunsOf(files)
     const charges = files
       .filter((f) => f.kind === 'payroll-details')
       .flatMap((f) => chargesOf(f.lines))
@@ -2104,10 +2267,7 @@ export class WorkspacePayrollService {
           vendor: true,
           totalCost: true,
           allocationType: true,
-          documents: {
-            where: { byMatch: true },
-            select: { documentId: true, purpose: true, mark: true, marks: true, payRun: true },
-          },
+          payrollSplit: true,
         },
       }),
     ])
@@ -2118,6 +2278,7 @@ export class WorkspacePayrollService {
       reportId: m.reportId,
       engagementId: m.engagementId,
       engagementName: m.engagementName,
+      names: m.names,
       lines: lines.filter((l) => l.engagementId === m.engagementId),
       enteredStaffDates: onMonths
         .filter(
@@ -2130,24 +2291,27 @@ export class WorkspacePayrollService {
         )
         .map((e) => e.date.toISOString().slice(0, 10)),
     }))
-    const { writes, skipped } = charges.length
-      ? payrollLinesOf({ charges, staff, participants, months: lineMonths })
-      : { writes: [], skipped: [] }
+    const { writes, skipped, unbudgeted } = charges.length
+      ? payrollLinesOf({
+          charges,
+          staff,
+          participants,
+          months: lineMonths,
+          period,
+          hours: files
+            .filter((f) => f.kind === 'timesheet')
+            .flatMap((f) =>
+              hoursOf(f, (l) => runOfLine(runs, f, l)?.end ?? periodOn(f)?.end ?? null)
+            ),
+          programs,
+        })
+      : { writes: [], skipped: [], unbudgeted: [] }
     const had = onMonths.filter((e) => e.payrollKey)
     const keyOfRow = (reportId: string, key: string) => `${reportId}|${key}`
     const wanted = new Set(writes.map((w) => keyOfRow(w.reportId, w.key)))
     const existing = new Map(had.map((e) => [keyOfRow(e.monthlyReportId, e.payrollKey!), e]))
     const create = writes.filter((w) => !existing.has(keyOfRow(w.reportId, w.key)))
-    // The proofs Save would link, by the documents they are now; a file joining the set is no document yet, so a proof
-    // on it never matches one already linked.
-    const docIds = new Map(files.map((f) => [f.id, f.documentId ?? `joining:${f.id}`]))
-    const proofsOf = (
-      ls: { documentId: string; purpose: string; mark?: unknown; marks: unknown; payRun: boolean }[]
-    ) =>
-      ls
-        .map((l) => canonical([l.documentId, l.purpose, l.mark ?? null, l.marks, l.payRun]))
-        .sort()
-        .join('\n')
+    // A line's proof is the match's to keep, as on any other item (its link plan): only what it says changes it here.
     const unchanged = (e: (typeof had)[number], w: PayrollLineWrite) => {
       const d = this.payrollLineData(w)
       return (
@@ -2160,7 +2324,7 @@ export class WorkspacePayrollService {
         Number(e.allocatedAmount).toFixed(2) === d.allocatedAmount &&
         e.allocationType === d.allocationType &&
         e.budgetLineId === d.budgetLineId &&
-        proofsOf(e.documents) === proofsOf(this.payrollLineProofs(w, plan, files, docIds))
+        JSON.stringify(e.payrollSplit ?? null) === JSON.stringify(w.split ?? null)
       )
     }
     const change = writes.flatMap((w) => {
@@ -2231,6 +2395,7 @@ export class WorkspacePayrollService {
       change,
       remove,
       skipped,
+      unbudgeted,
       keep,
       books,
       /** Every line payroll details asks for, written or already as written: the files that prove them reach their months. */
@@ -2247,16 +2412,23 @@ export class WorkspacePayrollService {
   /**
    * The books against the payroll files for each engagement month of the period: the books' payroll transactions by
    * run date and kind, against the lines the match wrote for that run and the participants' payments of it (a payment is
-   * of the run dated within WEX_RUN_DAYS after its pay period ends).
+   * of the run dated within WEX_RUN_DAYS after its pay period ends). A month with no expenses imported yet has nothing
+   * to check them against: its runs are left out, and the month is named in `notImported` instead.
    */
-  private async booksAgainstFiles(months: WorkspacePayrollMonthDto[]): Promise<BooksRunDto[]> {
-    if (!months.length) return []
+  private async booksAgainstFiles(
+    months: WorkspacePayrollMonthDto[]
+  ): Promise<{ rows: BooksRunDto[]; notImported: WorkspacePayrollMonthDto[] }> {
+    if (!months.length) return { rows: [], notImported: [] }
     const ids = months.map((m) => m.reportId)
     const [lines, payments] = await Promise.all([
       this.prisma.expense.findMany({
         where: {
           monthlyReportId: { in: ids },
-          OR: [{ payrollKind: { not: null } }, { payrollKey: { not: null } }],
+          OR: [
+            { payrollKind: { not: null } },
+            { payrollKey: { not: null } },
+            { importFingerprint: { not: null } },
+          ],
         },
         select: {
           monthlyReportId: true,
@@ -2264,6 +2436,7 @@ export class WorkspacePayrollService {
           allocatedAmount: true,
           payrollKind: true,
           payrollKey: true,
+          importFingerprint: true,
         },
       }),
       this.prisma.wexPayment.findMany({
@@ -2292,6 +2465,10 @@ export class WorkspacePayrollService {
       return row
     }
     const add = (n: number | null, v: number) => Math.round(((n ?? 0) + v) * 100) / 100
+    // A month with an imported expense (the books' payroll transactions are imported ones) has its books in.
+    const imported = new Set(
+      lines.filter((l) => l.importFingerprint || l.payrollKind).map((l) => l.monthlyReportId)
+    )
     for (const l of lines) {
       const amount = Number(l.allocatedAmount)
       if (l.payrollKind) {
@@ -2322,12 +2499,20 @@ export class WorkspacePayrollService {
       const row = at(p.monthlyReportId, date, 'participant-pay')
       row.files = add(row.files, Number(p.grossAmount))
     }
-    return [...out.values()].sort(
-      (a, b) =>
-        a.engagementName.localeCompare(b.engagementName) ||
-        a.date.localeCompare(b.date) ||
-        a.kind.localeCompare(b.kind)
-    )
+    const rows = [...out.values()]
+    return {
+      rows: rows
+        .filter((r) => imported.has(r.reportId))
+        .sort(
+          (a, b) =>
+            a.engagementName.localeCompare(b.engagementName) ||
+            a.date.localeCompare(b.date) ||
+            a.kind.localeCompare(b.kind)
+        ),
+      notImported: months.filter(
+        (m) => !imported.has(m.reportId) && rows.some((r) => r.reportId === m.reportId)
+      ),
+    }
   }
 
   /** A payroll line as Save writes it: the run's pay date, whose pay, the account and the amount on its budget line. */
@@ -2345,6 +2530,7 @@ export class WorkspacePayrollService {
       // Set from the budget line by the database (Expense_4_budget_line); named here for the insert.
       reportLine: 'program-costs',
       budgetLineId: w.budgetLineId,
+      payrollSplit: w.split ? (w.split as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
     }
   }
 
@@ -2365,17 +2551,23 @@ export class WorkspacePayrollService {
     byMatch: true
     payRun: boolean
   }[] {
-    // A run is its register: its pay date is the one the register prints.
-    const payDateOf = new Map(
-      files.filter((f) => f.kind === 'payroll-register').map((f) => [f.id, payDateOn(f.lines)])
-    )
-    const ofRun = (p: PersonLine | null | undefined): p is PersonLine =>
-      !!p &&
-      (p.runId
-        ? payDateOf.get(p.runId) === w.date
-        : p.source === 'details'
-          ? !!p.line?.text.includes(w.date)
-          : true)
+    // A run is its register, and the line is of the run whose period it was written for (its key's run end): the
+    // books date a run's pay on their own day (09/17), seldom the pay date the register prints (09/18). A run with no
+    // period printed is told by its pay date, as before.
+    const runOf = new Map(payRunsOf(files).map((r) => [r.fileId, r]))
+    const sameRun = (run: { payDate: string | null; end: string | null }) =>
+      run.end && w.end ? run.end === w.end : run.payDate === w.date
+    const ofRun = (p: PersonLine | null | undefined): p is PersonLine => {
+      if (!p) return false
+      // A job report's row, or payroll details' rows, of another program: never this engagement's proof.
+      if (p.program !== undefined && p.program !== w.engagementId) return false
+      if (p.engagementId && p.engagementId !== w.engagementId) return false
+      if (p.runId) {
+        const run = runOf.get(p.runId)
+        return !!run && sameRun(run)
+      }
+      return p.source === 'details' ? !!p.line?.text.includes(w.date) : true
+    }
     const spots: { purpose: string; spot: PersonLine }[] = []
     if (w.staffId) {
       const found = plan.staff.find((s) => s.staff.id === w.staffId)
@@ -2385,8 +2577,21 @@ export class WorkspacePayrollService {
         ['bank', 'payment'],
       ] as const)
         for (const p of found?.[slot] ?? []) if (ofRun(p)) spots.push({ purpose, spot: p })
+      // Their own pay stub of the run (its period's end): the payment, as the match links it on a line already saved.
+      for (const st of plan.stubs)
+        if (
+          st.staff?.id === w.staffId &&
+          st.staff.engagementIds.includes(w.engagementId) &&
+          !st.flags.includes('other-month') &&
+          st.reading.end &&
+          st.reading.end === w.end
+        )
+          spots.push({
+            purpose: 'payment',
+            spot: { fileId: st.fileId, line: st.reading.payLine, amount: null },
+          })
     } else
-      for (const st of plan.stubs.filter((x) => x.reading.payDate === w.date))
+      for (const st of plan.stubs.filter((x) => sameRun(x.reading)))
         for (const [p, purpose] of [
           [st.timesheet, 'timesheet'],
           [st.register, 'register'],
@@ -2523,6 +2728,7 @@ export class WorkspacePayrollService {
             : guess
               ? { id: guess.staff.id, name: guess.staff.name }
               : null,
+          named: payeeOf(kind, line, stub?.named ?? person?.staff.name ?? guess?.staff.name),
         }
         // By the lists: a person's line linked to an engagement they are on, or a stub's payment (made or changed). A
         // link two people share marks the first one's line and highlights both, so its highlights count too.
@@ -2594,6 +2800,7 @@ export class WorkspacePayrollService {
       pays,
       totalsOnly,
       plan: this.planDto(planned, months),
+      setup: await this.setupOf(months, planned.staff, planned.participants),
       runs: suggestedRuns(payRunsOf(planned.files)),
       ai: PayrollAiService.summary(run.files),
     }
@@ -2787,6 +2994,7 @@ export class WorkspacePayrollService {
               : null,
           flags,
           staff: person ? { id: person.id, name: person.name } : null,
+          named: payeeOf(kind, mark, person?.name),
         }
         const on =
           coveredBy(items, line.documentId, kind, mark, line.document.sha256) ??
@@ -2828,14 +3036,27 @@ export class WorkspacePayrollService {
       .map((i) => ({ item: i.dto, missing: slotsOf(i.proof).filter((s) => !proved(i.links, s)) }))
       .filter((u) => u.missing.length > 0)
     const count = (s: PayLineState) => pays.filter((x) => x.state === s).length
+    const books = await this.booksAgainstFiles(months)
+    // The registers whose run's debit is found: one debit pays every register of its run (two registers paid together
+    // share it), as each Save counted on the debit's line.
+    const registersDebited = lines.reduce(
+      (n, l) => n + (l.kind === 'bank-statement' ? (l.registers ?? 0) : 0),
+      0
+    )
     return {
       workspaceId,
       period,
       pays,
       otherBankLines: all.length - pays.length,
+      registersDebited,
       unproved,
       items: items.map((i) => ({ item: i.dto, needed: slotsOf(i.proof) })),
-      books: await this.booksAgainstFiles(months),
+      books: books.rows,
+      booksNotImported: books.notImported.map((m) => ({
+        engagementId: m.engagementId,
+        engagementName: m.engagementName,
+        reportId: m.reportId,
+      })),
       counts: {
         matched: count('matched'),
         guessed: count('guessed'),
@@ -3061,14 +3282,23 @@ export class WorkspacePayrollService {
         }
       })
       const payFound = cents(people.reduce((t, x) => t + (x.pay ?? 0), 0))
+      const chargedByDetails = cents(people.reduce((t, x) => t + (x.charged ?? 0), 0))
       return {
         engagementId: m.engagementId,
         engagementName: m.engagement.name,
         engagementCode: m.engagement.code,
         reportId: m.id,
         monthStatus: m.status as ReportStatus,
+        notMatched: m.status === 'draft' && !m.payrollMatchedAt,
         charged,
-        chargedByDetails: cents(people.reduce((t, x) => t + (x.charged ?? 0), 0)),
+        chargedByDetails,
+        // Staff payroll the files charge with no budget line to take it: Save leaves it off the budget.
+        unbudgeted:
+          chargedByDetails > 0
+            ? (['staff-pay', 'staff-taxes'] as const).filter(
+                (k) => !holdsPayroll(m.engagement.budgetLines, k)
+              )
+            : [],
         lines: computeBudgetLines(
           m.engagement.budgetLines,
           [
@@ -3409,6 +3639,133 @@ export class WorkspacePayrollService {
     )
     return data
   }
+
+  /** The workspace's program names (owners and auditors read them), with its engagements to link them to. */
+  async programNames(caller: Caller, workspaceId: string): Promise<ProgramNamesDto> {
+    const { programs, engagements } = await this.readProgramNames(caller, workspaceId)
+    return { programs, engagements }
+  }
+
+  /** The list as an owner sees it, and as stored (a later write is made over that value only). */
+  private async readProgramNames(caller: Caller, workspaceId: string) {
+    if (!caller.workspaceIds.includes(workspaceId)) throw new NotFoundException()
+    allow(
+      workspaceRole(caller, workspaceId, ['owner', 'auditor']),
+      "Only an owner or auditor reads the workspace's program names"
+    )
+    const [w, engagements] = await Promise.all([
+      this.prisma.workspace.findFirst({
+        where: { id: workspaceId },
+        select: { programNames: true },
+      }),
+      this.prisma.engagement.findMany({
+        where: { workspaceId },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+    ])
+    if (!w) throw new NotFoundException()
+    const ids = new Set(engagements.map((e) => e.id))
+    return { programs: programNamesIn(w.programNames, ids), engagements, stored: w.programNames }
+  }
+
+  /**
+   * A program names file merged into the list (owners): each row the same program's names, joined to the program that
+   * has any of them, else a new one. Read in memory, never stored.
+   */
+  async addProgramNames(
+    caller: Caller,
+    workspaceId: string,
+    file: { buffer: Buffer; originalname: string } | undefined
+  ): Promise<ProgramNamesDto> {
+    this.ownerOfNames(caller, workspaceId)
+    if (!file) throw new BadRequestException('Choose the program names file')
+    const rows = await programNameRows(file.buffer, file.originalname)
+    const now = await this.readProgramNames(caller, workspaceId)
+    const { programs, conflicts } = mergeProgramNames(now.programs, rows)
+    // The merged list keeps the limits an owner's own list does.
+    cleanProgramNames(programs, new Set(now.engagements.map((e) => e.id)))
+    const out = await this.writeProgramNames(
+      caller,
+      workspaceId,
+      now,
+      programs,
+      'Added program names from a file'
+    )
+    return { ...out, conflicts }
+  }
+
+  /** The list as an owner left it: names changed, programs linked to engagements or removed. */
+  async setProgramNames(
+    caller: Caller,
+    workspaceId: string,
+    given: unknown
+  ): Promise<ProgramNamesDto> {
+    this.ownerOfNames(caller, workspaceId)
+    const now = await this.readProgramNames(caller, workspaceId)
+    const programs = cleanProgramNames(given, new Set(now.engagements.map((e) => e.id)))
+    return this.writeProgramNames(caller, workspaceId, now, programs, 'Changed the program names')
+  }
+
+  private ownerOfNames(caller: Caller, workspaceId: string) {
+    if (!caller.workspaceIds.includes(workspaceId)) throw new NotFoundException()
+    allow(
+      !caller.admin && workspaceRole(caller, workspaceId, ['owner']),
+      "Only an owner changes the workspace's program names"
+    )
+  }
+
+  private async writeProgramNames(
+    caller: Caller,
+    workspaceId: string,
+    now: ProgramNamesDto & { stored: Prisma.JsonValue },
+    programs: ProgramNames[],
+    description: string
+  ): Promise<ProgramNamesDto> {
+    if (JSON.stringify(programs) === JSON.stringify(now.stored))
+      return { programs, engagements: now.engagements }
+    const data = { programNames: programs as unknown as Prisma.InputJsonValue }
+    const summary = (list: ProgramNames[]) => ({
+      programNames: list.length,
+      programLinks: list
+        .map((g) => g.engagementId)
+        .filter((e): e is string => !!e)
+        .sort()
+        .join(', '),
+    })
+    await this.log.change(
+      caller,
+      async (tx) => {
+        // Written only over the list it was worked out from: two owners' changes at once never lose one.
+        const done = await tx.workspace.updateMany({
+          where: {
+            id: workspaceId,
+            programNames: { equals: now.stored as Prisma.InputJsonValue },
+          },
+          data,
+        })
+        if (done.count !== 1)
+          throw new ConflictException(
+            'The program names changed meanwhile: open the page again and redo your change'
+          )
+      },
+      {
+        workspaceId,
+        resource: 'workspace',
+        subjectId: workspaceId,
+        action: 'update',
+        description,
+        changes: changesOf(summary(now.programs), summary(programs), PROGRAM_NAMES_FIELDS),
+      }
+    )
+    return { programs, engagements: now.engagements }
+  }
+}
+
+/** The program names are logged by their count and the engagements linked (ids), never the names. */
+const PROGRAM_NAMES_FIELDS: Fields = {
+  programNames: { label: 'Programs in the program names', show: 'text' },
+  programLinks: { label: 'Engagements linked to a program', show: 'text' },
 }
 
 /** Said when another unsaved change of the month holds a file this one removes. */
@@ -3550,18 +3907,6 @@ async function coveredNow(
 }
 
 /** The person on the staff list whose register row or bank line this is, by the plan. */
-/** A value as JSON with every object's keys sorted: the database keeps a JSON column's keys in its own order. */
-function canonical(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`
-  if (v && typeof v === 'object')
-    return `{${Object.entries(v)
-      .filter(([, x]) => x !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`)
-      .join(',')}}`
-  return JSON.stringify(v)
-}
-
 function staffOn(plan: Plan, fileId: string, line: StatementLine | null) {
   if (!line) return undefined
   // A pay run's debit is everyone's in the run, so it is no one person's line.
@@ -3864,7 +4209,7 @@ export function unlistedPeople(
     }
   for (const p of out.values())
     for (const t of files.filter((x) => x.kind === 'timesheet')) {
-      const line = t.lines.find((l) => personIn(l.text, p.name))
+      const line = t.lines.find((l) => personIn(whoseLine(l.text), p.name))
       if (line)
         p.timesheet.push({
           fileId: t.id,
@@ -3877,6 +4222,23 @@ export function unlistedPeople(
   return [...out.values()]
     .filter((p) => p.timesheet.length > 0)
     .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** Whose pay a line is, for the Paid column: the person found, else a register row's own name. */
+function payeeOf(kind: PayLineKind, line: StatementLine | null, found?: string | null) {
+  if (found) return found
+  return kind === 'payroll-register' && line ? (registerPerson(line.text)?.name ?? null) : null
+}
+
+/**
+ * Where a timesheet line names whose time it is: its first cell with words (a sheet's row: not its id, its project or
+ * department further on), or a PDF line's words before its first number. A header row ("Employee | … | Federal Income
+ * Tax Amount") or a person's department ("Administration and Operations") names no one there.
+ */
+function whoseLine(text: string): string {
+  const cells = text.split(' | ')
+  if (cells.length > 1) return cells.find((c) => /\p{L}/u.test(c)) ?? ''
+  return text.split(/\d/)[0] ?? ''
 }
 
 /**

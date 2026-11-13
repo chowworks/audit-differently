@@ -5,7 +5,7 @@ import { payrollDetailsXlsx } from '../../prisma/payroll-workspace-sample'
 import { sheetLines } from './payroll-details'
 import type { PayrollLineWrite } from './payroll-lines'
 import { cleanMark } from './payroll.service'
-import { WorkspacePayrollService } from './workspace-payroll.service'
+import { unlistedPeople, WorkspacePayrollService } from './workspace-payroll.service'
 
 /**
  * The workspace payroll match by the lists (GitHub issue #22; owner's decisions, 2026-10-18): staff proof linked by
@@ -227,6 +227,8 @@ function setup(
   let n = 0
   const tx = {
     $queryRaw: jest.fn(async () => []),
+    // Save marks the months it covered as matched.
+    monthlyReport: { updateMany: jest.fn() },
     document: {
       create: jest.fn(async ({ data }) => ({ id: `d-${++n}`, ...data })),
       createMany: jest.fn(),
@@ -290,13 +292,15 @@ function setup(
     },
     payrollMatchFile: { count: jest.fn().mockResolvedValue(0) },
     payrollDroppedDecision: { findMany: jest.fn(async () => dropped) },
-    monthlyReport: { findMany: jest.fn().mockResolvedValue(months) },
+    monthlyReport: { findMany: jest.fn().mockResolvedValue(months), updateMany: jest.fn() },
+    engagement: { findMany: jest.fn().mockResolvedValue([]) },
     expense: {
       groupBy: jest.fn().mockResolvedValue([]),
       findMany: jest.fn().mockResolvedValue([]),
     },
     payrollPayLine: { findMany: jest.fn(async () => payLines) },
     staffMember: { findMany: jest.fn(async () => staff) },
+    workspace: { findFirst: jest.fn(async () => ({ programNames: [] })) },
     staffPayProof: { findMany: jest.fn(async () => proofs) },
     wexPayment: { findMany: jest.fn().mockResolvedValue([]) },
     participant: {
@@ -881,24 +885,66 @@ describe('WorkspacePayrollService by the lists', () => {
     })
   })
 
-  describe('a pay belongs to the month it was paid in', () => {
-    it("files April's run as another month's: its register rows and its bank debit say so, in the reconciliation too", async () => {
+  describe("a run's bank debit, found once for its two registers", () => {
+    it('counts the debit for each register of the run it pays, on Save and in the reconciliation', async () => {
       const s = setup({
         files: [
-          file('f-reg', 'payroll-register', [
-            'Pay period 03/15/2027 - 03/28/2027',
-            'Pay date 04/02/2027',
+          // Fictional: one run in a payments report and a per-person register; only the report states the debit.
+          file('f-pay', 'payroll-register', [
+            'Pay period 03/01/2027 - 03/14/2027',
+            'Pay date 03/18/2027',
             'Name Gross Net',
             'Morgan Lee 2,000.00 1,640.22',
             'Total direct deposits 1,640.22',
           ]),
-          file('f-bank', 'bank-statement', ['04/01/2027 ACH DEBIT PAYPEOPLE PAYROLL 1,640.22']),
+          file('f-reg', 'payroll-register', [
+            'Pay period 03/01/2027 - 03/14/2027',
+            'Pay date 03/18/2027',
+            'Name Gross Net',
+            'Morgan Lee 2,000.00 1,640.22',
+          ]),
+          file('f-bank', 'bank-statement', ['03/17/2027 ACH DEBIT PAYPEOPLE PAYROLL 1,640.22']),
+        ],
+      })
+      await s.service.save(owner, 'run-ws', { links: [] })
+      const kept = s.tx.payrollPayLine.createMany.mock.calls.flatMap(
+        (c: { data: { kind: string; registers?: number | null }[] }[]) => c[0].data
+      )
+      expect(kept.filter((l) => l.kind === 'bank-statement').map((l) => l.registers)).toEqual([2])
+      s.payLines.push({
+        id: 'pl-debit',
+        documentId: 'd-bank',
+        period: '2027-03',
+        kind: 'bank-statement',
+        mark: at('03/17/2027 ACH DEBIT PAYPEOPLE PAYROLL 1,640.22', 0),
+        flags: [],
+        registers: 2,
+        document: { fileName: 'bank.pdf', sha256: 'sha-bank' },
+      })
+      const out = await s.service.reconciliation(owner, W, '2027-03')
+      expect(out.registersDebited).toBe(2)
+    })
+  })
+
+  describe('a pay belongs to the month its work was done in', () => {
+    it("files April's run (its period in April) as another month's: its register rows and its bank debit say so, in the reconciliation too", async () => {
+      const s = setup({
+        files: [
+          // Paid in April for work in April: April's, though a March statement could show the debit.
+          file('f-reg', 'payroll-register', [
+            'Pay period 04/01/2027 - 04/14/2027',
+            'Pay date 04/18/2027',
+            'Name Gross Net',
+            'Morgan Lee 2,000.00 1,640.22',
+            'Total direct deposits 1,640.22',
+          ]),
+          file('f-bank', 'bank-statement', ['04/17/2027 ACH DEBIT PAYPEOPLE PAYROLL 1,640.22']),
         ],
       })
       const open = await s.service.get(owner, 'run-ws')
       const flagsOf = (text: string) => open.pays.find((p) => p.mark?.text.startsWith(text))!.flags
       expect(flagsOf('Morgan Lee')).toContain('other-month')
-      expect(flagsOf('04/01/2027')).toContain('other-month')
+      expect(flagsOf('04/17/2027')).toContain('other-month')
       // March's staff lines get nothing of April's run.
       expect(open.plan.proof).toEqual([])
       await s.service.save(owner, 'run-ws', { links: [] })
@@ -915,7 +961,7 @@ describe('WorkspacePayrollService by the lists', () => {
         documentId: 'd-bank',
         period: '2027-03',
         kind: 'bank-statement',
-        mark: at('04/01/2027 ACH DEBIT PAYPEOPLE PAYROLL 1,640.22', 0),
+        mark: at('04/17/2027 ACH DEBIT PAYPEOPLE PAYROLL 1,640.22', 0),
         flags: ['other-month'],
         document: { fileName: 'bank.pdf', sha256: 'sha-bank' },
       })
@@ -1423,6 +1469,8 @@ describe('payroll lines Save writes from payroll details', () => {
       monthlyReportId: w.reportId,
       payrollKey: w.key,
       payrollKind: null,
+      // A line without a split reads back as null, not the DbNull it was written with.
+      payrollSplit: w.split ?? null,
       reportLine: 'staff-salaries',
       documents: [],
     }
@@ -1446,5 +1494,163 @@ describe('payroll lines Save writes from payroll details', () => {
     const again = await plan(rows)
     expect(again.change.map((c) => c.id)).toEqual(['x-0'])
     expect(again.touched).toEqual(['r-ait'])
+  })
+})
+
+describe("the proof Save links to a staff line it writes: the run of the line's period", () => {
+  type Proofs = {
+    payrollLineProofs: (
+      w: PayrollLineWrite,
+      plan: unknown,
+      files: unknown[],
+      docIds: Map<string, string | null>
+    ) => { documentId: string; purpose: string }[]
+  }
+  const line = (text: string, y = 700): StatementLine => ({
+    page: 1,
+    text,
+    x: 40,
+    y,
+    width: 300,
+    height: 12,
+  })
+  // Fictional: the books date the run's pay 09/17; the register pays it 09/18 for 09/01 – 09/15.
+  const register = {
+    id: 'f-reg',
+    kind: 'payroll-register',
+    fileName: 'register.pdf',
+    lines: [line('Pay period 09/01/2026 - 09/15/2026'), line('Pay Date 09/18/2026', 685)],
+  }
+  const sheet = {
+    id: 'f-ts',
+    kind: 'timesheet',
+    fileName: 'journal.csv',
+    lines: [line('Morgan Lee | 1042 | Demo Youth Program (2026) | 1,250.00')],
+  }
+  const plan = {
+    staff: [
+      {
+        staff: { id: 's-morgan', name: 'Morgan Lee', engagementIds: ['e-isy'] },
+        timesheet: [{ fileId: 'f-ts', runId: 'f-reg', line: sheet.lines[0], amount: 1250 }],
+        register: [],
+        bank: [],
+      },
+    ],
+    stubs: [],
+  }
+  const write = (end: string): PayrollLineWrite => ({
+    key: `staff:s-morgan:${end}:taxes`,
+    kind: 'staff-taxes',
+    reportId: 'r-isy',
+    engagementId: 'e-isy',
+    budgetLineId: 'isy-fringe',
+    date: '2026-09-17',
+    start: null,
+    end,
+    amount: 95.63,
+    staffId: 's-morgan',
+    who: 'Morgan Lee',
+    account: '60000 Payroll Expenses',
+  })
+  const docIds = new Map<string, string | null>([['f-ts', 'd-ts']])
+  const proofs = (w: PayrollLineWrite) =>
+    (setup().service as unknown as Proofs).payrollLineProofs(w, plan, [register, sheet], docIds)
+
+  it("links the timesheet of the line's run though the books date it a day before the register's pay date", () => {
+    expect(proofs(write('2026-09-15'))).toEqual([
+      expect.objectContaining({ documentId: 'd-ts', purpose: 'timesheet' }),
+    ])
+  })
+
+  it("never links another run's timesheet", () => {
+    expect(proofs(write('2026-09-30'))).toEqual([])
+  })
+
+  it("never links a job report's row of another program", () => {
+    const row = plan.staff[0]!.timesheet[0]!
+    const other = {
+      ...plan,
+      staff: [{ ...plan.staff[0]!, timesheet: [{ ...row, program: 'e-ait' }] }],
+    }
+    const service = setup().service as unknown as Proofs
+    expect(
+      service.payrollLineProofs(write('2026-09-15'), other, [register, sheet], docIds)
+    ).toEqual([])
+    const ours = {
+      ...plan,
+      staff: [{ ...plan.staff[0]!, timesheet: [{ ...row, program: 'e-isy' }] }],
+    }
+    expect(
+      service.payrollLineProofs(write('2026-09-15'), ours, [register, sheet], docIds)
+    ).toHaveLength(1)
+  })
+
+  it("links the person's own pay stub of the run as the payment, never another run's", () => {
+    const stub = (end: string) => ({
+      fileId: `f-stub-${end}`,
+      staff: plan.staff[0]!.staff,
+      flags: [],
+      reading: { end, payDate: '2026-09-18', payLine: line('Net Pay 1,000.00') },
+    })
+    const withStubs = { ...plan, stubs: [stub('2026-09-15'), stub('2026-09-30')] }
+    const ids = new Map([
+      ...docIds,
+      ['f-stub-2026-09-15', 'd-stub-a'],
+      ['f-stub-2026-09-30', 'd-stub-b'],
+    ])
+    const out = (setup().service as unknown as Proofs).payrollLineProofs(
+      write('2026-09-15'),
+      withStubs,
+      [register, sheet],
+      ids
+    )
+    expect(out).toEqual([
+      expect.objectContaining({ documentId: 'd-ts', purpose: 'timesheet' }),
+      expect.objectContaining({ documentId: 'd-stub-a', purpose: 'payment' }),
+    ])
+  })
+})
+
+describe('the people a register pays who are on no list', () => {
+  const line = (text: string, y: number): StatementLine => ({
+    page: 1,
+    text,
+    x: 40,
+    y,
+    width: 300,
+    height: 12,
+  })
+  // Fictional: a register whose tax lines print words and an amount as a person's row does, and a job report whose
+  // header row names those taxes in its columns and whose rows name a person's department.
+  const files = [
+    {
+      id: 'f-reg',
+      documentId: null,
+      kind: 'payroll-register' as const,
+      fileName: 'register.pdf',
+      lines: [
+        line('Jordan Pike 1,200.00', 700),
+        line('Federal Income Tax 140.00', 685),
+        line('Community Outreach 75.00', 670),
+      ],
+    },
+    {
+      id: 'f-ts',
+      documentId: null,
+      kind: 'timesheet' as const,
+      fileName: 'job report.csv',
+      lines: [
+        line(
+          'Employee | Employee Id | Client Projects | Department | Federal Income Tax Amount',
+          700
+        ),
+        line('Jordan Pike | 12 | Demo Youth Program | Community Outreach | 1200.00', 685),
+      ],
+    },
+  ]
+  const plan = { staff: [], stubs: [] } as unknown as Parameters<typeof unlistedPeople>[0]
+
+  it("is someone a timesheet names as whose time it is, not a column's or a department's name", () => {
+    expect(unlistedPeople(plan, files, [], []).map((u) => u.name)).toEqual(['Jordan Pike'])
   })
 })

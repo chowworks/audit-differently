@@ -1,5 +1,14 @@
 import { DEFAULT_PAYROLL_READING, type StatementLine } from '@ad/types'
-import { payDateOn, payRunsOf, periodOn, runOfFile, runOfLine, suggestedRuns } from './pay-runs'
+import {
+  datesOf,
+  payDateOn,
+  payMonthOf,
+  payRunsOf,
+  periodOn,
+  runOfFile,
+  runOfLine,
+  suggestedRuns,
+} from './pay-runs'
 import { PayrollReadingService, readingChanges } from './payroll-reading.service'
 import { anyOf, putReadingInForce } from './reading'
 import { readStub, stubName } from './staff-match'
@@ -77,7 +86,7 @@ describe("the admin's reading words (Admin tools → Payroll reading)", () => {
         debitDaysFromPayDate: 3,
       })
     ).toEqual([
-      'Pay date labels: added "disbursement date"; removed "check date"',
+      'Pay date labels: added "disbursement date"; removed "payment date", "check date"',
       'Net pay labels: added "take home"; removed "net pay"',
       'Bank debit near the pay date: 7 → 3 days',
     ])
@@ -181,5 +190,79 @@ describe("the month's payroll runs, as the registers print them", () => {
       { payDate: '2026-01-16', start: '2025-12-28', end: '2026-01-10' },
       { payDate: '2026-01-30', start: '2026-01-11', end: '2026-01-24' },
     ])
+  })
+})
+
+describe('dates in words, and a run told by two of its files (owner, 2026-11-01)', () => {
+  it('reads a month in words: one date, a range in one month or across two', () => {
+    expect(datesOf('Payment date Oct 6, 2026')).toEqual(['2026-10-06'])
+    expect(datesOf('Pay period Sep 16 – 30, 2026')).toEqual(['2026-09-16', '2026-09-30'])
+    expect(datesOf('Sep 28 – Oct 3, 2026')).toEqual(['2026-09-28', '2026-10-03'])
+    expect(datesOf('Dec 28 – Jan 10, 2027')).toEqual(['2026-12-28', '2027-01-10'])
+  })
+
+  it("reads a register that prints its payment date and period in words, and states its debit as the employees' net pay", () => {
+    const reg = file('f-r', 'payroll-register', [
+      'Payroll register Pay period Sep 16 – 30, 2026',
+      'Payment date Oct 6, 2026',
+      'Employee Net Pay $4,120.55',
+    ])
+    expect(payDateOn(reg.lines)).toBe('2026-10-06')
+    expect(periodOn(reg)).toEqual({ start: '2026-09-16', end: '2026-09-30' })
+    expect(payRunsOf([reg])[0]!.totals).toEqual([4120.55])
+  })
+
+  it('counts a run in the month its work was done: its period, paid in the next month', () => {
+    expect(payMonthOf({ payDate: '2026-10-06', end: '2026-09-30' })).toBe('2026-09')
+    expect(payMonthOf({ payDate: '2026-10-06', end: null })).toBe('2026-10')
+  })
+
+  it('takes two files of one run (a payments report and a register) as one run for the files of its period', () => {
+    const report = file('f-pay', 'payroll-register', [
+      'Pay period 09/16/2026 - 09/30/2026',
+      'Pay Date 10/06/2026',
+      'Employee Net Pay $4,120.55',
+    ])
+    const reg = file('f-reg', 'payroll-register', [
+      'Payroll register Pay period Sep 16 – 30, 2026',
+      'Payment date Oct 6, 2026',
+    ])
+    const sheet = file('f-ts', 'timesheet', ['Pay date | 10/06/2026', 'Morgan Lee | 80.0'])
+    const runs = payRunsOf([report, reg])
+    expect(runOfFile(runs, sheet)?.fileId).toBe('f-pay')
+    expect(runOfLine(runs, sheet, sheet.lines[1]!)?.fileId).toBe('f-pay')
+  })
+
+  it("gives a run's register the debit its payments report found, on next month's statement", () => {
+    const reg = file('f-reg', 'payroll-register', [
+      'Payroll register Pay period Sep 16 – 30, 2026',
+      'Payment date Oct 6, 2026',
+      'Total 377.92',
+    ])
+    const report = file('f-pay', 'payroll-register', [
+      'Pay period 09/16/2026 - 09/30/2026',
+      'Pay Date 10/06/2026',
+      'Employee Net Pay $4,120.55',
+    ])
+    const october = file('f-oct', 'bank-statement', ['10/05 ACH DEBIT PAYPEOPLE PAYROLL 4,120.55'])
+    const runs = payRunsOf([reg, report, october])
+    expect(runs.map((r) => [r.fileId, r.debit?.amount])).toEqual([
+      ['f-reg', 4120.55],
+      ['f-pay', 4120.55],
+    ])
+    expect(runs[0]!.debit!.line).toBe(runs[1]!.debit!.line)
+    // A register of another run (another pay date) never takes it.
+    const other = file('f-other', 'payroll-register', [
+      'Pay period 09/16/2026 - 09/30/2026',
+      'Pay Date 10/09/2026',
+    ])
+    expect(payRunsOf([other, report, october])[0]!.debit).toBeNull()
+  })
+})
+
+describe('dates, reviewed (2026-11-01)', () => {
+  it('reads dates in the order written, and no year that is not one', () => {
+    expect(datesOf('Pay date 10/06/2026 Period Sep 16 - 30, 2026')[0]).toBe('2026-10-06')
+    expect(datesOf('09/18 ACH PAYROLL MAY 15 4821')).toEqual([])
   })
 })

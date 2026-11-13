@@ -17,7 +17,9 @@ import {
   type WorkspacePayrollOutputDto,
 } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
+import { AddPayrollBudgetLine } from '@/components/AddPayrollBudgetLine'
 import { ENGAGEMENT_COLORS } from '@/lib/engagement-colors'
+import { EngagementMark } from '@/components/EngagementMark'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty } from '@/components/ui'
 import { SLOT_LABEL } from '@/components/payroll-match/why'
@@ -100,12 +102,21 @@ export function PayrollActions({
   colors,
   onMatch,
   onShow,
+  onBudget,
+  programs,
 }: {
   period: string
   matched: boolean
+  /**
+   * The month's engagements no program name is (`engagementsWithoutProgram`), with where to link one: a timesheet's
+   * project proves nothing of theirs until then.
+   */
+  programs?: { engagements: string[]; href: string } | null
   cards: EngagementPayrollCardDto[] | null
   recon: PayrollReconciliationDto | null
   colors: Map<string, string>
+  /** A budget line was added from an action: owners only (the page reads the cards again). */
+  onBudget?: () => void
   /** Opens the match: owners only (an auditor changes nothing, so sees no button). */
   onMatch?: () => void
   /** Filters the reconciliation's grid to one kind and scrolls to it. */
@@ -145,6 +156,15 @@ export function PayrollActions({
       ) : null,
     })
   }
+  for (const name of programs?.engagements ?? [])
+    rows.push({
+      key: `no-program-${name}`,
+      sign: '⚠️',
+      who: name,
+      text: 'No program name is linked to it',
+      sub: "Its timesheets' projects prove none of its pay until one is. Link its program on the Program names card.",
+      go: <Link to={programs!.href}>Link its program →</Link>,
+    })
   for (const c of all) {
     const color = colorOf(colors, c.engagementId)
     for (const f of fixesOf(c, null))
@@ -157,6 +177,20 @@ export function PayrollActions({
           text: f.text,
           go: <Link to={f.href}>{f.action} →</Link>,
         })
+    for (const k of c.unbudgeted)
+      rows.push({
+        key: `${c.engagementId}-unbudgeted-${k}`,
+        sign: '⛔',
+        color,
+        who: c.engagementName,
+        text: `No budget line takes ${PAYROLL_BUDGET_KIND_LABELS[k].toLowerCase()}`,
+        sub: 'Its payroll from the files is left off the budget. Add the line, then Match again and Save.',
+        go: onBudget ? (
+          <AddPayrollBudgetLine engagementId={c.engagementId} kind={k} onAdded={onBudget} />
+        ) : (
+          <Link to={`/engagements/${c.engagementId}`}>See budget →</Link>
+        ),
+      })
     for (const l of c.lines)
       if (l.remaining < 0)
         rows.push({
@@ -205,7 +239,7 @@ export function PayrollActions({
                 <b>{r.text}</b>
                 {r.sub && <span className="wpd-action-sub">{r.sub}</span>}
                 <span className="ad-table-sub">
-                  {r.color && <span className="wps-dot" style={{ background: r.color }} />}
+                  {r.color && <EngagementMark color={r.color} />}
                   {r.who}
                 </span>
               </span>
@@ -262,11 +296,14 @@ export function BudgetTracking({
   cards,
   error,
   colors,
+  onMatchAgain,
 }: {
   period: string
   cards: EngagementPayrollCardDto[] | null
   error: string | null
   colors: Map<string, string>
+  /** Owners, when the month has files: match them again, for a month started after the last match. */
+  onMatchAgain?: () => void
 }) {
   return (
     <section className="grid gap-3" aria-label="Engagement Budget Tracking">
@@ -285,9 +322,12 @@ export function BudgetTracking({
       <div className="wpd-cards">
         {(cards ?? []).map((c) => {
           const color = colorOf(colors, c.engagementId)
-          const lines = c.lines.filter(
+          // Its budget lines with an amount or spending; with none, every line it has, so a budget with no amounts yet
+          // still shows as one.
+          const used = c.lines.filter(
             (l) => l.budget > 0 || l.billedThisPeriod > 0 || l.previouslyBilled > 0
           )
+          const lines = used.length ? used : c.lines
           const total = lines.reduce(
             (t, l) => ({
               budget: t.budget + l.budget,
@@ -303,9 +343,25 @@ export function BudgetTracking({
               style={{ borderTopColor: color }}
             >
               <header className="wps-card-head">
-                <span className="wps-name">{c.engagementName}</span>
+                <span className="wps-name">
+                  <EngagementMark color={color} />
+                  {c.engagementName}
+                </span>
                 <Chip tone="muted">{REPORT_STATUS_LABELS[c.monthStatus]}</Chip>
               </header>
+              {c.notMatched && (
+                <div className="wpd-unmatched" role="status">
+                  <p className="text-sm">
+                    <b>Not matched yet.</b> This month started after the last payroll match, so its
+                    payroll is not on it yet. Match the same files again to bring it in.
+                  </p>
+                  {onMatchAgain && (
+                    <Button size="sm" kind="navy" onClick={onMatchAgain}>
+                      Match again
+                    </Button>
+                  )}
+                </div>
+              )}
               <div className="ad-tablewrap">
                 <table className="ad-table wpd-table">
                   <thead>
@@ -320,7 +376,7 @@ export function BudgetTracking({
                     {lines.length === 0 && (
                       <tr>
                         <td colSpan={4} className="text-soft">
-                          No approved budget yet.
+                          No budget lines yet.
                         </td>
                       </tr>
                     )}
@@ -551,9 +607,14 @@ export function FileStats({
   if (!files || !data) return null
   const n = (k: string) => files.files.filter((f) => f.kind === k).length
   const runs = n('payroll-register')
-  const debits = data.pays.filter(
-    (p) => p.kind === 'bank-statement' && p.state === 'matched'
-  ).length
+  // A run's debit pays each of its registers: two registers paid together share one debit.
+  const debits = Math.min(
+    runs,
+    Math.max(
+      data.registersDebited ?? 0,
+      data.pays.filter((p) => p.kind === 'bank-statement' && p.state === 'matched').length
+    )
+  )
   return (
     <p className="wpd-filestats">
       <span className="wpd-pill wpd-pill-ok">
@@ -615,7 +676,7 @@ export function ResolveGrid({
 
   const engagement = (id: string, name: string, reportId: string) => (
     <Link to={`/reports/${reportId}`} className="wpd-eng">
-      <span className="wps-dot" style={{ background: colorOf(colors, id) }} />
+      <EngagementMark color={colorOf(colors, id)} />
       {name}
     </Link>
   )
@@ -659,15 +720,20 @@ export function ResolveGrid({
       rows.push({
         key: p.id,
         kind: p.state as ResolveKind,
-        text: `${p.mark?.text ?? ''} ${p.fileName} ${p.staff?.name ?? ''} ${p.item?.engagementName ?? ''}`,
+        text: `${p.named ?? ''} ${p.mark?.text ?? ''} ${p.fileName} ${p.staff?.name ?? ''} ${p.item?.engagementName ?? ''}`,
         missing: [],
         paid: (
           <>
-            <span className="ad-mono text-sm">{p.mark?.text ?? 'The whole file (scanned)'}</span>
-            <span className="ad-table-sub">
-              {p.staff ? `${p.staff.name} · ` : ''}
-              {p.notFunded ? `“${p.notFunded.reason}” · ${p.notFunded.by}` : ''}
+            {/* Whose pay it is first; the line the file prints under it. */}
+            <span className="font-semibold">{p.named ?? p.staff?.name ?? p.fileName}</span>
+            <span className="ad-table-sub ad-mono">
+              {p.mark?.text ?? 'The whole file (scanned)'}
             </span>
+            {p.notFunded && (
+              <span className="ad-table-sub">
+                “{p.notFunded.reason}” · {p.notFunded.by}
+              </span>
+            )}
           </>
         ),
         engagement: p.item ? (
@@ -940,6 +1006,8 @@ export function ResolveGrid({
           agree={agree.length}
           hidden={booksHidden}
           colors={colors}
+          period={data.period}
+          notImported={data.booksNotImported ?? []}
         />
       </section>
     </div>
@@ -957,6 +1025,8 @@ function BooksAgainstFiles({
   agree,
   hidden,
   colors,
+  period,
+  notImported,
 }: {
   /** The lines the tiles and the search leave. */
   rows: BooksRunDto[]
@@ -965,13 +1035,23 @@ function BooksAgainstFiles({
   /** Lines that agree, hidden until the Proof complete tile or a search asks for them. */
   hidden: number
   colors: Map<string, string>
+  period: string
+  /** Engagement months with no expenses imported yet: nothing to compare, one plain line instead. */
+  notImported: { engagementId: string; engagementName: string; reportId: string }[]
 }) {
-  if (!rows.length && !hidden) return null
+  if (!rows.length && !hidden && !notImported.length) return null
   return (
     <section className="grid gap-2" aria-label="Expenses against the payroll files">
       <h3 className="wpd-stats-head">
-        Expenses vs payroll files · {agree} of {total} agree
+        Expenses vs payroll files{total > 0 ? ` · ${agree} of ${total} agree` : ''}
       </h3>
+      {notImported.length > 0 && (
+        <p className="text-sm text-soft">
+          Expenses for {periodLabel(period)} not imported yet
+          {total > 0 ? ` for ${notImported.map((m) => m.engagementName).join(', ')}` : ''} — import
+          them to check them against payroll.
+        </p>
+      )}
       {agree < total && (
         <p className="text-sm">
           <b>A difference means the expenses are off, not the report:</b> the budget counts what the
@@ -1004,10 +1084,7 @@ function BooksAgainstFiles({
                 return (
                   <tr key={`${r.reportId}-${r.date}-${r.kind}`}>
                     <td>
-                      <span
-                        className="wps-dot"
-                        style={{ background: colorOf(colors, r.engagementId) }}
-                      />
+                      <EngagementMark color={colorOf(colors, r.engagementId)} />
                       {r.engagementName}
                     </td>
                     <td className="whitespace-nowrap">{shortDate(r.date)}</td>

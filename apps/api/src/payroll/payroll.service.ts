@@ -12,6 +12,8 @@ import {
   type Role,
   type PayrollDocumentKind,
   type PayrollLineSearch,
+  type BooksSplitDto,
+  type PayrollSplitDto,
   type PayrollUploadResult,
   type ReportDetail,
   type ReportLine,
@@ -29,6 +31,7 @@ import { describe } from '../documents/staged-file'
 import { PrismaService } from '../prisma/prisma.service'
 import { ReportsService } from '../reports/reports.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
+import { splitMarks } from '../expenses/books-note'
 import { COPIED_TYPES, itemCopy } from './mark-pdf'
 import { linesWithAmount, readStatement } from './statement-lines'
 
@@ -62,6 +65,27 @@ const isKind = (k: unknown): k is PayrollDocumentKind =>
 
 const round = (n: number) => Math.round(n * 100) / 100
 
+/** The most words a mark keeps (the database holds a mark's text to 300 characters). */
+export const MARK_TEXT_MAX = 300
+
+/** A cell that says nothing: empty, a dash, or a zero amount (0, 0.00, $0.00). */
+const EMPTY_CELL = /^(?:-|\$?-?0+(?:\.0+)?)?$/
+
+/**
+ * A line's words as a mark keeps them. A wide export (a payroll journal with 59 columns) prints rows far longer than a
+ * mark holds: its empty and zero cells go first, and what is still too long ends in "…". The full row stays in the
+ * file; the mark only shows where it is.
+ */
+export function markText(raw: string): string {
+  const text = raw.replace(/\s+/g, ' ').trim()
+  if (text.length <= MARK_TEXT_MAX) return text
+  const kept = text
+    .split(/ ?\| ?/)
+    .filter((c) => !EMPTY_CELL.test(c.trim()))
+    .join(' | ')
+  return kept.length <= MARK_TEXT_MAX ? kept : `${kept.slice(0, MARK_TEXT_MAX - 1).trimEnd()}…`
+}
+
 /** A mark as the person confirmed it, checked for shape: a whole page from 1 and a box of positive size. */
 export function cleanMark(input: unknown): StatementMark {
   const m = (input ?? {}) as Record<string, unknown>
@@ -91,9 +115,7 @@ export function cleanMark(input: unknown): StatementMark {
   }
   if (m.text != null) {
     if (typeof m.text !== 'string') throw new BadRequestException('The line text must be text')
-    const text = m.text.replace(/\s+/g, ' ').trim()
-    if (text.length > 300)
-      throw new BadRequestException('The line text must be at most 300 characters')
+    const text = markText(m.text)
     if (text) out.text = text
   }
   return out
@@ -204,7 +226,7 @@ export class PayrollService {
       const e = await this.prisma.expense.findFirst({ where: { id, ...tenantWhere(caller) } })
       if (!e) throw new NotFoundException()
       const r = await this.reports.editable(caller, e.monthlyReportId)
-      if (!PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine))
+      if (!PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine) || e.booksKey)
         throw new BadRequestException('Only payroll lines are linked to a bank statement here')
       return {
         r,
@@ -298,8 +320,19 @@ export class PayrollService {
     const saved = (Array.isArray(link.marks) ? link.marks : []) as unknown as StatementMark[]
     const marks = saved.length ? saved : link.mark ? [link.mark as unknown as StatementMark] : []
     const original = new Uint8Array(await this.storage.read(doc.storageKey))
+    // A split staff line's pay stub opens with the note of its split (owner's decision, 2026-11-03).
+    const note =
+      'expense' in link && doc.kind === 'paystub'
+        ? ((link.expense.payrollSplit ?? null) as PayrollSplitDto | null)
+        : null
+    // A books line's accounting export opens with how the books charge its shared cost (owner's decision, 2026-11-12).
+    const booksNote =
+      'expense' in link && doc.kind === 'payroll-details'
+        ? ((link.expense.booksSplit ?? null) as BooksSplitDto | null)
+        : null
+    const drawn = booksNote ? splitMarks(booksNote) : marks
     const bytes = COPIED_TYPES.includes(doc.contentType)
-      ? (await itemCopy(original, marks)).bytes
+      ? (await itemCopy(original, drawn, note, booksNote)).bytes
       : original
     const subject =
       'expense' in link ? `expense ${link.expense.itemNumber}` : 'a work-experience payment'

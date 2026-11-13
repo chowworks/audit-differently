@@ -42,8 +42,9 @@ function toMark(v: PageViewport, page: number, b: Box): StatementMark {
 }
 
 /**
- * A payroll file's page drawn in the browser with pdf.js, from its bytes as the API serves them (which logs the read),
- * with the marked line highlighted. With `onDraw`, the person drags a box on the page to mark the line by hand.
+ * A payroll file drawn in the browser with pdf.js, from its bytes as the API serves them (which logs the read), every
+ * page one under another in a pane that scrolls, opened at the marked line's page with the line highlighted. A page is
+ * drawn as it comes near view. With `onDraw`, the person drags a box on a page to mark the line by hand.
  * Financial documents and pay stubs only: any other personal document is never previewed, so this shows nothing for one.
  */
 export function StatementViewer({
@@ -57,6 +58,7 @@ export function StatementViewer({
   doc: Pick<DocumentDto, 'id' | 'sensitivity'> & { kind?: string }
   /** Where the bytes come from, when not a filed bank statement: a payroll match's staged file. */
   src?: string
+  /** The page it opens at, scrolled to the top of the pane; the mark's page when there is a mark. */
   page?: number
   mark?: StatementMark | null
   onDraw?: (mark: StatementMark) => void
@@ -64,20 +66,17 @@ export function StatementViewer({
   downloadName?: string
 }) {
   const api = useApi()
-  const canvas = useRef<HTMLCanvasElement>(null)
+  const pane = useRef<HTMLDivElement>(null)
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
-  const [page, setPage] = useState(startPage)
-  const [viewport, setViewport] = useState<PageViewport | null>(null)
-  const [drawing, setDrawing] = useState<{ x: number; y: number; box: Box } | null>(null)
-  const [drawn, setDrawn] = useState<Box | null>(null)
+  /** The first page's size at the pane's width: every page's place before it is drawn. */
+  const [first, setFirst] = useState<{ width: number; height: number } | null>(null)
+  const [drawn, setDrawn] = useState<{ page: number; box: Box } | null>(null)
   const [error, setError] = useState<string | null>(null)
   /** The bytes as served, kept for Download: saving them fetches nothing again, so no second open is logged. */
   const kept = useRef<Blob | null>(null)
   // A pay stub is shown like the other payroll files (owner's decision, 2026-10-16); no other personal document is.
   const financial = doc.sensitivity === 'financial' || doc.kind === 'paystub'
-
-  useEffect(() => setPage(mark?.page ?? startPage), [mark?.page, startPage])
-  useEffect(() => setDrawn(null), [page])
+  const open = mark?.page ?? startPage
 
   // The API client through a ref: its identity changes with Clerk's user object, and fetching again would log
   // another open of the statement.
@@ -98,7 +97,13 @@ export function StatementViewer({
         kept.current = new Blob([data.slice(0)], { type: 'application/pdf' })
         loading = getDocument({ data: new Uint8Array(data) })
         const opened = await loading.promise
-        if (!done) setPdf(opened)
+        if (done) return
+        const p = await opened.getPage(1)
+        const one = p.getViewport({ scale: 1 })
+        const width = pane.current?.clientWidth || 700
+        if (done) return
+        setFirst({ width, height: (one.height * width) / one.width })
+        setPdf(opened)
       } catch (e) {
         if (!done) setError(`The statement could not be shown: ${(e as Error).message}`)
       }
@@ -107,19 +112,135 @@ export function StatementViewer({
       done = true
       // Off the page before it is destroyed, so nothing draws from a closed document.
       setPdf(null)
-      setViewport(null)
+      setFirst(null)
       void loading?.destroy()
     }
   }, [doc.id, financial, src])
 
+  // Opened at the page asked for (the mark's): scrolled to its top once the pages are placed.
   useEffect(() => {
-    if (!pdf || !canvas.current) return
+    if (!pdf || !first || !pane.current) return
+    const at = pane.current.querySelector<HTMLElement>(
+      `[data-page="${Math.min(Math.max(open, 1), pdf.numPages)}"]`
+    )
+    if (at) pane.current.scrollTop = at.offsetTop
+  }, [pdf, first, open])
+
+  if (!financial)
+    return <p className="text-sm text-soft">Personal documents are never previewed.</p>
+
+  return (
+    <div className="ad-statement">
+      <ErrorNote message={error} />
+      {pdf && (downloadName || pdf.numPages > 1) && (
+        <div className="ad-statement-bar">
+          <span className="text-xs text-soft">
+            {pdf.numPages > 1 ? `${pdf.numPages} pages · scroll to see them all` : ''}
+          </span>
+          {downloadName && (
+            <Button
+              size="sm"
+              kind="navy"
+              onClick={() => {
+                if (!kept.current) return
+                const url = URL.createObjectURL(kept.current)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = downloadName
+                document.body.appendChild(a)
+                a.click()
+                a.remove()
+                setTimeout(() => URL.revokeObjectURL(url), 10_000)
+              }}
+            >
+              Download
+            </Button>
+          )}
+        </div>
+      )}
+      <div className="ad-statement-pane" ref={pane}>
+        {!pdf && !error && <p className="text-sm text-soft">Opening the statement…</p>}
+        {pdf &&
+          first &&
+          Array.from({ length: pdf.numPages }, (_, i) => i + 1).map((n) => (
+            <PageView
+              key={n}
+              pdf={pdf}
+              n={n}
+              of={pdf.numPages}
+              width={first.width}
+              guess={first.height}
+              root={pane}
+              mark={mark && mark.page === n ? mark : null}
+              drawn={drawn?.page === n ? drawn.box : null}
+              onDraw={
+                onDraw
+                  ? (box, v) => {
+                      setDrawn({ page: n, box })
+                      onDraw(toMark(v, n, box))
+                    }
+                  : undefined
+              }
+              onError={setError}
+            />
+          ))}
+      </div>
+    </div>
+  )
+}
+
+/** One page: drawn when it comes near view, with its mark and the box drawn on it. */
+function PageView({
+  pdf,
+  n,
+  of,
+  width,
+  guess,
+  root,
+  mark,
+  drawn,
+  onDraw,
+  onError,
+}: {
+  pdf: PDFDocumentProxy
+  n: number
+  of: number
+  width: number
+  /** Its height until drawn: the first page's. */
+  guess: number
+  root: React.RefObject<HTMLDivElement | null>
+  mark: StatementMark | null
+  drawn: Box | null
+  onDraw?: (box: Box, v: PageViewport) => void
+  onError: (message: string) => void
+}) {
+  const holder = useRef<HTMLDivElement>(null)
+  const canvas = useRef<HTMLCanvasElement>(null)
+  const [near, setNear] = useState(false)
+  const [viewport, setViewport] = useState<PageViewport | null>(null)
+  const [drawing, setDrawing] = useState<{ x: number; y: number; box: Box } | null>(null)
+
+  useEffect(() => {
+    const el = holder.current
+    if (!el || near) return
+    if (typeof IntersectionObserver === 'undefined') return setNear(true)
+    const seen = new IntersectionObserver(
+      (es) => {
+        if (es.some((e) => e.isIntersecting)) setNear(true)
+      },
+      { root: root.current, rootMargin: '600px 0px' }
+    )
+    seen.observe(el)
+    return () => seen.disconnect()
+  }, [near, root])
+
+  useEffect(() => {
+    if (!near || !canvas.current) return
     let cancelled = false
     let task: { cancel: () => void; promise: Promise<void> } | null = null
     ;(async () => {
       try {
-        const p = await pdf.getPage(Math.min(Math.max(page, 1), pdf.numPages))
-        const width = canvas.current?.parentElement?.clientWidth || 700
+        const p = await pdf.getPage(n)
         const v = p.getViewport({ scale: width / p.getViewport({ scale: 1 }).width })
         const c = canvas.current
         if (cancelled || !c) return
@@ -137,68 +258,29 @@ export function StatementViewer({
         if (!cancelled) setViewport(v)
       } catch (e) {
         // The document was closed while the page was drawing (another statement was chosen), or the page failed.
-        if (!cancelled) setError(`The page could not be drawn: ${(e as Error).message}`)
+        if (!cancelled) onError(`The page could not be drawn: ${(e as Error).message}`)
       }
     })()
     return () => {
       cancelled = true
       task?.cancel()
     }
-  }, [pdf, page])
-
-  if (!financial)
-    return <p className="text-sm text-soft">Personal documents are never previewed.</p>
+  }, [near, pdf, n, width, onError])
 
   const point = (e: React.PointerEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     return { x: e.clientX - r.left, y: e.clientY - r.top }
   }
-  const shown = mark && mark.page === page && viewport ? toBox(viewport, mark) : null
+  const shown = mark && viewport ? toBox(viewport, mark) : null
 
   return (
-    <div className="ad-statement">
-      <ErrorNote message={error} />
-      {pdf && downloadName && (
-        <div className="ad-statement-download">
-          <Button
-            size="sm"
-            kind="navy"
-            onClick={() => {
-              if (!kept.current) return
-              const url = URL.createObjectURL(kept.current)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = downloadName
-              document.body.appendChild(a)
-              a.click()
-              a.remove()
-              setTimeout(() => URL.revokeObjectURL(url), 10_000)
-            }}
-          >
-            Download
-          </Button>
-        </div>
+    <div className="ad-statement-pageblock" data-page={n} ref={holder}>
+      {of > 1 && (
+        <p className="ad-statement-pageno">
+          Page {n} of {of}
+        </p>
       )}
-      {pdf && pdf.numPages > 1 && (
-        <div className="ad-statement-pages">
-          <Button size="sm" kind="ghost" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-            ‹ previous page
-          </Button>
-          <span className="text-xs text-soft">
-            Page {page} of {pdf.numPages}
-          </span>
-          <Button
-            size="sm"
-            kind="ghost"
-            disabled={page >= pdf.numPages}
-            onClick={() => setPage(page + 1)}
-          >
-            next page ›
-          </Button>
-        </div>
-      )}
-      <div className="ad-statement-page">
-        {!pdf && !error && <p className="text-sm text-soft">Opening the statement…</p>}
+      <div className="ad-statement-page" style={viewport ? undefined : { height: guess, width }}>
         <canvas ref={canvas} />
         <div
           className={`ad-statement-overlay ${onDraw ? 'ad-statement-draw' : ''}`}
@@ -206,7 +288,6 @@ export function StatementViewer({
             if (!onDraw || !viewport) return
             const p = point(e)
             ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-            setDrawn(null)
             setDrawing({ ...p, box: { left: p.x, top: p.y, width: 0, height: 0 } })
           }}
           onPointerMove={(e) => {
@@ -227,8 +308,7 @@ export function StatementViewer({
             const b = drawing.box
             setDrawing(null)
             if (b.width < 4 || b.height < 4) return
-            setDrawn(b)
-            onDraw(toMark(viewport, page, b))
+            onDraw(b, viewport)
           }}
         >
           {shown && <div className="ad-statement-mark" style={shown} />}

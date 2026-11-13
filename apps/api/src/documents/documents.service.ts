@@ -32,6 +32,7 @@ export function keyInWorkspace(doc: {
 }
 import {
   ALLOWED_UPLOAD_TYPES,
+  CSV_DOCUMENT_KINDS,
   DOCUMENT_KIND_LABELS,
   DOCUMENT_KINDS,
   DOCUMENT_SENSITIVITY,
@@ -73,8 +74,18 @@ const SIGNATURES: Record<string, Buffer[]> = {
   ],
 }
 
-/** Whether the bytes begin the way files of `mimetype` do; the browser's claim alone is never trusted. */
+/** Whether the bytes begin the way files of `mimetype` do; the browser's claim alone is never trusted. A CSV has no
+ * signature: it must be UTF-8 text with no NUL byte. */
 export function looksLike(buffer: Buffer, mimetype: string): boolean {
+  if (mimetype === 'text/csv') {
+    if (!buffer.length || buffer.includes(0)) return false
+    try {
+      new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+      return true
+    } catch {
+      return false
+    }
+  }
   const starts = SIGNATURES[mimetype]
   if (!starts) return false
   return starts.some(
@@ -137,6 +148,10 @@ export class DocumentsService {
     if (!ext)
       throw new BadRequestException(
         `Uploads must be one of: ${Object.values(ALLOWED_UPLOAD_TYPES).join(', ')}`
+      )
+    if (ext === 'csv' && !(CSV_DOCUMENT_KINDS as readonly string[]).includes(body.kind))
+      throw new BadRequestException(
+        'A CSV is taken as a timesheet, payroll register or payroll details file only'
       )
     if (file.size > MAX_UPLOAD_BYTES) throw new BadRequestException('Uploads are limited to 25 MB')
     if (body.period && !/^\d{4}-\d{2}$/.test(body.period))

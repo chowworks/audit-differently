@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CheckDto, ReportDetail } from '@ad/types'
-import { placeChecks } from './LayoutC'
+import { placeChecks, proofsShown, tablesOfLine } from './LayoutC'
 
 const check = (id: string, on: Partial<CheckDto>): CheckDto => ({
   id,
@@ -41,5 +41,61 @@ describe('the checks on the whole month', () => {
     expect(ids(month(true))).toEqual(['whole-month'])
     expect(ids(month(undefined))).toEqual(['whole-month'])
     expect(ids(month(false))).toEqual(['whole-month'])
+  })
+})
+
+describe('proofsShown', () => {
+  const doc = (id: string, purpose: string, kind: string) =>
+    ({ purpose, document: { id, kind } }) as never as {
+      purpose: 'payment' | 'timesheet' | 'register'
+      document: { id: string; kind: string }
+    }
+
+  it('shows the pay stub as evidence of payment, whichever order the proofs come in, and the bank debit beside it', () => {
+    const bank = doc('b', 'payment', 'bank-statement')
+    const stub = doc('s', 'payment', 'paystub')
+    const time = doc('t', 'timesheet', 'timesheet')
+    for (const docs of [
+      [bank, stub, time],
+      [stub, bank, time],
+    ]) {
+      const got = proofsShown(['timesheet', 'register', 'payment'], docs)
+      expect(got.have.get('payment')).toBe(stub)
+      expect(got.have.get('timesheet')).toBe(time)
+      expect(got.have.has('register')).toBe(false)
+      expect(got.extra).toEqual([bank])
+    }
+  })
+
+  it('shows a bank debit as evidence of payment when no pay stub is attached', () => {
+    const bank = doc('b', 'payment', 'bank-statement')
+    expect(proofsShown(['payment'], [bank])).toEqual({
+      have: new Map([['payment', bank]]),
+      extra: [],
+    })
+  })
+})
+
+describe("a budget line's filter", () => {
+  const r = {
+    budgetLines: [
+      { id: 'fringe', reportLine: 'staff-fringe' },
+      { id: 'salaries', reportLine: 'staff-salaries' },
+      { id: 'supplies', reportLine: 'supplies' },
+    ],
+    expenses: [
+      { id: 'tax', reportLine: 'staff-fringe', budgetLineId: 'fringe', fromPayroll: true },
+      { id: 'fee', reportLine: 'staff-fringe', budgetLineId: 'fringe', fromBooks: true },
+      { id: 'pay', reportLine: 'staff-salaries', budgetLineId: 'salaries', fromPayroll: true },
+    ],
+  } as unknown as ReportDetail
+
+  it("filters the expenses too when a payroll line has the books' expenses on it", () => {
+    expect(tablesOfLine(r, 'fringe')).toEqual({ payroll: true, expenses: true })
+  })
+
+  it('filters only its own table otherwise', () => {
+    expect(tablesOfLine(r, 'salaries')).toEqual({ payroll: true, expenses: false })
+    expect(tablesOfLine(r, 'supplies')).toEqual({ payroll: false, expenses: true })
   })
 })

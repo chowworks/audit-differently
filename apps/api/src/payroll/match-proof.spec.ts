@@ -58,10 +58,11 @@ const stub = (id: string, who: string) =>
 
 describe('payroll proof matching', () => {
   it('reads the dates a payroll file writes', () => {
+    // In reading order: the first date written is the first one read (a pay date before a period).
     expect(datesOf('09/07/2026 - 9.20.26, 2026-09-25 and 20260930')).toEqual([
-      '2026-09-25',
       '2026-09-07',
       '2026-09-20',
+      '2026-09-25',
       '2026-09-30',
     ])
   })
@@ -159,7 +160,7 @@ describe('payroll proof matching', () => {
     expect(matchSlot(staffLine, 'bank', [bank]).pick).toBeNull()
   })
 
-  describe("a pay belongs to the month it was paid in (owner's decision, 2026-10-19)", () => {
+  describe("a pay belongs to the month its work was done (owner's decision, 2026-11-01)", () => {
     // Run 1's pay period starts in August and is paid in September; run 2 is paid in September too.
     const reg1 = file('r1', 'payroll-register', 'Payroll register 09.11.2026.pdf', [
       'Pay period 08/24/2026 - 09/06/2026',
@@ -196,7 +197,7 @@ describe('payroll proof matching', () => {
     it("never takes another month's register or pay stub as a month's proof", () => {
       const m = matchSlot({ ...augustPeriod, month: '2026-08' }, 'register', [reg1])
       expect(m.pick).toBeNull()
-      expect(m.candidates[0]!.why).toBe("Paid on 09/11/2026: another month's pay.")
+      expect(m.candidates[0]!.why).toBe("For work through 09/06/2026: another month's pay.")
       const stub = file('s', 'paystub', 'stub.pdf', [
         'Employee: Jordan Sample',
         'Pay period 08/24/2026 - 09/06/2026',
@@ -205,6 +206,27 @@ describe('payroll proof matching', () => {
       ])
       expect(matchSlot({ ...augustPeriod, month: '2026-08' }, 'stub', [stub]).pick).toBeNull()
       expect(matchSlot(augustPeriod, 'stub', [stub]).pick).toBe('s')
+    })
+
+    it("takes a run worked in September and paid in October as September's proof, not October's", () => {
+      const october = file('r3', 'payroll-register', 'Payroll register 10.02.2026.pdf', [
+        'Pay period 09/21/2026 - 09/30/2026',
+        'Pay date 10/02/2026',
+        'Employee Gross pay Taxes Net pay',
+        'Jordan Sample $90.00 $6.89 $83.11',
+        'Total direct deposits $1,210.40',
+      ])
+      const late: ProofItem = {
+        ...jordan,
+        amount: 90,
+        start: '2026-09-21',
+        end: '2026-09-30',
+        month: '2026-09',
+      }
+      expect(matchSlot(late, 'register', [october]).pick).toBe('r3')
+      const m = matchSlot({ ...late, month: '2026-10' }, 'register', [october])
+      expect(m.pick).toBeNull()
+      expect(m.candidates[0]!.why).toBe("For work through 09/30/2026: another month's pay.")
     })
 
     it('gives a staff line the debit of the run paid on its date, of two runs in the month', () => {

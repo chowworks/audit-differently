@@ -1,5 +1,5 @@
-import { DEFAULT_HIGHLIGHTS, DEFAULT_PAYROLL_READING } from '@ad/types'
-import { sampleFiles } from '../../prisma/payroll-workspace-sample'
+import { DEFAULT_HIGHLIGHTS, DEFAULT_PAYROLL_READING, NOT_OURS } from '@ad/types'
+import { PROGRAM_NAMES, sampleFiles } from '../../prisma/payroll-workspace-sample'
 import { member, W } from '../core/testing/callers'
 import { dbTestsEnabled } from '../core/testing/tenant-db'
 import { MatchStatsService } from '../core/match-stats.service'
@@ -17,8 +17,8 @@ const KIND: Record<string, string> = {
   Timesheets: 'timesheet',
   'Payroll registers': 'payroll-register',
   'Pay stubs': 'paystub',
-  'Bank statements': 'bank-statement',
-  'Payroll details': 'payroll-details',
+  'Bank & card statements': 'bank-statement',
+  'QuickBooks transactions': 'payroll-details',
 }
 const ISY = { id: 'e-isy', name: 'In-School Youth Coding Pathway' }
 const AIT = { id: 'e-ait', name: 'Adult IT Training' }
@@ -93,6 +93,8 @@ suite("the workspace payroll plan for the September sample, on the demo seed's S
   beforeAll(async () => {
     const files = []
     for (const [i, f] of (await sampleFiles()).entries()) {
+      // Program names is the workspace's list (its own upload), never a file of the run.
+      if (f.folder === 'Program names') continue
       const kind = KIND[f.folder]!
       // Payroll details is a sheet: its rows are its lines, as the worker reads it.
       const sheet = kind === 'payroll-details'
@@ -227,7 +229,8 @@ suite("the workspace payroll plan for the September sample, on the demo seed's S
       },
       payrollMatchFile: { count: jest.fn().mockResolvedValue(0) },
       payrollDroppedDecision: { findMany: jest.fn(async () => []) },
-      monthlyReport: { findMany: jest.fn().mockResolvedValue(months) },
+      monthlyReport: { findMany: jest.fn().mockResolvedValue(months), updateMany: jest.fn() },
+      engagement: { findMany: jest.fn().mockResolvedValue([]) },
       // The demo's budget lines: Staff Salaries holds staff pay and taxes, WEX the participants' (the defaults).
       budgetLine: {
         findMany: jest.fn(async () =>
@@ -264,6 +267,15 @@ suite("the workspace payroll plan for the September sample, on the demo seed's S
         ),
       },
       payrollPayLine: { findMany: jest.fn(async () => []) },
+      // The sample's Program names file, as the workspace keeps it once an owner links each to an engagement.
+      workspace: {
+        findFirst: jest.fn(async () => ({
+          programNames: PROGRAM_NAMES.map((names, i) => ({
+            names,
+            engagementId: [ISY.id, AIT.id, NOT_OURS][i]!,
+          })),
+        })),
+      },
       staffMember: {
         findMany: jest.fn(async () => [
           tagged('s-morgan', 'Morgan Lee', [ISY, AIT]),

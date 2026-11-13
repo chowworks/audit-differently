@@ -1,0 +1,128 @@
+/* The month's expenses from the books (WorkspaceExpenses.tsx). */
+.wex-mapping {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.wex-mapping-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.wex-mapping select,
+.wex-table select {
+  max-width: 100%;
+}
+.wex-why > summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+.wex-why[open] > summary {
+  margin-bottom: 6px;
+}
+.wex-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.wex-receipts > summary {
+  cursor: pointer;
+  list-style: none;
+  margin-top: 4px;
+}
+.wex-bills {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.wex-bills > li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+.wex-bill-do {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.wex-bill-do select {
+  max-width: 220px;
+}
+/* A payment's statement line: its words, wrapped, never wider than the row. */
+.wex-bill-line {
+  max-width: 360px;
+  overflow-wrap: anywhere;
+}
+.wex-receipts summary .ad-chip + .ad-chip {
+  margin-left: 4px;
+}
+.wex-file {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.wex-file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.wex-file-small {
+  padding: 2px 8px;
+  font-size: 0.875rem;
+}
+/* How the books charge a shared cost to every program, this line's row marked. */
+.wex-split summary {
+  cursor: pointer;
+}
+.wex-split-table {
+  margin: 4px 0;
+  font-size: 0.8rem;
+}
+.wex-split-table td {
+  padding: 1px 8px 1px 0;
+}
+.wex-split-mine td {
+  font-weight: 600;
+  background: var(--mark-fill);
+  color: var(--mark-ink);
+}
+.wex-split-total td {
+  border-top: 1px solid var(--line);
+  font-weight: 600;
+}
+.wex-removals {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wex-removals > li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+.wex-removals > li:first-child {
+  border-top: 0;
+}

@@ -11,16 +11,19 @@ import {
   Post,
   Query,
   Res,
+  Put,
+  UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common'
-import { FilesInterceptor } from '@nestjs/platform-express'
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express'
 import type { Response } from 'express'
 import type {
   PayLineLinkInput,
   PayrollMatchProgress,
   PayrollReconciliationDto,
+  ProgramNamesDto,
   StaffListDto,
   StaffSuggestionDto,
   WorkspacePayrollFilesDto,
@@ -76,6 +79,34 @@ export class WorkspacePayrollController {
     )
   }
 
+  /** The workspace's program names: each program's names in the books and the payroll company's files. */
+  @Get('workspaces/:id/program-names')
+  async programNames(@UserId() userId: string, @Param('id') id: string): Promise<ProgramNamesDto> {
+    return this.payroll.programNames(await this.callers.load(userId), id)
+  }
+
+  /** A program names file (the payroll zip's "Program names" folder) merged into the list; read, never stored. */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post('workspaces/:id/program-names')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
+  async addProgramNames(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File | undefined
+  ): Promise<ProgramNamesDto> {
+    return this.payroll.addProgramNames(await this.callers.load(userId), id, file)
+  }
+
+  /** The list as an owner left it. */
+  @Put('workspaces/:id/program-names')
+  async setProgramNames(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Body() body: { programs?: unknown }
+  ): Promise<ProgramNamesDto> {
+    return this.payroll.setProgramNames(await this.callers.load(userId), id, body?.programs)
+  }
+
   @Get('workspaces/:id/payroll/:period/reconciliation')
   async reconciliation(
     @UserId() userId: string,
@@ -114,6 +145,22 @@ export class WorkspacePayrollController {
     @Param('period') period: string
   ): Promise<WorkspacePayrollFilesDto> {
     return this.payroll.files(await this.callers.load(userId), id, period)
+  }
+
+  /** One file of the month's set as uploaded: to view or download. Logged. */
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('workspaces/:id/payroll/:period/files/:documentId/file')
+  async setFile(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('period') period: string,
+    @Param('documentId') documentId: string,
+    @Res() res: Response
+  ): Promise<void> {
+    sendInline(
+      res,
+      await this.payroll.setFile(await this.callers.load(userId), id, period, documentId)
+    )
   }
 
   /** Remove a file: a run that takes it out of the month's set, matched again from the rest, to check and save. */

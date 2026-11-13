@@ -10,8 +10,8 @@ import { bucket, defineRailway, github, postgres, preserve, project, service } f
  *   - the API connects as the restricted role (DATABASE_URL) over TLS; the owner URL is for migrations only, and
  *     also over TLS; src/startup-checks.ts refuses to start otherwise;
  *   - REQUIRE_TENANT_RLS=on in every environment; NODE_ENV=production in production, set here, not by hand;
- *   - production Postgres has no public TCP proxy: it is reachable on Railway's private network only. The dev
- *     Postgres has one, because laptops develop against it, and it holds fictional seed data only;
+ *   - no Postgres has a public TCP proxy: each is reachable on Railway's private network only. Laptops reach dev's
+ *     database through `api-dev`, and run scripts in a shell on that service (`railway ssh`, docs/dev-api.md);
  *   - production's Postgres volume is backed up daily and point-in-time recovery archives to the
  *     Postgres-PITR-Prod-Archive bucket (both switched on in that volume's settings; the bucket is declared for production only, dev holds
  *     a fictional seed that `db:seed` recreates);
@@ -64,12 +64,12 @@ export default defineRailway((ctx) => {
     RECEIPTS_DOMAIN: preserve(),
   }
 
-  // `dev`: the shared development environment. Laptops point apps/api/.env at its database through the TCP proxy
-  // (fictional seed only), and `api-dev` runs beside it, deployed by hand from any branch with
+  // `dev`: the shared development environment (fictional seed only). Its database has no public address: laptops
+  // point the web app at `api-dev`, which runs beside it on the private network, deployed by hand from any branch with
   // apps/api/scripts/deploy-dev.sh. No GitHub source, so nothing deploys it automatically, and none of
   // production's secrets live here. Create the environment first with `railway environment new dev`; IaC can't.
   if (ctx.isEnvironment('dev')) {
-    Postgres.networking = { privateNetworkEndpoint: 'postgres', tcpProxies: { '5432': {} } }
+    Postgres.networking = { privateNetworkEndpoint: 'postgres' }
     const apiDev = service('api-dev', {
       build,
       // The seed is fictional and idempotent; it keeps the dev data in its starting shape on every deploy.

@@ -39,6 +39,11 @@ const BLANK: string[] = []
  * a zip, a .csv must be UTF-8 text with no NUL byte.
  */
 export async function readTable(buffer: Buffer, fileName: string): Promise<Table> {
+  return tableOf(await readGrid(buffer, fileName))
+}
+
+/** An uploaded .csv or .xlsx as its rows of text cells, every row (no header found or dropped); checked as `readTable`. */
+export async function readGrid(buffer: Buffer, fileName: string): Promise<string[][]> {
   if (buffer.length === 0) throw bad('The file is empty')
   if (buffer.length > MAX_IMPORT_BYTES) throw bad('Import files are limited to 5 MB')
   const ext = /\.([a-z0-9]+)$/i.exec(fileName)?.[1]?.toLowerCase()
@@ -51,7 +56,7 @@ export async function readTable(buffer: Buffer, fileName: string): Promise<Table
   } else {
     throw bad('Choose a .csv or .xlsx file')
   }
-  return tableOf(grid)
+  return grid
 }
 
 /** The text of a CSV, if it is UTF-8 with no NUL byte (a binary file, or a spreadsheet renamed .csv, is not). */
@@ -68,21 +73,25 @@ export function csvText(buffer: Buffer): string {
  * RFC 4180 CSV: quoted fields with commas, doubled quotes and line breaks inside; CRLF or LF line ends. A row wider
  * than MAX_IMPORT_COLUMNS, or more rows with values than an import takes, is refused as it is read.
  */
-export function parseCsv(text: string): string[][] {
+export function parseCsv(
+  text: string,
+  /** How many rows with values and columns it takes; an import's by default. */
+  limits: { rows: number; columns: number } = { rows: MAX_CSV_ROWS, columns: MAX_IMPORT_COLUMNS }
+): string[][] {
   const rows: string[][] = []
   let filled = 0
   let row: string[] = []
   let field = ''
   let quoted = false
   const push = () => {
-    if (row.length >= MAX_IMPORT_COLUMNS) throw tooWide()
+    if (row.length >= limits.columns) throw tooWide()
     row.push(field)
     field = ''
   }
   const end = () => {
     if (row.every((c) => c.trim() === '')) rows.push(BLANK)
     else {
-      if (++filled > MAX_CSV_ROWS) throw tooMany()
+      if (++filled > limits.rows) throw tooMany()
       rows.push(row)
     }
     row = []
