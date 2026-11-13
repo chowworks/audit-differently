@@ -410,6 +410,8 @@ model Expense {
   booksKey          String?
   /// A books line's bills and the receipt of each (BooksBillSaved[] in packages/types), written by Save (migration 20261112000100)
   booksBills        Json?
+  /// A books line's shared cost as the books charge it to every program (BooksSplitDto), written by Save (migration 20261112000300)
+  booksSplit        Json?
   createdById       String?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt

@@ -15,6 +15,7 @@ import {
   type BooksBillSaved,
   type BooksLineDto,
   type BooksPaymentInput,
+  type BooksSplitDto,
   type StatementMark,
   type ReportLine,
   type WorkspaceExpensesDto,
@@ -429,6 +430,7 @@ export class ExpensesService {
         budgetLineId: x.budgetLineId,
         allocationNote: x.allocationNote,
         booksBills: (x.booksBills ?? null) as BooksBillSaved[] | null,
+        booksSplit: (x.booksSplit ?? null) as BooksSplitDto | null,
       })),
       receipts: receipts.map((d) => ({
         id: d.id,
@@ -602,7 +604,35 @@ export class ExpensesService {
       budgetLineId: l.budgetLineId!,
       reportLine: lineOf(l).reportLine as ReportLine,
       booksBills: savedBills(l) as unknown as Prisma.InputJsonValue,
+      booksSplit: l.split ? (l.split as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
     })
+    // The export a transaction is read from (the first, though two exports of the month both have it), and its rows.
+    const exportOf = new Map<string, { documentId: string }>()
+    for (const f of plan.files)
+      for (const t of f.transactions)
+        if (!exportOf.has(t.id)) exportOf.set(t.id, { documentId: f.id })
+    // An allocated line's export is its allocation worksheet (owner's decision, 2026-11-12): the rows that charge the
+    // shared cost to every program highlighted, its copy opening with the note of them. One the line no longer has goes.
+    const linkSplit = async (tx: Prisma.TransactionClient, expenseId: string, l: BooksLineDto) => {
+      const from = l.split ? exportOf.get(l.split.transactionId) : undefined
+      await tx.expenseDocument.deleteMany({
+        where: {
+          expenseId,
+          purpose: 'allocation',
+          byMatch: true,
+          document: { kind: 'payroll-details' },
+          ...(from ? { documentId: { not: from.documentId } } : {}),
+        },
+      })
+      if (!from || !l.split) return
+      // The rows' highlights are drawn from the split itself (BooksSplitDto.at), so the link carries none.
+      const data = { purpose: 'allocation', mark: Prisma.DbNull, marks: [], byMatch: true }
+      await tx.expenseDocument.upsert({
+        where: { expenseId_documentId: { expenseId, documentId: from.documentId } },
+        create: { expenseId, documentId: from.documentId, ...data },
+        update: data,
+      })
+    }
     // Each bill's receipt is the line's invoice proof; a receipt Save linked before that no longer proves a bill goes.
     const receiptsOfLine = (l: BooksLineDto) =>
       new Set(l.bills.flatMap((b) => (b.receipt ? [b.receipt.documentId] : [])))
@@ -720,6 +750,7 @@ export class ExpensesService {
             await tx.expense.update({ where: { id: x.id }, data: fields(l) })
             await linkReceipts(tx, x.id, l, (x.booksBills ?? null) as BooksBillSaved[] | null)
             await linkPayments(tx, x.id, l, (x.booksBills ?? null) as BooksBillSaved[] | null)
+            await linkSplit(tx, x.id, l)
             ids.push(x.monthlyReportId)
           }
           for (const l of toCreate) {
@@ -746,6 +777,7 @@ export class ExpensesService {
             })
             await linkReceipts(tx, made.id, l, null)
             await linkPayments(tx, made.id, l, null)
+            await linkSplit(tx, made.id, l)
             ids.push(monthlyReportId)
           }
           return [...new Set(ids)]

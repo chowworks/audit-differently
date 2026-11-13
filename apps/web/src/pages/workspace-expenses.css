@@ -88,3 +88,23 @@
   padding: 2px 8px;
   font-size: 0.875rem;
 }
+/* How the books charge a shared cost to every program, this line's row marked. */
+.wex-split summary {
+  cursor: pointer;
+}
+.wex-split-table {
+  margin: 4px 0;
+  font-size: 0.8rem;
+}
+.wex-split-table td {
+  padding: 1px 8px 1px 0;
+}
+.wex-split-mine td {
+  font-weight: 600;
+  background: var(--mark-fill);
+  color: var(--mark-ink);
+}
+.wex-split-total td {
+  border-top: 1px solid var(--line);
+  font-weight: 600;
+}

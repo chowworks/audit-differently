@@ -3847,6 +3847,51 @@ suite('tenant isolation', () => {
       await db.query(`DELETE FROM "ExpenseMatchingSetting"`)
     })
   })
+
+  describe("the books' split of a shared cost (migration 20261112000300)", () => {
+    it('keeps a split on a books line only, as an object', async () => {
+      const split = `'{"how":"entry","rows":[],"at":[]}'`
+      await expect(
+        db.query(`UPDATE "Expense" SET "booksSplit" = ${split} WHERE "id" = 'X-W1'`)
+      ).rejects.toThrow(/Expense_booksSplit_check/)
+      await db.query(`UPDATE "Expense" SET "booksKey" = '2026-09:k' WHERE "id" = 'X-W1'`)
+      await expect(
+        db.query(`UPDATE "Expense" SET "booksSplit" = '[]' WHERE "id" = 'X-W1'`)
+      ).rejects.toThrow(/Expense_booksSplit_check/)
+      await db.query(`UPDATE "Expense" SET "booksSplit" = ${split} WHERE "id" = 'X-W1'`)
+      await db.query(
+        `UPDATE "Expense" SET "booksSplit" = NULL, "booksKey" = NULL WHERE "id" = 'X-W1'`
+      )
+    })
+
+    it('links the export as the allocation worksheet as Save does, with no marks of its own', async () => {
+      const where = `WHERE "expenseId" = 'X-W1' AND "documentId" = 'D-W1'`
+      const [before] = (
+        await db.query<{ purpose: string; mark: unknown; marks: unknown; byMatch: boolean }>(
+          `SELECT "purpose","mark","marks","byMatch" FROM "ExpenseDocument" ${where}`
+        )
+      ).rows
+      // What Save writes: the purpose, no mark and no marks.
+      await db.query(
+        `UPDATE "ExpenseDocument" SET "purpose" = 'allocation', "mark" = NULL, "marks" = '[]', "byMatch" = true ${where}`
+      )
+      // An allocation worksheet takes no marks: its rows are highlighted from the line's split.
+      await expect(
+        db.query(
+          `UPDATE "ExpenseDocument" SET "marks" = '[{"page":1,"x":0,"y":2,"width":1,"height":1}]' ${where}`
+        )
+      ).rejects.toThrow(/ExpenseDocument_marks_check|marked on a payroll file/)
+      await db.query(
+        `UPDATE "ExpenseDocument" SET "purpose" = $1, "mark" = $2, "marks" = $3, "byMatch" = $4 ${where}`,
+        [
+          before!.purpose,
+          before!.mark === null ? null : JSON.stringify(before!.mark),
+          JSON.stringify(before!.marks),
+          before!.byMatch,
+        ]
+      )
+    })
+  })
 })
 
 describe('touchesTenantTable', () => {

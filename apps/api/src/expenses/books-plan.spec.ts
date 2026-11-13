@@ -92,7 +92,7 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
       sourceIds: ['9004'],
     })
     expect(allocationNote(fees!)).toBe(
-      "25.00% of $200.00, shared out by the books' allocation entry 9005"
+      "$50.00 of $200.00, as the books' allocation entry 9005 shares it out"
     )
     expect(rent!.allocation).toMatchObject({
       total: 1000,
@@ -101,8 +101,42 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
       sourceIds: ['9002'],
     })
     expect(allocationNote(rent!)).toBe(
-      '60.00% of $1,000.00, as the books split transaction 9002 by class'
+      '$600.00 of $1,000.00, as the books split transaction 9002 by class'
     )
+  })
+
+  it("keeps how the books charge a shared cost to every program, in the books' dollars", () => {
+    const [rent, pixel, fees] = plan().filter((l) => l.status === 'billed')
+    expect(fees!.split).toEqual({
+      how: 'entry',
+      transactionId: '9005',
+      date: '2026-09-30',
+      account: '63301 Payroll Fees',
+      total: 200,
+      rows: [
+        { className: 'Youth Coding Program', amount: 50, mine: true },
+        { className: 'Adult Bootcamp', amount: 150, mine: false },
+      ],
+      less: [],
+      billed: 50,
+      // The entry's rows on the export, the pool's too.
+      at: [
+        { page: 1, row: 14 },
+        { page: 1, row: 15 },
+        { page: 1, row: 16 },
+      ],
+    })
+    expect(rent!.split).toMatchObject({
+      how: 'split',
+      transactionId: '9002',
+      total: 1000,
+      rows: [
+        { className: 'Youth Coding Program', amount: 600, mine: true },
+        { className: 'Adult Bootcamp', amount: 400, mine: false },
+      ],
+    })
+    // A cost all one program's has none.
+    expect(pixel!.split).toBeNull()
   })
 
   it('needs the engagement’s mapping, an account it bills and a budget line for the category', () => {
@@ -152,6 +186,7 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
       budgetLineId: l.budgetLineId,
       allocationNote: allocationNote(l),
       booksBills: savedBills(l),
+      booksSplit: l.split,
     })
     const again = plan({ existing: [saved(first[0]!), saved(first[1]!, 79)] })
     expect(again.filter((l) => l.status === 'billed').map((l) => l.saved)).toEqual([
@@ -177,6 +212,9 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
         (l) => l.key === first[0]!.key
       )?.saved
     ).toBe('same')
+    // Saved before its split was kept: saved again once, to keep it.
+    const unsplit = plan({ existing: [{ ...saved(first[0]!), booksSplit: null }] })
+    expect(unsplit.find((l) => l.key === first[0]!.key)?.saved).toBe('changed')
     // Saved before its bills were kept: saved again once, to keep them.
     const older = plan({ existing: [{ ...saved(first[0]!), booksBills: null }] })
     expect(older.find((l) => l.key === first[0]!.key)?.saved).toBe('changed')

@@ -168,8 +168,17 @@ describe("the receipts of the books' bills (owner's decision, 2026-11-12)", () =
       ['8002', true],
     ])
     expect(allocationNote(less)).toBe(
-      "25.00% of $300.00, shared out by the books' allocation entry 8003, less its share of bill 8002 ($100.00), dropped for want of its receipt or payment"
+      "$75.00 of $300.00, as the books' allocation entry 8003 shares it out, less $25.00 for bill 8002 ($100.00), dropped for want of its receipt or payment"
     )
+    expect(less.split).toMatchObject({
+      total: 300,
+      rows: [
+        { className: 'Youth Coding Program', amount: 75, mine: true },
+        { className: 'Adult Bootcamp', amount: 225, mine: false },
+      ],
+      less: [{ transactionId: '8002', amount: 100, off: 25 }],
+      billed: 50,
+    })
     const none = pooled(['8001', '8002'])
     expect([none.status, none.amount]).toEqual(['dropped', 0])
     // A line that is its own bill goes when it is dropped.

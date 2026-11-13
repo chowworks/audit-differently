@@ -56,13 +56,17 @@ export function saveCounts(lines: BooksLineDto[]) {
   }
 }
 
-/** A line's share as the screen says it: "25.00% of $200.00 (allocation entry 9005)". */
+/**
+ * A line's share as the screen says it, in the books' dollars, never a rate: "$50.00 of $200.00, shared out by
+ * allocation entry 9005".
+ */
 export function shareWords(l: BooksLineDto, money: (n: number) => string) {
   const a = l.allocation
   if (!a) return null
+  const booked = l.split?.rows.find((r) => r.mine)?.amount ?? l.amount
   return a.how === 'entry'
-    ? `${a.percent.toFixed(2)}% of ${money(a.total)} (allocation entry ${a.entryId})`
-    : `${a.percent.toFixed(2)}% of ${money(a.total)} (split by class)`
+    ? `${money(booked)} of ${money(a.total)}, shared out by allocation entry ${a.entryId}`
+    : `${money(booked)} of ${money(a.total)}, split by class`
 }
 
 /**

@@ -2804,6 +2804,30 @@ export interface BooksAllocationDto {
 }
 
 /**
+ * How the books charge a shared cost to every program (owner's decision, 2026-11-12): the dollars the allocation entry
+ * (or the split bill) gives each class, this line's row marked. The books record the share, so the dollars are the
+ * proof; the note shows them, never a rate. A dropped bill's part comes off this line's row.
+ */
+export interface BooksSplitDto {
+  how: 'entry' | 'split'
+  /** The transaction whose rows give the split: the allocation entry, or the bill split by class. */
+  transactionId: string
+  /** yyyy-mm-dd */
+  date: string
+  /** The account the cost is on, as the books name it. */
+  account: string
+  /** The whole cost shared: what the rows come to. */
+  total: number
+  rows: { className: string; amount: number; mine: boolean }[]
+  /** Bills dropped for want of proof: each bill's part of the cost, and what comes off this line for it. */
+  less: { transactionId: string; amount: number; off: number }[]
+  /** What this line bills: its row, less the dropped bills' parts. */
+  billed: number
+  /** Where the split's rows are in the export (its sheet and row), the pool's row too: highlighted on its copy. */
+  at: { page: number; row: number }[]
+}
+
+/**
  * A bill behind a books line (owner's decision, 2026-11-12): the transaction whose cost the line is, or one of the
  * pool's an allocation entry shares out. Its receipt proves it; an owner may drop one that has none, and the line then
  * bills its share of the rest.
@@ -2882,6 +2906,8 @@ export interface BooksLineDto {
   budgetLineId: string | null
   budgetLineName: string | null
   allocation: BooksAllocationDto | null
+  /** How the books charge the shared cost to every program: on an allocated line, null on the rest. */
+  split: BooksSplitDto | null
   /** The bills behind it (on a line of an engagement; none on the rest), with their receipts. */
   bills: BooksBillDto[]
   /** A line Save wrote before: unchanged, or changed since. Null: new. */

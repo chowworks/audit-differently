@@ -6,6 +6,7 @@ import {
   type BooksBillSaved,
   type BooksLineDto,
   type BooksLineStatus,
+  type BooksSplitDto,
   type ExpenseMatching,
   type ProgramNames,
 } from '@ad/types'
@@ -65,6 +66,8 @@ export interface PlanExisting {
   allocationNote: string | null
   /** The bills Save kept with it (Expense.booksBills); null on a line written before bills were kept. */
   booksBills?: BooksBillSaved[] | null
+  /** The split Save kept with it (Expense.booksSplit); null on a line written before splits were kept. */
+  booksSplit?: BooksSplitDto | null
 }
 
 export const SKIP = 'skip'
@@ -115,6 +118,34 @@ function entriesOf(transactions: BooksTransaction[]): Map<BooksLine, Entry> {
     }
   }
   return out
+}
+
+/**
+ * How the books charge a shared cost to every program: the allocation entry's rows on the pool's account, or the bill's
+ * own rows by class, each class's dollars as the books have them, the line's own row marked.
+ */
+function splitOf(t: BooksTransaction, l: BooksLine, entry: Entry | null): BooksSplitDto {
+  const rows = entry ? t.lines.filter((x) => x.account === entry.account && x.amount > 0) : t.lines
+  const accounts = new Set(rows.map((x) => x.accountNo ?? x.account))
+  return {
+    how: entry ? 'entry' : 'split',
+    transactionId: t.id,
+    date: t.date,
+    account: l.account,
+    total: cents(rows.reduce((n, x) => n + x.amount, 0)),
+    rows: rows.map((x) => ({
+      className:
+        (x.className || 'No class') + (accounts.size > 1 ? ` (${x.accountNo ?? x.account})` : ''),
+      amount: x.amount,
+      mine: x === l,
+    })),
+    less: [],
+    billed: l.amount,
+    at: (entry ? t.lines.filter((x) => x.account === entry.account) : t.lines).map((x) => ({
+      page: x.page,
+      row: x.row,
+    })),
+  }
 }
 
 /** Every line of the month: where it goes, or why it goes nowhere. */
@@ -209,6 +240,7 @@ export function planBooks(input: {
         budgetLineId: null,
         budgetLineName: null,
         allocation,
+        split: allocation ? splitOf(t, l, entry && l.amount > 0 ? entry : null) : null,
         bills: [],
         saved: null,
       }
@@ -393,24 +425,42 @@ function billsOf(
       line.amount = 0
       line.status = 'dropped'
     }
+    if (line.split) {
+      // Each dropped bill's part of this line, the last taking the cents left so the note adds up.
+      const taken = cents(s.bookedAs - line.amount)
+      let so = 0
+      line.split.less = gone.map((t, i) => {
+        const part = cents(inPool(t))
+        const o =
+          i === gone.length - 1 ? cents(taken - so) : cents((s.bookedAs * part) / entry.total)
+        so = cents(so + o)
+        return { transactionId: t.id, amount: part, off: o }
+      })
+      line.split.billed = line.amount
+    }
   }
 }
 
-/** The words an allocated line's note says: its share, of what, and how the books share it. */
+/** The words an allocated line's note says: its dollars of the whole, as the books charge them, never a rate. */
 export function allocationNote(
-  l: Pick<BooksLineDto, 'allocation' | 'className' | 'account'> & { bills?: BooksBillDto[] }
+  l: Pick<BooksLineDto, 'allocation' | 'className' | 'account' | 'amount'> & {
+    split?: BooksSplitDto | null
+    bills?: BooksBillDto[]
+  }
 ) {
   const a = l.allocation
   if (!a) return null
   const money = (n: number) =>
     `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const booked = l.split?.rows.find((r) => r.mine)?.amount ?? l.amount
   const note =
     a.how === 'entry'
-      ? `${a.percent.toFixed(2)}% of ${money(a.total)}, shared out by the books' allocation entry ${a.entryId}`
-      : `${a.percent.toFixed(2)}% of ${money(a.total)}, as the books split transaction ${a.sourceIds[0]} by class`
+      ? `${money(booked)} of ${money(a.total)}, as the books' allocation entry ${a.entryId} shares it out`
+      : `${money(booked)} of ${money(a.total)}, as the books split transaction ${a.sourceIds[0]} by class`
   const gone = (l.bills ?? []).filter((b) => b.dropped)
   if (!gone.length) return note
-  return `${note}, less its share of ${gone.length === 1 ? 'bill' : 'bills'} ${gone.map((b) => `${b.transactionId} (${money(b.amount)})`).join(', ')}, dropped for want of its receipt or payment`
+  const off = l.split?.less.reduce((n, x) => n + x.off, 0) ?? booked - l.amount
+  return `${note}, less ${money(off)} for ${gone.length === 1 ? 'bill' : 'bills'} ${gone.map((b) => `${b.transactionId} (${money(b.amount)})`).join(', ')}, dropped for want of its receipt or payment`
 }
 
 /** The bills a line keeps when saved (Expense.booksBills). */
@@ -435,7 +485,37 @@ function sameAs(x: PlanExisting, l: BooksLineDto) {
     near(x.totalCost, l.allocation?.total ?? l.amount) &&
     x.budgetLineId === l.budgetLineId &&
     (x.allocationNote ?? null) === allocationNote(l) &&
-    sameBills(x.booksBills ?? null, savedBills(l))
+    sameBills(x.booksBills ?? null, savedBills(l)) &&
+    sameSplit(x.booksSplit, l.split)
+  )
+}
+
+/** The same split, field by field: none on both (a line saved before splits were kept has none yet), or the same rows. */
+function sameSplit(a: BooksSplitDto | null | undefined, b: BooksSplitDto | null) {
+  if (!a || !b) return !a && !b
+  return (
+    a.how === b.how &&
+    a.transactionId === b.transactionId &&
+    a.date === b.date &&
+    a.account === b.account &&
+    near(a.total, b.total) &&
+    near(a.billed, b.billed) &&
+    a.rows.length === b.rows.length &&
+    a.rows.every(
+      (r, i) =>
+        r.className === b.rows[i]!.className &&
+        near(r.amount, b.rows[i]!.amount) &&
+        r.mine === b.rows[i]!.mine
+    ) &&
+    a.at?.length === b.at.length &&
+    a.at.every((x, i) => x.page === b.at[i]!.page && x.row === b.at[i]!.row) &&
+    a.less.length === b.less.length &&
+    a.less.every(
+      (x, i) =>
+        x.transactionId === b.less[i]!.transactionId &&
+        near(x.amount, b.less[i]!.amount) &&
+        near(x.off, b.less[i]!.off)
+    )
   )
 }
 

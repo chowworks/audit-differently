@@ -581,7 +581,26 @@ function LineTable({
                 <td>{l.account.split(':').pop()}</td>
                 <td>
                   {withLine ? l.budgetLineName : l.className || '—'}
-                  {share && <span className="ad-table-sub">{share}</span>}
+                  {share && !l.split && <span className="ad-table-sub">{share}</span>}
+                  {share && l.split && (
+                    <details className="wex-split">
+                      <summary className="ad-table-sub">{share}</summary>
+                      <table className="wex-split-table">
+                        <tbody>
+                          {l.split.rows.map((r, i) => (
+                            <tr key={i} className={r.mine ? 'wex-split-mine' : undefined}>
+                              <td>{r.className}</td>
+                              <td className="ad-num">{money(r.amount)}</td>
+                            </tr>
+                          ))}
+                          <tr className="wex-split-total">
+                            <td>Total</td>
+                            <td className="ad-num">{money(l.split.total)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </details>
+                  )}
                   {l.status === 'already-entered' && <Chip tone="muted">Already on the month</Chip>}
                   {l.saved === 'same' && <Chip tone="ok">Saved</Chip>}
                   {l.saved === 'changed' && <Chip tone="warn">Changed since saved</Chip>}

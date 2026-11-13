@@ -1061,6 +1061,7 @@ function ExpensesSection({
                         docs={e.documents}
                         testId={e.itemNumber}
                         onAdd={(purpose) => addProof(e, purpose)}
+                        proofOf={e.fromBooks ? { target: 'expense', id: e.id } : undefined}
                       />
                       <SeeChecks
                         checks={checks}
@@ -1138,7 +1139,7 @@ function ProofChips({
   docs: ExpenseDto['documents']
   testId: string
   onAdd: (purpose: DocumentPurpose) => void
-  /** A payroll item: its proofs open as its own highlighted copies. */
+  /** A payroll or books line: its proofs open as its own highlighted copies. */
   proofOf?: { target: 'expense' | 'wex'; id: string }
   /** False: "Bookkeepers see staff payroll" is off, so the proofs show as labels that open nothing. */
   files?: boolean

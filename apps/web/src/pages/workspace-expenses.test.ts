@@ -31,6 +31,7 @@ const line = (over: Partial<BooksLineDto>): BooksLineDto => ({
   budgetLineId: 'b-ind',
   budgetLineName: 'Indirect Costs',
   allocation: null,
+  split: null,
   bills: [],
   saved: null,
   ...over,
@@ -78,7 +79,7 @@ describe("the month's expenses from the books, on screen", () => {
         }),
         money
       )
-    ).toBe('25.00% of $200.00 (allocation entry 9005)')
+    ).toBe('$100.00 of $200.00, shared out by allocation entry 9005')
     expect(shareWords(line({}), money)).toBeNull()
   })
 
