@@ -130,6 +130,17 @@ export function refuseLocked(r: { status: string; period: string }): void {
     throw new ConflictException(`The ${r.period} report is ${r.status}; only a draft can change`)
 }
 
+/**
+ * A line from the books' expenses is the books' (review fix, 2026-11-12): changed or removed by hand, it would be
+ * undone or written again at the next Save. A person still attaches and removes their own proofs on it.
+ */
+export function refuseFromBooks(e: { booksKey?: string | null }): void {
+  if (e.booksKey)
+    throw new BadRequestException(
+      "This line comes from the books: change it in QuickBooks or on the month's expenses"
+    )
+}
+
 export type ReportRow = NonNullable<Awaited<ReturnType<ReportsService['find']>>>
 
 @Injectable()
@@ -493,6 +504,7 @@ export class ReportsService {
     })
     if (!existing) throw new NotFoundException()
     const r = await this.editable(caller, existing.monthlyReportId)
+    refuseFromBooks(existing)
     const data = this.expenseData(input, r, existing.tags)
     await unlessUnchanged(async () => {
       await this.log.change(
@@ -529,6 +541,7 @@ export class ReportsService {
     })
     if (!existing) throw new NotFoundException()
     const r = await this.editable(caller, existing.monthlyReportId)
+    refuseFromBooks(existing)
     await this.log.change(caller, (tx) => tx.expense.delete({ where: { id: expenseId } }), {
       workspaceId: r.workspaceId!,
       resource: 'expense',

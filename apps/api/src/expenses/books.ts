@@ -90,11 +90,20 @@ const incomeAccount = (account: string) => {
 }
 
 /**
- * A balance-sheet account: as payroll reads one, or by a five-digit number starting 1, 2 or 3 whatever its words
- * ("13200 Prepaid Expenses" is an asset).
+ * A balance-sheet account: by a five-digit number starting 1, 2 or 3 whatever its words ("13200 Prepaid Expenses" is an
+ * asset); as payroll reads one; or a bank or card the transaction was paid from, named without a number ("Chase
+ * Operating", "American Express", "Petty Cash"). An account numbered 5 to 9, or whose words name a cost ("60250 Credit
+ * Card Fees", "Bank Service Charges"), is an expense, never the balance sheet, unless its words say it is owed or held
+ * ("Accrued Interest Payable").
  */
-const onBalanceSheet = (account: string) =>
-  balanceSheetAccount(account) || /^\s*[123]\d{4,}\b/.test(account.split(':')[0] ?? '')
+export function onBalanceSheet(account: string): boolean {
+  const top = account.split(':')[0] ?? ''
+  if (/^\s*[123]\d{4,}\b/.test(top)) return true
+  if (/^\s*[5-9]\d{3,}\b/.test(top)) return false
+  if (/\b(fees?|charges?|interest|expenses?|supplies)\b/i.test(account))
+    return /liabilit|payable|receivable|accrued|\bassets?\b|equity|prepaid/i.test(account)
+  return balanceSheetAccount(account) || paymentOf(account).kind !== 'other'
+}
 
 /** A card account (a liability the card's charges are booked against), else the bank. */
 function paymentOf(account: string): BooksPayment {

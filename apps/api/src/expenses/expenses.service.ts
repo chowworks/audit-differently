@@ -16,6 +16,7 @@ import {
   type BooksLineDto,
   type BooksPaymentInput,
   type BooksSplitDto,
+  type LoggedChange,
   type StatementMark,
   type ReportLine,
   type WorkspaceExpensesDto,
@@ -57,6 +58,9 @@ import {
 
 const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null)
 const CSV = 'text/csv'
+const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+/** The payroll details files an accounting export can be: the sheets. */
+const SHEET_TYPES = [XLSX, CSV]
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
 /** A mapping file's rows are a chart of accounts: a few hundred at most. */
 const MAX_ACCOUNTS = 5000
@@ -72,6 +76,36 @@ const RECEIPT_FIELDS: Fields = {
   receiptAmount: { label: 'Amount', show: 'money' },
   receiptDate: { label: 'Date', show: 'date' },
   receiptVendor: { label: 'Vendor', show: 'text' },
+}
+
+/** A check the database keeps (a trigger's or a constraint's, SQLSTATE 23514) refused the change. */
+const isCheckViolation = (e: unknown) =>
+  (e instanceof Prisma.PrismaClientKnownRequestError &&
+    (e.meta as { code?: unknown } | undefined)?.code === '23514') ||
+  ((e instanceof Prisma.PrismaClientKnownRequestError ||
+    e instanceof Prisma.PrismaClientUnknownRequestError) &&
+    /\b23514\b/.test(e.message))
+
+/**
+ * The database's refusal of a Save, in plain words (review fix, 2026-11-12): a 409 the owner can act on, never a
+ * 500. Only the books key's own conflict says the expenses were saved a moment ago; an item number taken meanwhile
+ * or a month started meanwhile asks for Save again. A month's lock goes on to `MonthLockedFilter` as it is.
+ */
+export function saveRefusal(e: unknown): unknown {
+  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+    const target = e.meta?.target
+    const on = Array.isArray(target) ? target.join(',') : String(target ?? '')
+    if (on.includes('booksKey'))
+      return new ConflictException('These expenses were saved a moment ago. Open them again')
+    if (on.includes('itemNumber'))
+      return new ConflictException('An item number Save chose was taken meanwhile. Save again')
+    return new ConflictException('The month changed meanwhile. Open the expenses again')
+  }
+  if (isCheckViolation(e))
+    return new ConflictException(
+      "The database refused a line as the books have it now (a budget line that is not its engagement's, say). Open the expenses again, and check the account mappings"
+    )
+  return e
 }
 
 /**
@@ -348,42 +382,69 @@ export class ExpensesService {
 
   // ── The month's lines ────────────────────────────────────────────────────
 
-  /** The accounting exports among the month's saved payroll files: each payroll details file with books transactions. */
+  /**
+   * The accounting exports among the month's saved payroll files: each payroll details sheet (xlsx or csv) with books
+   * transactions. Payroll details are PDFs too (a pay register, say): those are payroll's, not read here. A sheet that
+   * can't be read is left out and named in `unread` (review fix, 2026-11-12), so one bad file leaves the rest.
+   */
   private async booksOf(workspaceId: string, period: string) {
     const docs = (
       await this.prisma.document.findMany({
-        where: { workspaceId, engagementId: null, period, kind: 'payroll-details' },
+        where: {
+          workspaceId,
+          engagementId: null,
+          period,
+          kind: 'payroll-details',
+          contentType: { in: SHEET_TYPES },
+        },
         orderBy: { fileName: 'asc' },
       })
     ).filter((d) => keyInWorkspace(d))
     const files: { id: string; fileName: string; transactions: BooksTransaction[] }[] = []
+    const unread: string[] = []
     for (const d of docs) {
-      const bytes = Buffer.from(await this.storage.read(d.storageKey))
-      const lines = d.contentType === CSV ? csvLines(bytes) : await sheetLines(bytes)
-      const transactions = booksTransactions(lines)
-      if (transactions.length) files.push({ id: d.id, fileName: d.fileName, transactions })
+      try {
+        const bytes = Buffer.from(await this.storage.read(d.storageKey))
+        const lines = d.contentType === CSV ? csvLines(bytes) : await sheetLines(bytes)
+        const transactions = booksTransactions(lines)
+        if (transactions.length) files.push({ id: d.id, fileName: d.fileName, transactions })
+      } catch (e) {
+        // The error's kind only: a parser's message can quote the file.
+        this.logger.warn(
+          `Could not read payroll details ${d.id} for the books (${(e as Error)?.name ?? 'error'})`
+        )
+        unread.push(d.fileName)
+      }
     }
-    return files
+    return { files, unread }
   }
 
   private async planOf(workspaceId: string, period: string) {
-    const [files, engagements, mappings, workspace, receipts, choices, statements, matching] =
-      await Promise.all([
-        this.booksOf(workspaceId, period),
-        this.engagementsOf(workspaceId),
-        this.prisma.accountMapping.findMany({
-          where: { workspaceId },
-          orderBy: { changedAt: 'asc' },
-        }),
-        this.prisma.workspace.findFirst({
-          where: { id: workspaceId },
-          select: { programNames: true },
-        }),
-        this.receiptsOf(workspaceId, period),
-        this.prisma.booksBill.findMany({ where: { workspaceId, period } }),
-        this.statementsOf(workspaceId, period),
-        this.matching.current(),
-      ])
+    const [
+      { files, unread },
+      engagements,
+      mappings,
+      workspace,
+      receipts,
+      choices,
+      statements,
+      matching,
+    ] = await Promise.all([
+      this.booksOf(workspaceId, period),
+      this.engagementsOf(workspaceId),
+      this.prisma.accountMapping.findMany({
+        where: { workspaceId },
+        orderBy: { changedAt: 'asc' },
+      }),
+      this.prisma.workspace.findFirst({
+        where: { id: workspaceId },
+        select: { programNames: true },
+      }),
+      this.receiptsOf(workspaceId, period),
+      this.prisma.booksBill.findMany({ where: { workspaceId, period } }),
+      this.statementsOf(workspaceId, period),
+      this.matching.current(),
+    ])
     // One transaction once, though two exports of the month both have it.
     const seen = new Set<string>()
     const transactions = files
@@ -454,7 +515,7 @@ export class ExpensesService {
       statements,
       matching,
     })
-    return { files, engagements, mappings, lines, existing, receipts, statements }
+    return { files, unread, engagements, mappings, lines, existing, receipts, statements }
   }
 
   /**
@@ -505,6 +566,20 @@ export class ExpensesService {
     return docs.filter((d) => keyInWorkspace(d))
   }
 
+  /**
+   * The lines Save wrote before that the books no longer bill there, on a month still a draft: what Save removes, and
+   * what the page lists before it does (review fix, 2026-11-12). A month no longer a draft keeps its lines.
+   */
+  private removable(plan: Awaited<ReturnType<ExpensesService['planOf']>>, period: string) {
+    const keys = new Set(plan.lines.filter((l) => l.status === 'billed').map((l) => l.key))
+    return plan.existing.filter(
+      (x) =>
+        x.booksKey?.startsWith(`${period}:`) &&
+        !keys.has(x.booksKey) &&
+        x.monthlyReport.status === 'draft'
+    )
+  }
+
   private dto(
     caller: Caller,
     workspaceId: string,
@@ -536,6 +611,13 @@ export class ExpensesService {
           ),
         ],
       })),
+      toRemove: this.removable(plan, period).map((x) => ({
+        id: x.id,
+        itemNumber: x.itemNumber,
+        vendor: x.vendor,
+        amount: Number(x.allocatedAmount),
+      })),
+      unread: plan.unread,
       can: { change: !caller.admin && !!workspaceRole(caller, workspaceId, ['owner']) },
     }
   }
@@ -572,15 +654,29 @@ export class ExpensesService {
     const period = this.period(given)
     const plan = await this.planOf(workspaceId, period)
     const billed = plan.lines.filter((l) => l.status === 'billed')
-    const toCreate = billed.filter((l) => !l.saved)
-    const toUpdate = billed.filter((l) => l.saved === 'changed')
-    const keys = new Set(billed.map((l) => l.key))
-    const toRemove = plan.existing.filter(
-      (x) =>
-        x.booksKey?.startsWith(`${period}:`) &&
-        !keys.has(x.booksKey) &&
-        x.monthlyReport.status === 'draft'
-    )
+    const byKey = new Map(plan.existing.filter((x) => x.booksKey).map((x) => [x.booksKey!, x]))
+    // A line the books now put on another engagement (its program relinked) or in another month (a new export dates
+    // it otherwise) is not changed in place, for its row is the other engagement's or month's: it is removed and
+    // written afresh, a person's own proofs on it kept (review fix, 2026-11-12).
+    const moves = (l: BooksLineDto) => {
+      const x = byKey.get(l.key)!
+      return x.engagementId !== l.engagementId || x.monthlyReport.period !== l.date.slice(0, 7)
+    }
+    const changed = billed.filter((l) => l.saved === 'changed')
+    const moved = changed.filter(moves)
+    const movedRows = moved.map((l) => byKey.get(l.key)!)
+    const added = billed.filter((l) => !l.saved)
+    const toUpdate = changed.filter((l) => !moves(l))
+    const toCreate = [...added, ...moved]
+    const toRemove = this.removable(plan, period)
+    // A line on a month no longer a draft stays there, as a closed month's lines do: Save moves it nowhere.
+    const stuck = movedRows.find((x) => x.monthlyReport.status !== 'draft')
+    if (stuck) {
+      const e = plan.engagements.find((x) => x.id === stuck.engagementId)
+      throw new ConflictException(
+        `The books moved line ${stuck.itemNumber} out of ${monthName(stuck.monthlyReport.period)}${e ? ` of ${e.name}` : ''}, which is no longer a draft. Send that month back to a draft to save the expenses`
+      )
+    }
     if (!toCreate.length && !toUpdate.length && !toRemove.length)
       return {
         created: 0,
@@ -588,7 +684,6 @@ export class ExpensesService {
         removed: 0,
         expenses: this.dto(caller, workspaceId, period, plan),
       }
-    const byKey = new Map(plan.existing.filter((x) => x.booksKey).map((x) => [x.booksKey!, x]))
     const engagementOf = new Map(plan.engagements.map((e) => [e.id, e]))
     const lineOf = (l: BooksLineDto) =>
       engagementOf.get(l.engagementId!)!.budgetLines.find((b) => b.id === l.budgetLineId)!
@@ -611,6 +706,17 @@ export class ExpensesService {
     for (const f of plan.files)
       for (const t of f.transactions)
         if (!exportOf.has(t.id)) exportOf.set(t.id, { documentId: f.id })
+    // The proofs a person attached to a line (`byMatch` false): Save never changes or removes them (review fix,
+    // 2026-11-12), as the payroll match never does.
+    const personsOf = async (tx: Prisma.TransactionClient, expenseId: string) =>
+      new Set(
+        (
+          await tx.expenseDocument.findMany({
+            where: { expenseId, byMatch: false },
+            select: { documentId: true },
+          })
+        ).map((d) => d.documentId)
+      )
     // An allocated line's export is its allocation worksheet (owner's decision, 2026-11-12): the rows that charge the
     // shared cost to every program highlighted, its copy opening with the note of them. One the line no longer has goes.
     const linkSplit = async (tx: Prisma.TransactionClient, expenseId: string, l: BooksLineDto) => {
@@ -625,6 +731,7 @@ export class ExpensesService {
         },
       })
       if (!from || !l.split) return
+      if ((await personsOf(tx, expenseId)).has(from.documentId)) return
       // The rows' highlights are drawn from the split itself (BooksSplitDto.at), so the link carries none.
       const data = { purpose: 'allocation', mark: Prisma.DbNull, marks: [], byMatch: true }
       await tx.expenseDocument.upsert({
@@ -648,11 +755,17 @@ export class ExpensesService {
         .filter((id) => !want.has(id))
       if (gone.length)
         await tx.expenseDocument.deleteMany({
-          where: { expenseId, purpose: 'invoice', documentId: { in: gone } },
+          where: { expenseId, purpose: 'invoice', byMatch: true, documentId: { in: gone } },
         })
+      // A receipt a person linked already stays their link (the duplicate is skipped).
       if (want.size)
         await tx.expenseDocument.createMany({
-          data: [...want].map((documentId) => ({ expenseId, documentId, purpose: 'invoice' })),
+          data: [...want].map((documentId) => ({
+            expenseId,
+            documentId,
+            purpose: 'invoice',
+            byMatch: true,
+          })),
           skipDuplicates: true,
         })
     }
@@ -678,9 +791,11 @@ export class ExpensesService {
         .filter((id) => !want.has(id))
       if (gone.length)
         await tx.expenseDocument.deleteMany({
-          where: { expenseId, purpose: 'payment', documentId: { in: gone } },
+          where: { expenseId, purpose: 'payment', byMatch: true, documentId: { in: gone } },
         })
+      const persons = want.size ? await personsOf(tx, expenseId) : new Set<string>()
       for (const [documentId, marks] of want) {
+        if (persons.has(documentId)) continue
         const data = {
           purpose: 'payment',
           mark: marks[0]! as unknown as Prisma.InputJsonValue,
@@ -694,60 +809,100 @@ export class ExpensesService {
         })
       }
     }
+    const at = (engagementId: string, itemNumber: string, reportLine: string) =>
+      `${engagementId}\u0000${itemNumber}\u0000${reportLine}`
     let touched: string[]
     try {
       touched = await this.log.change(
         caller,
         async (tx) => {
-          const months = new Map<string, string>()
-          const monthOf = async (l: BooksLineDto) => {
-            const e = engagementOf.get(l.engagementId!)!
-            const p = l.date.slice(0, 7)
-            const at = `${e.id}\u0000${p}`
-            const known = months.get(at) ?? e.monthlyReports.find((m) => m.period === p)?.id
-            if (known) {
-              months.set(at, known)
-              return known
-            }
-            const made = await tx.monthlyReport.create({
-              data: { engagementId: e.id, period: p, dueDate: dueDate(p, e.reportDueDay) },
-            })
-            months.set(at, made.id)
-            return made.id
-          }
-          // A month closed since the plan is not written to.
-          const locked = await tx.monthlyReport.findFirst({
-            where: {
-              engagementId: { in: [...new Set(billed.map((l) => l.engagementId!))] },
-              period: { in: [...new Set(billed.map((l) => l.date.slice(0, 7)))] },
-              status: { not: 'draft' },
-            },
-          })
-          if (
-            locked &&
-            billed.some(
-              (l) => l.engagementId === locked.engagementId && l.date.startsWith(locked.period)
-            )
+          // Every month the save writes to or removes from, read here: one closed or submitted since the plan was read
+          // refuses the save, so no line of it is lost (review fix, 2026-11-12).
+          const pairs = new Map(
+            billed.map((l) => [
+              `${l.engagementId}\u0000${l.date.slice(0, 7)}`,
+              { engagementId: l.engagementId!, period: l.date.slice(0, 7) },
+            ])
           )
+          const rowMonths = [...new Set([...toRemove, ...movedRows].map((x) => x.monthlyReportId))]
+          const reports = await tx.monthlyReport.findMany({
+            where: {
+              OR: [...pairs.values(), ...(rowMonths.length ? [{ id: { in: rowMonths } }] : [])],
+            },
+            select: { id: true, engagementId: true, period: true, status: true },
+          })
+          const locked = reports.find((m) => m.status !== 'draft')
+          if (locked)
             throw new ConflictException(
               `${monthName(locked.period)} changed meanwhile. Open the expenses again`
             )
+          const months = new Map(reports.map((m) => [`${m.engagementId}\u0000${m.period}`, m.id]))
+          const monthOf = async (l: BooksLineDto) => {
+            const e = engagementOf.get(l.engagementId!)!
+            const p = l.date.slice(0, 7)
+            const known = months.get(`${e.id}\u0000${p}`)
+            if (known) return known
+            const made = await tx.monthlyReport.create({
+              data: { engagementId: e.id, period: p, dueDate: dueDate(p, e.reportDueDay) },
+            })
+            months.set(`${e.id}\u0000${p}`, made.id)
+            return made.id
+          }
           const taken = new Set(
             (
               await tx.expense.findMany({
                 where: { engagementId: { in: [...engagementOf.keys()] } },
                 select: { engagementId: true, itemNumber: true, reportLine: true },
               })
-            ).map((x) => `${x.engagementId}\u0000${x.itemNumber}\u0000${x.reportLine}`)
+            ).map((x) => at(x.engagementId, x.itemNumber, x.reportLine))
           )
+          // A line's item number: `QB-` and its transaction, with -2, -3… after it while another line of the engagement
+          // and report line has it. `keep` is a line's own number, kept while it is free.
+          const numberFor = (l: BooksLineDto, reportLine: string, keep?: string) => {
+            if (keep && !taken.has(at(l.engagementId!, keep, reportLine))) return keep
+            const root = `QB-${l.transactionId}`.slice(0, 36)
+            let itemNumber = root
+            for (let k = 2; taken.has(at(l.engagementId!, itemNumber, reportLine)); k++)
+              itemNumber = `${root}-${k}`
+            return itemNumber
+          }
+          // A person's proofs on a moved line, kept for the line written afresh.
+          const carried = new Map<string, Prisma.ExpenseDocumentCreateManyInput[]>()
+          for (const x of movedRows)
+            carried.set(
+              x.booksKey!,
+              (
+                await tx.expenseDocument.findMany({ where: { expenseId: x.id, byMatch: false } })
+              ).map((d) => ({
+                expenseId: '',
+                documentId: d.documentId,
+                purpose: d.purpose,
+                mark: (d.mark ?? Prisma.DbNull) as Prisma.InputJsonValue,
+                marks: d.marks as Prisma.InputJsonValue,
+                payRun: d.payRun,
+                byMatch: false,
+              }))
+            )
           const ids: string[] = []
-          for (const x of toRemove) {
+          // Removed first: a moved line's books key and item number are free again before it is written afresh.
+          for (const x of [...toRemove, ...movedRows]) {
             await tx.expense.delete({ where: { id: x.id } })
+            taken.delete(at(x.engagementId, x.itemNumber, x.reportLine))
             ids.push(x.monthlyReportId)
           }
           for (const l of toUpdate) {
             const x = byKey.get(l.key)!
-            await tx.expense.update({ where: { id: x.id }, data: fields(l) })
+            const f = fields(l)
+            // A category mapped to a budget line of another report line: item numbers are the engagement's per report
+            // line, so its own is kept when free there and another chosen as a new line's is when not (review fix,
+            // 2026-11-12).
+            const itemNumber =
+              f.reportLine === x.reportLine
+                ? x.itemNumber
+                : numberFor(l, f.reportLine, x.itemNumber)
+            taken.delete(at(x.engagementId, x.itemNumber, x.reportLine))
+            taken.add(at(x.engagementId, itemNumber, f.reportLine))
+            await tx.expense.update({ where: { id: x.id }, data: { ...f, itemNumber } })
             await linkReceipts(tx, x.id, l, (x.booksBills ?? null) as BooksBillSaved[] | null)
             await linkPayments(tx, x.id, l, (x.booksBills ?? null) as BooksBillSaved[] | null)
             await linkSplit(tx, x.id, l)
@@ -755,15 +910,8 @@ export class ExpensesService {
           }
           for (const l of toCreate) {
             const f = fields(l)
-            const root = `QB-${l.transactionId}`.slice(0, 36)
-            let itemNumber = root
-            for (
-              let k = 2;
-              taken.has(`${l.engagementId}\u0000${itemNumber}\u0000${f.reportLine}`);
-              k++
-            )
-              itemNumber = `${root}-${k}`
-            taken.add(`${l.engagementId}\u0000${itemNumber}\u0000${f.reportLine}`)
+            const itemNumber = numberFor(l, f.reportLine)
+            taken.add(at(l.engagementId!, itemNumber, f.reportLine))
             const monthlyReportId = await monthOf(l)
             const made = await tx.expense.create({
               data: {
@@ -775,6 +923,12 @@ export class ExpensesService {
                 createdById: caller.userId,
               },
             })
+            const kept = carried.get(l.key) ?? []
+            if (kept.length)
+              await tx.expenseDocument.createMany({
+                data: kept.map((d) => ({ ...d, expenseId: made.id })),
+                skipDuplicates: true,
+              })
             await linkReceipts(tx, made.id, l, null)
             await linkPayments(tx, made.id, l, null)
             await linkSplit(tx, made.id, l)
@@ -786,10 +940,10 @@ export class ExpensesService {
           workspaceId,
           resource: 'expense',
           action: 'create',
-          description: `Saved the books' expenses for ${monthName(period)}: ${howMany(toCreate.length, 'line')} added, ${howMany(toUpdate.length, 'line')} changed, ${howMany(toRemove.length, 'line')} removed`,
+          description: `Saved the books' expenses for ${monthName(period)}: ${howMany(added.length, 'line')} added, ${howMany(changed.length, 'line')} changed, ${howMany(toRemove.length, 'line')} removed`,
           changes: [
-            { field: 'Added', after: String(toCreate.length) },
-            { field: 'Changed', after: String(toUpdate.length) },
+            { field: 'Added', after: String(added.length) },
+            { field: 'Changed', after: String(changed.length) },
             { field: 'Removed', after: String(toRemove.length) },
             {
               field: 'Total on engagements',
@@ -800,14 +954,12 @@ export class ExpensesService {
         { timeout: 30_000 }
       )
     } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
-        throw new ConflictException('These expenses were saved a moment ago. Open them again')
-      throw e
+      throw saveRefusal(e)
     }
     for (const id of touched) await this.checks.refresh(id)
     return {
-      created: toCreate.length,
-      updated: toUpdate.length,
+      created: added.length,
+      updated: changed.length,
       removed: toRemove.length,
       expenses: this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period)),
     }
@@ -1042,22 +1194,50 @@ export class ExpensesService {
       changedAt: new Date(),
     }
     const what = `bill ${transactionId} of the books for ${monthName(period)}`
+    // What the owner's word changed, field by field (review fix, 2026-11-12). The receipt and statement by id; the
+    // statement's line as the statement prints it.
+    const changes: LoggedChange[] = []
+    if ((before?.documentId ?? null) !== documentId)
+      changes.push({ field: 'Receipt', before: before?.documentId ?? null, after: documentId })
+    if (!same(was, payment))
+      changes.push(
+        {
+          field: 'Payment statement',
+          before: was?.documentId ?? null,
+          after: payment?.documentId ?? null,
+        },
+        {
+          field: 'Payment line',
+          before: was ? was.text.slice(0, 200) : null,
+          after: payment ? payment.text.slice(0, 200) : null,
+        }
+      )
+    if ((before?.dropped ?? false) !== dropped)
+      changes.push({
+        field: 'Dropped',
+        before: before?.dropped ? 'Yes' : 'No',
+        after: dropped ? 'Yes' : 'No',
+      })
     await this.log.change(
       caller,
       async (tx) => {
-        if (documentId === null && !dropped && !payment)
+        if (documentId === null && !dropped && !payment) {
           await tx.booksBill.deleteMany({ where: { workspaceId, period, transactionId } })
-        else
-          await tx.booksBill.upsert({
-            where,
-            create: { ...data, workspaceId, period, transactionId },
-            update: data,
-          })
+          return { id: before?.id ?? null }
+        }
+        const row = await tx.booksBill.upsert({
+          where,
+          create: { ...data, workspaceId, period, transactionId },
+          update: data,
+        })
+        return { id: row.id }
       },
-      {
+      (row) => ({
         workspaceId,
         resource: 'expense',
+        subjectId: row.id,
         action: 'update',
+        changes,
         description:
           change.dropped === true
             ? `Dropped ${what} for want of its receipt or payment`
@@ -1068,7 +1248,7 @@ export class ExpensesService {
               : documentId
                 ? `Chose the receipt of ${what}`
                 : `Left ${what} to be matched again`,
-      }
+      })
     )
   }
 }

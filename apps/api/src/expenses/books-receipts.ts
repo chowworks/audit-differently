@@ -43,7 +43,8 @@ export interface BillReceipt {
 
 /**
  * The receipt of each bill. An owner's choice first; then, among the rest, a receipt and a bill are matched when each
- * is the other's only candidate: the amount to the cent (or one cent off), dates within the admin's receipt days (`score`). A receipt
+ * is the other's only candidate: the amount to the cent (or one cent off), dates within the admin's receipt days (`score`), the
+ * receipt's date read. A receipt
  * that fits two bills, or a bill two receipts fit, waits for an owner. A dropped bill takes none.
  */
 export function receiptsOfBills(
@@ -65,8 +66,10 @@ export function receiptsOfBills(
   }
   const open = () =>
     bills.filter((b) => !out.has(b.transactionId) && !chosen.get(b.transactionId)?.dropped)
+  // A receipt whose date was not read is never matched on its amount alone: an owner may still choose it.
   const fits = (r: PlanReceipt, b: PlanBill) =>
     r.amount != null &&
+    r.date != null &&
     !!score(
       { id: r.id, amount: r.amount, date: r.date, vendor: r.vendor },
       { id: b.transactionId, amount: b.amount, date: b.date, vendor: b.vendor },

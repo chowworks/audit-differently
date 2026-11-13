@@ -1,4 +1,4 @@
-import { accountNumber, booksTransactions } from './books'
+import { accountNumber, booksTransactions, onBalanceSheet } from './books'
 
 import { BOOKS, rows } from './books.testing'
 
@@ -38,5 +38,27 @@ describe("the books' expenses (owner's decision, 2026-11-09)", () => {
 
   it('gives nothing for a sheet without an account, amount and date header', () => {
     expect(booksTransactions(rows('Name | Hours', 'Casey Demo | 40'))).toEqual([])
+  })
+
+  it('reads a bank or card named without a number as the side paid from, never a cost named for one', () => {
+    const ts = booksTransactions(
+      rows(
+        ' | Transaction date | Transaction type | Num | Name | Class full name | Account Name | Amount | Transaction ID',
+        ' | 09/03/2026 | Expense |  | Card Co |  | Chase Operating | -15 | 9301',
+        ' | 09/03/2026 | Expense |  | Card Co | G&A | 60250 Credit Card Fees | 15 | 9301',
+        ' | 09/04/2026 | Expense |  | Lakeside Bank |  | American Express | -9 | 9302',
+        ' | 09/04/2026 | Expense |  | Lakeside Bank | G&A | Bank Service Charges | 9 | 9302',
+        ' | 09/05/2026 | Expense |  | Corner Store |  | Petty Cash | -12 | 9303',
+        ' | 09/05/2026 | Expense |  | Corner Store | G&A | Office Supplies | 12 | 9303'
+      )
+    )
+    expect(ts.map((t) => [t.id, t.payment, t.lines.map((l) => [l.account, l.amount])])).toEqual([
+      ['9301', { account: 'Chase Operating', kind: 'bank' }, [['60250 Credit Card Fees', 15]]],
+      ['9302', { account: 'American Express', kind: 'card' }, [['Bank Service Charges', 9]]],
+      ['9303', { account: 'Petty Cash', kind: 'bank' }, [['Office Supplies', 12]]],
+    ])
+    expect(onBalanceSheet('13200 Prepaid Expenses')).toBe(true)
+    expect(onBalanceSheet('Accrued Interest Payable')).toBe(true)
+    expect(onBalanceSheet('Interest Expense')).toBe(false)
   })
 })

@@ -104,6 +104,20 @@ describe("the receipts of the books' bills (owner's decision, 2026-11-12)", () =
     ).toBe(0)
   })
 
+  it('never matches a receipt whose date was not read on its amount alone; an owner may still choose it', () => {
+    const b1 = bill('b1', 200, '2026-09-08')
+    expect(receiptsOfBills([b1], [receipt('r1', 200, null)], []).size).toBe(0)
+    expect(
+      Object.fromEntries(
+        receiptsOfBills(
+          [b1],
+          [receipt('r1', 200, null)],
+          [{ transactionId: 'b1', documentId: 'r1', dropped: false }]
+        )
+      )
+    ).toEqual({ b1: { documentId: 'r1', by: 'person' } })
+  })
+
   it("takes an owner's choice first, and the rest then match among themselves", () => {
     const found = receiptsOfBills(
       [bill('b1', 200, '2026-09-08'), bill('b2', 200, '2026-09-10')],

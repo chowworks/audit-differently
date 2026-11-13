@@ -20,9 +20,12 @@ import {
   receiptWords,
   statementLineWords,
   saveCounts,
+  saveLabel,
   shareWords,
   unmatchedReceipts,
+  unreadWords,
 } from './workspace-expenses'
+import { RECEIPT_MAX_BYTES, mb } from '@/components/PayrollProof'
 import './workspace-expenses.css'
 
 const many = (n: number, one: string, more = `${one}s`) =>
@@ -54,7 +57,8 @@ export function WorkspaceExpenses({
   const can = d.can.change
   const groups = engagementGroups(d.lines)
   const notOn = notOnEngagements(d.lines)
-  const counts = saveCounts(d.lines)
+  const counts = saveCounts(d.lines, d.toRemove ?? [])
+  const unread = unreadWords(d.unread ?? [])
 
   const changeMapping = async (m: AccountMappingDto, body: Record<string, unknown>) => {
     setError(null)
@@ -72,6 +76,14 @@ export function WorkspaceExpenses({
   const addReceipts = async (files: File[], transactionId?: string) => {
     if (!files.length) return
     setError(null)
+    // A receipt over the server's limit is named and left out before anything is sent.
+    const big = files.filter((f) => f.size > RECEIPT_MAX_BYTES)
+    files = files.filter((f) => f.size <= RECEIPT_MAX_BYTES)
+    const leftOut = big.length
+      ? `Over ${mb(RECEIPT_MAX_BYTES)}, left out: ${big.map((f) => f.name).join(', ')}.`
+      : null
+    setError(leftOut)
+    if (!files.length) return
     setBusy(transactionId ? 'Reading the receipt…' : `Reading ${many(files.length, 'receipt')}…`)
     try {
       for (let at = 0; at < files.length; at += 20) {
@@ -81,7 +93,13 @@ export function WorkspaceExpenses({
         load.setData(await api.upload<WorkspaceExpensesDto>(receiptsUrl, form))
       }
     } catch (e) {
-      setError((e as Error).message)
+      const message = (e as Error).message
+      // The server names a receipt it refuses for its type or size; a lone receipt is named here when it does not.
+      const named =
+        files.length === 1 && !message.includes(files[0]!.name)
+          ? `${files[0]!.name}: ${message}`
+          : message
+      setError(leftOut ? `${leftOut} ${named}` : named)
     } finally {
       setBusy(null)
     }
@@ -182,6 +200,7 @@ export function WorkspaceExpenses({
             on none, each with why.
           </p>
         )}
+        {unread && <Notice tone="warn">{unread}</Notice>}
         {error && <ErrorNote message={error} />}
         {busy && <Notice tone="info">{busy}</Notice>}
       </Card>
@@ -340,16 +359,30 @@ export function WorkspaceExpenses({
         </Card>
       )}
 
+      {can && counts.remove > 0 && (
+        <Card
+          title="Saved lines Save will remove"
+          eyebrow="The books no longer bill them this month"
+        >
+          <ul className="wex-removals">
+            {(d.toRemove ?? []).map((r) => (
+              <li key={r.id}>
+                <span>
+                  <b>{r.itemNumber}</b> · {r.vendor}
+                </span>
+                <span>
+                  {money(r.amount)} · <Chip tone="warn">will be removed</Chip>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
       <div className="wex-actions">
-        {can && d.file && (
-          <Button
-            kind="navy"
-            disabled={!!busy || counts.add + counts.change === 0}
-            onClick={() => void save()}
-          >
-            {counts.add + counts.change === 0
-              ? 'Expenses saved'
-              : `Save expenses (${many(counts.add, 'new line')}${counts.change ? `, ${many(counts.change, 'change')}` : ''})`}
+        {can && (d.file || counts.remove > 0) && (
+          <Button kind="navy" disabled={!!busy || counts.pending === 0} onClick={() => void save()}>
+            {saveLabel(counts)}
           </Button>
         )}
         <Button kind="secondary" disabled={!!busy} onClick={() => onDone(null)}>

@@ -46,14 +46,42 @@ export function notOnEngagements(lines: BooksLineDto[]) {
   return out
 }
 
-/** What Save would do: lines to add, lines to change. */
-export function saveCounts(lines: BooksLineDto[]) {
+/** What Save would do: lines to add, lines to change, saved lines to remove. */
+export function saveCounts(lines: BooksLineDto[], toRemove: WorkspaceExpensesDto['toRemove'] = []) {
   const billed = lines.filter((l) => l.status === 'billed')
+  const add = billed.filter((l) => !l.saved).length
+  const change = billed.filter((l) => l.saved === 'changed').length
   return {
-    add: billed.filter((l) => !l.saved).length,
-    change: billed.filter((l) => l.saved === 'changed').length,
+    add,
+    change,
+    remove: toRemove.length,
     same: billed.filter((l) => l.saved === 'same').length,
+    pending: add + change + toRemove.length,
   }
+}
+
+const count = (n: number, one: string) =>
+  `${n.toLocaleString('en-US')} ${n === 1 ? one : `${one}s`}`
+
+/** The Save button's words: "Save expenses (1 change, 1 removal)", or "Expenses saved" when there is nothing to do. */
+export function saveLabel(c: ReturnType<typeof saveCounts>) {
+  if (!c.pending) return 'Expenses saved'
+  const parts = [
+    c.add ? count(c.add, 'new line') : null,
+    c.change ? count(c.change, 'change') : null,
+    c.remove ? count(c.remove, 'removal') : null,
+  ].filter(Boolean)
+  return `Save expenses (${parts.join(', ')})`
+}
+
+/** The month's files that could not be read, as a warning says it. Null when every file was read. */
+export function unreadWords(unread: string[]) {
+  if (!unread.length) return null
+  const names =
+    unread.length === 1
+      ? unread[0]
+      : `${unread.slice(0, -1).join(', ')} and ${unread[unread.length - 1]}`
+  return `Could not read ${names}: left out.`
 }
 
 /**

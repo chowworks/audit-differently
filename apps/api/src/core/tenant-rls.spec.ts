@@ -3848,6 +3848,35 @@ suite('tenant isolation', () => {
     })
   })
 
+  describe("the books' review fixes (migration 20261112000400)", () => {
+    it("lets a bill's receipt and statement go together, as deleting a workspace removes them", async () => {
+      for (const id of ['D-R1', 'D-S1'])
+        await insert(db, 'Document', { id, workspaceId: 'W1', storageKey: `W1/workspace/${id}` })
+      await db.query(
+        `INSERT INTO "BooksBill" ("id","workspaceId","period","transactionId","documentId","paymentDocumentId","paymentLine","changedById")
+         VALUES ('BB-9','W1','2026-09','BB-9','D-R1','D-S1','{"page":1,"text":"09/03 200.00"}','owner-W1')`
+      )
+      await db.query(`DELETE FROM "Document" WHERE "id" IN ('D-R1','D-S1')`)
+      expect(
+        (
+          await db.query(
+            `SELECT "documentId","paymentDocumentId","paymentLine" FROM "BooksBill" WHERE "id" = 'BB-9'`
+          )
+        ).rows
+      ).toEqual([{ documentId: null, paymentDocumentId: null, paymentLine: null }])
+      await db.query(`DELETE FROM "BooksBill"`)
+    })
+
+    it("refuses an account mapping that names another workspace's engagement", async () => {
+      await expect(
+        db.query(
+          `INSERT INTO "AccountMapping" ("id","workspaceId","engagementId","fileName","sha256","read","changedById")
+           VALUES ('AM-9','W1','E-W2','m.xlsx','${'f'.repeat(64)}','{"accounts":{}}','owner-W1')`
+        )
+      ).rejects.toThrow(/its own workspace/)
+    })
+  })
+
   describe("the books' split of a shared cost (migration 20261112000300)", () => {
     it('keeps a split on a books line only, as an object', async () => {
       const split = `'{"how":"entry","rows":[],"at":[]}'`

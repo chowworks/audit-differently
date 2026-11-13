@@ -27,6 +27,16 @@ describe("a card's statement in the bank statements folder (owner's decision, 20
     // One such word is not enough: a bank statement may mention a card's new balance in a line.
     expect(isCardStatement(lines(...BANK.map((l) => l.text), 'AMEX new balance paid'))).toBe(false)
     expect(isCardStatement(null)).toBe(false)
+    // A bank's statement that prints a closing date and a new balance is still a bank's: a card's bill also prints a
+    // word only a card's does (review, 2026-11-12).
+    expect(
+      isCardStatement(
+        lines(
+          ...BANK.map((l) => l.text),
+          'Statement closing date 09/30/2026  New balance $9,000.00'
+        )
+      )
+    ).toBe(false)
   })
 
   it("is read by payroll as a card's: never a bank line of anyone's pay", () => {

@@ -7,7 +7,7 @@ import {
   type PlanEngagement,
   type PlanMapping,
 } from './books-plan'
-import { BOOKS } from './books.testing'
+import { BOOKS, rows } from './books.testing'
 
 /** A fictional workspace: two programs, one of them an engagement of the app, and its account mapping. */
 const programs: ProgramNames[] = [
@@ -238,5 +238,139 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
   it('keys each line by the month, transaction, account, class and place, so the same file gives the same keys', () => {
     expect(plan().map((l) => l.key)).toEqual(plan().map((l) => l.key))
     expect(plan()[0]!.key).toBe('2026-09:9002:60901:youth coding program:1')
+  })
+
+  it('keeps a line saved by another month’s upload where it is, from an export that overlaps this one', () => {
+    // September's upload saved the 09/05 software (its key starts with the month uploaded); an export of August that
+    // runs on into September holds it too.
+    const saved = {
+      id: 'x-9003',
+      engagementId: 'e-ycp',
+      booksKey: '2026-09:9003:60301:youth coding program:1',
+      date: '2026-09-05',
+      allocatedAmount: 80,
+      totalCost: 80,
+      budgetLineId: 'b-ind',
+      allocationNote: null,
+    }
+    const august = plan({ period: '2026-08', existing: [saved] })
+    expect(august.find((l) => l.transactionId === '9003')?.status).toBe('already-entered')
+    expect(august.filter((l) => l.status === 'billed').map((l) => l.transactionId)).toEqual([
+      '9002',
+      '9005',
+    ])
+    // Its own month's upload knows it as its own.
+    const september = plan({ existing: [saved] }).find((l) => l.transactionId === '9003')!
+    expect([september.status, september.saved]).toEqual(['billed', 'changed'])
+  })
+})
+
+/** A month's books of the rows given, under the export's header. */
+const books = (...texts: string[]) =>
+  booksTransactions(
+    rows(
+      ' | Transaction date | Transaction type | Num | Posting (Y/N) | Name | Class full name | Description | Account Name | Amount | Transaction ID',
+      ...texts
+    )
+  )
+
+describe('a reclass, and several allocation entries on one pool (owner’s decision, 2026-11-12)', () => {
+  it('reads a journal entry moving a cost between programs as ordinary lines, never an allocation', () => {
+    const lines = plan({
+      transactions: books(
+        ' | 09/05/2026 | Expense |  | Yes | Pixel Tools |  |  | 22000 Card:22001 Morgan Lee - Card | -120 | 9101',
+        ' | 09/05/2026 | Expense |  | Yes | Pixel Tools | Adult Bootcamp |  | 60301 Software and Subscription | 120 | 9101',
+        ' | 09/30/2026 | Journal Entry | JE-3 | Yes |  | Adult Bootcamp |  | 60301 Software and Subscription | -80 | 9102',
+        ' | 09/30/2026 | Journal Entry | JE-3 | Yes |  | Youth Coding Program |  | 60301 Software and Subscription | 80 | 9102'
+      ),
+    })
+    expect(lines.map((l) => [l.transactionId, l.className, l.status])).toEqual([
+      ['9101', 'Adult Bootcamp', 'not-ours'],
+      ['9102', 'Adult Bootcamp', 'credit'],
+      ['9102', 'Youth Coding Program', 'billed'],
+    ])
+    const moved = lines[2]!
+    expect(moved.allocation).toBeNull()
+    expect(moved.bills.map((b) => b.transactionId)).toEqual(['9102'])
+  })
+
+  const pool = (second: number) =>
+    books(
+      ' | 09/04/2026 | Expense |  | Yes | PayPeople |  |  | 10000 Lakeside Checking 1234 | -200 | 9201',
+      ' | 09/04/2026 | Expense |  | Yes | PayPeople | Allocation Required |  | 63301 Payroll Fees | 200 | 9201',
+      ' | 09/18/2026 | Expense |  | Yes | PayPeople |  |  | 10000 Lakeside Checking 1234 | -300 | 9202',
+      ' | 09/18/2026 | Expense |  | Yes | PayPeople | Allocation Required |  | 63301 Payroll Fees | 300 | 9202',
+      ' | 09/30/2026 | Journal Entry | JE-A | Yes |  | Allocation Required |  | 63301 Payroll Fees | -200 | 9203',
+      ' | 09/30/2026 | Journal Entry | JE-A | Yes |  | Youth Coding Program |  | 63301 Payroll Fees | 50 | 9203',
+      ' | 09/30/2026 | Journal Entry | JE-A | Yes |  | Adult Bootcamp |  | 63301 Payroll Fees | 150 | 9203',
+      ` | 09/30/2026 | Journal Entry | JE-B | Yes |  | Allocation Required |  | 63301 Payroll Fees | -${second} | 9204`,
+      ' | 09/30/2026 | Journal Entry | JE-B | Yes |  | Youth Coding Program |  | 63301 Payroll Fees | 100 | 9204',
+      ` | 09/30/2026 | Journal Entry | JE-B | Yes |  | Adult Bootcamp |  | 63301 Payroll Fees | ${second - 100} | 9204`
+    )
+  const billed = (transactions: ReturnType<typeof books>, dropped: string[] = []) =>
+    plan({
+      transactions,
+      choices: dropped.map((transactionId) => ({ transactionId, documentId: null, dropped: true })),
+    }).filter((l) => l.engagementId === 'e-ycp')
+
+  it('gives each entry on one pool the bills that come to its total', () => {
+    const [a, b] = billed(pool(300))
+    expect([a!.allocation?.sourceIds, b!.allocation?.sourceIds]).toEqual([['9201'], ['9202']])
+    expect(a!.bills.map((x) => x.amount)).toEqual([200])
+    // Dropping the $300 bill takes JE-B's line, never JE-A's.
+    const [a2, b2] = billed(pool(300), ['9202'])
+    expect([a2!.status, a2!.amount]).toEqual(['billed', 50])
+    expect([b2!.status, b2!.amount]).toEqual(['dropped', 0])
+  })
+
+  it('keeps every bill on each entry when no split comes to their totals, taking a dropped bill’s share of them', () => {
+    // JE-B shares $250: no bills of the pool come to it.
+    const [a, b] = billed(pool(250))
+    expect([a!.allocation?.sourceIds, b!.allocation?.sourceIds]).toEqual([
+      ['9201', '9202'],
+      ['9201', '9202'],
+    ])
+    // The $300 bill is three fifths of the $500 the bills come to: never more than the line.
+    const [a2, b2] = billed(pool(250), ['9202'])
+    expect([a2!.status, a2!.amount]).toEqual(['billed', 20])
+    expect([b2!.status, b2!.amount]).toEqual(['billed', 40])
+    expect(a2!.split?.less).toEqual([{ transactionId: '9202', amount: 300, off: 30 }])
+  })
+})
+
+describe('matching among every bill of the month (owner’s decision, 2026-11-12)', () => {
+  // Our software, and another program’s of the same amount the next day, both on the card.
+  const month = books(
+    ' | 09/05/2026 | Expense |  | Yes | Pixel Tools |  |  | 22000 Card:22001 Morgan Lee - Card | -80 | 9401',
+    ' | 09/05/2026 | Expense |  | Yes | Pixel Tools | Youth Coding Program |  | 60301 Software and Subscription | 80 | 9401',
+    ' | 09/06/2026 | Expense |  | Yes | Pixel Tools |  |  | 22000 Card:22001 Morgan Lee - Card | -80 | 9402',
+    ' | 09/06/2026 | Expense |  | Yes | Pixel Tools | Adult Bootcamp |  | 60301 Software and Subscription | 80 | 9402'
+  )
+  const ours = (over: Partial<Parameters<typeof planBooks>[0]> = {}) =>
+    plan({ transactions: month, ...over }).find((l) => l.transactionId === '9401')!
+  const receipt = { id: 'r1', fileName: 'r1.pdf', amount: 80, date: '2026-09-05', vendor: '' }
+  const statement = {
+    id: 'card',
+    fileName: 'card.pdf',
+    card: true,
+    lines: [{ page: 1, x: 0, y: 1, width: 1, height: 1, text: '09/05/2026 PIXEL TOOLS 80.00' }],
+  }
+
+  it('counts another program’s bill of the same amount a rival, for a receipt and a statement line', () => {
+    const line = ours({ receipts: [receipt], statements: [statement] })
+    expect(line.status).toBe('billed')
+    expect(line.bills[0]!.receipt).toBeNull()
+    expect(line.bills[0]!.payment).toBeNull()
+    expect(line.bills[0]!.paymentChoices.map((p) => p?.line.text)).toEqual([
+      '09/05/2026 PIXEL TOOLS 80.00',
+    ])
+  })
+
+  it('still takes an owner’s choice', () => {
+    const line = ours({
+      receipts: [receipt],
+      choices: [{ transactionId: '9401', documentId: 'r1', dropped: false }],
+    })
+    expect(line.bills[0]!.receipt).toEqual({ documentId: 'r1', fileName: 'r1.pdf', by: 'person' })
   })
 })

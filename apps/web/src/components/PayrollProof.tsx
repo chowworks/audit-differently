@@ -1095,7 +1095,27 @@ const ZIP_MAX_FILES = 200
 const NAMES_MAX_BYTES = 5 * 1024 * 1024
 /** The server's limit for one file (MAX_UPLOAD_BYTES in the API). */
 export const FILE_MAX_BYTES = 25 * 1024 * 1024
-const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`
+/** The server's limit for an account mapping file (the account-mappings upload in the API). */
+export const MAPPING_MAX_BYTES = 5 * 1024 * 1024
+/** The server's limit for one receipt (the expenses receipts upload in the API). */
+export const RECEIPT_MAX_BYTES = 10 * 1024 * 1024
+export const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`
+
+/**
+ * The zip's expense files over the server's limits, by folder and name: left out of the upload, never in the way of the
+ * payroll files. Null when none is.
+ */
+export function oversizeExpenseFiles(mappings: File[], receipts: File[]) {
+  const big = [
+    ...mappings
+      .filter((f) => f.size > MAPPING_MAX_BYTES)
+      .map((f) => `${ACCOUNT_MAPPING_FOLDER}/${f.name} (over ${mb(MAPPING_MAX_BYTES)})`),
+    ...receipts
+      .filter((f) => f.size > RECEIPT_MAX_BYTES)
+      .map((f) => `${RECEIPTS_FOLDER}/${f.name} (over ${mb(RECEIPT_MAX_BYTES)})`),
+  ]
+  return big.length ? big : null
+}
 
 /**
  * Step 1: one zip with the sample's folders (Timesheets, Payroll registers, Bank & card statements; Pay stubs, QuickBooks transactions, Program names and Account mapping when the team has them), opened in the
@@ -1186,12 +1206,10 @@ export function UploadPanel({
             .map((f) => f.file.name)
             .join(', ')}${big.length > 3 ? ', …' : ''}.`
         )
-      const bigNames = takesNames
-        ? [...sorted.names, ...sorted.mappings].filter((f) => f.size > NAMES_MAX_BYTES)
-        : []
+      const bigNames = takesNames ? sorted.names.filter((f) => f.size > NAMES_MAX_BYTES) : []
       if (bigNames.length)
         setTooBig(
-          `${sorted.names.includes(bigNames[0]!) ? PROGRAM_NAMES_FOLDER : ACCOUNT_MAPPING_FOLDER}/${bigNames[0]!.name} is over ${mb(NAMES_MAX_BYTES)}: a program names or account mapping file is read in memory, up to ${mb(NAMES_MAX_BYTES)}.`
+          `${PROGRAM_NAMES_FOLDER}/${bigNames[0]!.name} is over ${mb(NAMES_MAX_BYTES)}: a program names file is read in memory, up to ${mb(NAMES_MAX_BYTES)}.`
         )
       setFiles(sorted.files)
       setNames(sorted.names)
@@ -1273,6 +1291,15 @@ export function UploadPanel({
               </div>
             )}
           </div>
+          {takesNames &&
+            (() => {
+              const big = oversizeExpenseFiles(mappings, receipts)
+              return big ? (
+                <Notice tone="warn">
+                  Too large to read, left out (the payroll files still go up): {big.join(', ')}.
+                </Notice>
+              ) : null
+            })()}
           {names.length > 0 && !takesNames && (
             <p className="text-sm text-soft">
               The {PROGRAM_NAMES_FOLDER} folder is read only when an owner uploads the zip on Month

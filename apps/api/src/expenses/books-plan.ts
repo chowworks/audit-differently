@@ -81,40 +81,129 @@ const POOL = /\ballocat/i
 interface Entry {
   /** The allocation entry's transaction. */
   id: string
+  /** yyyy-mm-dd */
+  date: string
   account: string
   pool: string
   total: number
   sourceIds: string[]
+  /**
+   * The sources' pool parts do not come to the entry's total: several entries share one pool's account and no exact
+   * split of its bills among them was found, so each keeps them all (`billsOf` then takes a dropped bill's share of what
+   * the sources come to, never more than the line).
+   */
+  loose: boolean
 }
 
-/** The allocation entries of the month: per account, one line taking a class's pool out, the rest giving it to others. */
+/** The pool part of a bill: its lines in the pool's class and on its account. */
+const poolPartOf = (t: BooksTransaction, pool: BooksLine) =>
+  cents(
+    t.lines
+      .filter(
+        (l) =>
+          l.amount > 0 &&
+          programKey(l.className) === programKey(pool.className) &&
+          (l.accountNo ?? l.account) === (pool.accountNo ?? pool.account)
+      )
+      .reduce((n, l) => n + l.amount, 0)
+  )
+
+/** Steps the search for an exact split of a pool's bills among its entries may take before it gives up. */
+const MAX_SPLIT_STEPS = 20_000
+
+const daysApart = (a: string, b: string) =>
+  Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86_400_000
+
+/**
+ * Each entry's own bills, when several entries share out one pool's account in the month (owner's decision,
+ * 2026-11-12): the bills whose pool parts come to the entry's total to the cent, each bill to one entry, the bills
+ * nearest an entry's date tried first. Null when there is no such split (or the search runs too long).
+ */
+function splitSources(
+  entries: Entry[],
+  parts: Map<string, { id: string; date: string; part: number }>
+): Map<Entry, string[]> | null {
+  let steps = 0
+  const out = new Map<Entry, string[]>()
+  const toCents = (n: number) => Math.round(n * 100)
+  const place = (i: number, free: Set<string>): boolean => {
+    if (i === entries.length) return true
+    const e = entries[i]!
+    const order = [...free]
+      .map((id) => parts.get(id)!)
+      .sort((a, b) => daysApart(a.date, e.date) - daysApart(b.date, e.date))
+    const pick = (k: number, left: number, chosen: string[]): boolean => {
+      if (++steps > MAX_SPLIT_STEPS) return false
+      if (left === 0 && chosen.length) {
+        out.set(e, chosen)
+        const rest = new Set([...free].filter((id) => !chosen.includes(id)))
+        if (place(i + 1, rest)) return true
+      }
+      for (let j = k; j < order.length; j++) {
+        const c = toCents(order[j]!.part)
+        if (c <= left && pick(j + 1, left - c, [...chosen, order[j]!.id])) return true
+        if (steps > MAX_SPLIT_STEPS) return false
+      }
+      return false
+    }
+    return pick(0, toCents(e.total), [])
+  }
+  return place(0, new Set(parts.keys())) ? out : null
+}
+
+/**
+ * The allocation entries of the month: per account, one line taking a pool's class ("Allocation Required") out, the
+ * rest giving it to others. A line taken out of a program's own class to another is a reclass, not an entry: its lines
+ * are ordinary lines (owner's decision, 2026-11-12).
+ */
 function entriesOf(transactions: BooksTransaction[]): Map<BooksLine, Entry> {
   const out = new Map<BooksLine, Entry>()
+  const byPool = new Map<string, { entry: Entry; pool: BooksLine }[]>()
   for (const t of transactions) {
     const byAccount = new Map<string, BooksLine[]>()
     for (const l of t.lines) byAccount.set(l.account, [...(byAccount.get(l.account) ?? []), l])
     for (const [account, ls] of byAccount) {
       const out1 = ls.filter((l) => l.amount < 0)
       const given = ls.filter((l) => l.amount > 0)
-      if (out1.length !== 1 || !given.length || !out1[0]!.className) continue
+      if (out1.length !== 1 || !given.length || !POOL.test(out1[0]!.className)) continue
       const pool = out1[0]!
       const total = cents(-pool.amount)
       if (!near(cents(given.reduce((s, l) => s + l.amount, 0)), total)) continue
       if (given.some((l) => programKey(l.className) === programKey(pool.className))) continue
       const sourceIds = transactions
-        .filter(
-          (o) =>
-            o.id !== t.id &&
-            o.lines.some(
-              (l) =>
-                l.amount > 0 &&
-                programKey(l.className) === programKey(pool.className) &&
-                (l.accountNo ?? l.account) === (pool.accountNo ?? pool.account)
-            )
-        )
+        .filter((o) => o.id !== t.id && poolPartOf(o, pool) > 0)
         .map((o) => o.id)
-      const entry = { id: t.id, account, pool: pool.className, total, sourceIds }
+      const entry: Entry = {
+        id: t.id,
+        date: t.date,
+        account,
+        pool: pool.className,
+        total,
+        sourceIds,
+        loose: false,
+      }
       for (const l of ls) out.set(l, entry)
+      const key = `${programKey(pool.className)}\u0000${pool.accountNo ?? pool.account}`
+      byPool.set(key, [...(byPool.get(key) ?? []), { entry, pool }])
+    }
+  }
+  // Several entries on one pool's account: each takes its own bills, else each keeps them all, loosely.
+  for (const group of byPool.values()) {
+    if (group.length < 2) continue
+    const entries = group.map((g) => g.entry)
+    const byId = new Map(transactions.map((t) => [t.id, t]))
+    const ids = [...new Set(entries.flatMap((e) => e.sourceIds))]
+    const parts = new Map(
+      ids.flatMap((id) => {
+        const t = byId.get(id)
+        return t ? [[id, { id, date: t.date, part: poolPartOf(t, group[0]!.pool) }] as const] : []
+      })
+    )
+    const split = splitSources(entries, parts)
+    for (const e of entries) {
+      const own = split?.get(e)
+      if (own) e.sourceIds = e.sourceIds.filter((id) => own.includes(id))
+      else e.loose = true
     }
   }
   return out
@@ -179,6 +268,14 @@ export function planBooks(input: {
     [...entries.values()].map((e) => `${programKey(e.pool)}\u0000${e.account}`)
   )
   const byKey = new Map(input.existing.filter((x) => x.booksKey).map((x) => [x.booksKey!, x]))
+  // A line is written to the month of its own date, but keyed by the month uploaded: the keys another month's upload
+  // saved, by what follows the month (owner's decision, 2026-11-12: overlapping exports bill a line once).
+  const afterMonth = (key: string) => key.slice(key.indexOf(':'))
+  const elsewhere = new Set(
+    input.existing
+      .filter((x) => x.booksKey && !x.booksKey.startsWith(`${period}:`))
+      .map((x) => afterMonth(x.booksKey!))
+  )
   const seen = new Map<string, number>()
   const out: BooksLineDto[] = []
   const shares = new Map<BooksLineDto, Share>()
@@ -312,6 +409,11 @@ export function planBooks(input: {
         set('month-closed')
         continue
       }
+      // Saved by another month's upload (an export that overlaps this one's): it stays where it is.
+      if (!byKey.has(line.key) && elsewhere.has(afterMonth(line.key))) {
+        set('already-entered')
+        continue
+      }
       // Entered on the month already (typed, or imported from the books before): the same day and amount.
       if (
         !byKey.has(line.key) &&
@@ -332,6 +434,7 @@ export function planBooks(input: {
   billsOf(
     shares,
     transactions,
+    entries,
     input.receipts ?? [],
     input.choices ?? [],
     input.statements ?? [],
@@ -362,11 +465,14 @@ const billOf = (t: BooksTransaction): PlanBill => ({
 
 /**
  * Each billed line's bills, with their receipts and payments; a dropped bill's share comes off the line (owner's
- * decision, 2026-11-12), and a line whose every bill is dropped bills nothing.
+ * decision, 2026-11-12), and a line whose every bill is dropped bills nothing. Receipts and statement lines are matched
+ * among the bills of every expense of the month (each transaction with a line of cost, all but the allocation entries),
+ * not the billed lines' alone, so another program's bill of the same amount is a rival; the billed lines keep theirs.
  */
 function billsOf(
   shares: Map<BooksLineDto, Share>,
   transactions: BooksTransaction[],
+  entries: Map<BooksLine, Entry>,
   receipts: PlanReceipt[],
   choices: PlanBillChoice[],
   statements: PlanStatement[],
@@ -377,8 +483,16 @@ function billsOf(
     (s.entry ? s.entry.sourceIds : [line.transactionId]).flatMap((id) => byId.get(id) ?? [])
   const bills = new Map<string, PlanBill>()
   for (const [line, s] of shares) for (const t of sourcesOf(line, s)) bills.set(t.id, billOf(t))
-  const found = receiptsOfBills([...bills.values()], receipts, choices, matching.receiptDays)
-  const paid = paymentsOfBills([...bills.values()], statements, choices, matching.paymentDays)
+  const month = new Map(bills)
+  for (const t of transactions)
+    if (
+      !month.has(t.id) &&
+      t.lines.some((l) => l.amount > 0) &&
+      !t.lines.every((l) => entries.has(l))
+    )
+      month.set(t.id, billOf(t))
+  const found = receiptsOfBills([...month.values()], receipts, choices, matching.receiptDays)
+  const paid = paymentsOfBills([...month.values()], statements, choices, matching.paymentDays)
   const taken = new Set([...paid.values()].map(paymentKey))
   const fileOf = new Map(receipts.map((r) => [r.id, r.fileName]))
   const dropped = new Set(choices.filter((c) => c.dropped).map((c) => c.transactionId))
@@ -419,8 +533,11 @@ function billsOf(
           (l) => programKey(l.className) === programKey(entry.pool) && l.account === entry.account
         )
         .reduce((n, l) => n + l.amount, 0)
+    // Of the entry's total; of what the sources come to when they are not the entry's own (`Entry.loose`).
+    const whole = entry.loose ? sources.reduce((n, t) => n + inPool(t), 0) : entry.total
     const off = gone.reduce((n, t) => n + inPool(t), 0)
-    line.amount = cents(s.bookedAs * (1 - off / entry.total))
+    const share = whole > 0 ? off / whole : 0
+    line.amount = cents(Math.min(s.bookedAs, Math.max(0, s.bookedAs * (1 - share))))
     if (line.amount <= 0) {
       line.amount = 0
       line.status = 'dropped'
@@ -431,8 +548,7 @@ function billsOf(
       let so = 0
       line.split.less = gone.map((t, i) => {
         const part = cents(inPool(t))
-        const o =
-          i === gone.length - 1 ? cents(taken - so) : cents((s.bookedAs * part) / entry.total)
+        const o = i === gone.length - 1 ? cents(taken - so) : cents((s.bookedAs * part) / whole)
         so = cents(so + o)
         return { transactionId: t.id, amount: part, off: o }
       })

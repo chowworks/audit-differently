@@ -2948,6 +2948,13 @@ export interface WorkspaceExpensesDto {
   lines: BooksLineDto[]
   /** The month's workspace receipts and the bills each proves. */
   receipts: BooksReceiptDto[]
+  /**
+   * Lines Save wrote before that the books no longer bill (a bill dropped, an account no longer billed, a line gone
+   * from the export), on a month still a draft: Save removes them.
+   */
+  toRemove: { id: string; itemNumber: string; vendor: string; amount: number }[]
+  /** Files of the month's QuickBooks transactions that could not be read as an export: left out, by name. */
+  unread: string[]
   can: { change: boolean }
 }
 

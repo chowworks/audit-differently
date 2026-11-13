@@ -41,8 +41,13 @@ import {
 } from '@/components/payroll-match/AiReadBox'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { WorkspaceExpenses } from '@/pages/WorkspaceExpenses'
-import { UploadPanel } from '@/components/PayrollProof'
-import { RECEIPTS_FOLDER } from '@/lib/zip-files'
+import {
+  MAPPING_MAX_BYTES,
+  RECEIPT_MAX_BYTES,
+  UploadPanel,
+  oversizeExpenseFiles,
+} from '@/components/PayrollProof'
+import { ACCOUNT_MAPPING_FOLDER, RECEIPTS_FOLDER } from '@/lib/zip-files'
 import {
   BudgetTracking,
   FileStats,
@@ -485,6 +490,8 @@ function WorkspaceMatch({
   const [runError, setRunError] = useState<string | null>(null)
   /** A refusal of a change started from the files card, shown there. */
   const [fileError, setFileError] = useState<string | null>(null)
+  /** Expense files (account mappings, receipts) the last upload left out, by name: the payroll files went up anyway. */
+  const [expenseWarning, setExpenseWarning] = useState<string | null>(null)
   const [pollError, setPollError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -637,6 +644,7 @@ function WorkspaceMatch({
     receipts: File[] = []
   ): Promise<boolean> => {
     clearErrors()
+    setExpenseWarning(null)
     const fail = where === 'files' ? setFileError : setRunError
     try {
       for (const file of names) {
@@ -651,29 +659,48 @@ function WorkspaceMatch({
           return false
         }
       }
+      // The expense files (account mappings, receipts) never stop the payroll files: one that is too large or is
+      // refused is left out, by name, in a warning, and the payroll files go up all the same.
+      const left: string[] = [...(oversizeExpenseFiles(mappings, receipts) ?? [])]
       for (const file of mappings) {
+        if (file.size > MAPPING_MAX_BYTES) continue
         setBusy(`Reading the account mapping in ${file.name}…`)
         const form = new FormData()
         form.append('file', file)
         try {
           await api.upload(`/workspaces/${workspaceId}/account-mappings`, form)
         } catch (e) {
-          fail(`Account mapping/${file.name}: ${(e as Error).message}`)
-          return false
+          left.push(`${ACCOUNT_MAPPING_FOLDER}/${file.name} (${(e as Error).message})`)
         }
       }
-      for (let at = 0; at < receipts.length; at += RECEIPTS_AT_ONCE) {
-        const batch = receipts.slice(at, at + RECEIPTS_AT_ONCE)
-        setBusy(`Reading receipts ${at + 1}–${at + batch.length} of ${receipts.length}…`)
+      const fit = receipts.filter((f) => f.size <= RECEIPT_MAX_BYTES)
+      const receiptsUrl = `/workspaces/${workspaceId}/expenses/${period}/receipts`
+      for (let at = 0; at < fit.length; at += RECEIPTS_AT_ONCE) {
+        const batch = fit.slice(at, at + RECEIPTS_AT_ONCE)
+        setBusy(`Reading receipts ${at + 1}–${at + batch.length} of ${fit.length}…`)
         const form = new FormData()
         for (const file of batch) form.append('files', file)
         try {
-          await api.upload(`/workspaces/${workspaceId}/expenses/${period}/receipts`, form)
-        } catch (e) {
-          fail(`${RECEIPTS_FOLDER}: ${(e as Error).message}`)
-          return false
+          await api.upload(receiptsUrl, form)
+        } catch {
+          // One refused receipt refuses its batch: each sent on its own, so only the one at fault is left out (a
+          // receipt the month already has is not kept twice).
+          for (const file of batch) {
+            const one = new FormData()
+            one.append('files', file)
+            try {
+              await api.upload(receiptsUrl, one)
+            } catch (e) {
+              left.push(`${RECEIPTS_FOLDER}/${file.name} (${(e as Error).message})`)
+            }
+          }
         }
       }
+      setExpenseWarning(
+        left.length
+          ? `Left out of the expenses, the payroll files went up all the same: ${left.join('; ')}.`
+          : null
+      )
       let expected: number | undefined
       if (mode === 'replace') {
         setBusy('Counting the files…')
@@ -1056,6 +1083,7 @@ function WorkspaceMatch({
         note={
           <>
             <ErrorNote message={runError} />
+            {expenseWarning && <Notice tone="warn">{expenseWarning}</Notice>}
             {fileStats}
             <p className="text-sm">
               <b>Added a participant or tagged staff since?</b> Match again: it reads these same
@@ -1111,6 +1139,7 @@ function WorkspaceMatch({
       >
         <Stepper steps={STEPS} current={step} />
         <ErrorNote message={runError} />
+        {expenseWarning && <Notice tone="warn">{expenseWarning}</Notice>}
         {(runError || fileError) && stuck && againButton}
         {step === 'Upload' && !hasFiles && (
           <div className="grid gap-4">

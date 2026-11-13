@@ -1072,17 +1072,27 @@ function ExpensesSection({
                     </td>
                     {r.can.edit && (
                       <td className="ad-num whitespace-nowrap">
-                        <Button kind="ghost" onClick={() => act.editExpense(e)}>
-                          edit
-                        </Button>
-                        <Button
-                          kind="ghost"
-                          className="text-danger"
-                          onClick={() => act.deleteExpense(e)}
-                          data-testid={`delete-${e.itemNumber}`}
-                        >
-                          remove
-                        </Button>
+                        {/* A line from the books is changed in the books or on the month's expenses, never here
+                            (review fix, 2026-11-12); its proofs are still attached in the Proof column. */}
+                        {e.fromBooks ? (
+                          <span className="ad-table-sub" data-testid={`from-books-${e.itemNumber}`}>
+                            from the books
+                          </span>
+                        ) : (
+                          <>
+                            <Button kind="ghost" onClick={() => act.editExpense(e)}>
+                              edit
+                            </Button>
+                            <Button
+                              kind="ghost"
+                              className="text-danger"
+                              onClick={() => act.deleteExpense(e)}
+                              data-testid={`delete-${e.itemNumber}`}
+                            >
+                              remove
+                            </Button>
+                          </>
+                        )}
                       </td>
                     )}
                   </tr>
