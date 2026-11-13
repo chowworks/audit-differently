@@ -1294,6 +1294,23 @@ describe('ReportsService', () => {
     expect(log.entries).toEqual([])
   })
 
+  it("refuses to change or remove a line from the books by hand, and still takes a person's proof on it", async () => {
+    const who = member('bookkeeper')
+    const { service: s, prisma, log, writes } = service()
+    const fromBooks = { ...stored, booksKey: '2026-09:9003:60301:Youth Coding Program:1' }
+    prisma.expense.findFirst.mockResolvedValue(fromBooks)
+    const words =
+      "This line comes from the books: change it in QuickBooks or on the month's expenses"
+    await expect(
+      s.updateExpense(who, 'x-1', { ...expense, vendor: 'Another vendor' })
+    ).rejects.toThrow(new BadRequestException(words))
+    await expect(s.deleteExpense(who, 'x-1')).rejects.toThrow(new BadRequestException(words))
+    for (const w of writes) expect(w).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
+    await s.attachToExpense(who, 'x-1', 'invoice', 'd-bank')
+    expect(prisma.expenseDocument.create).toHaveBeenCalled()
+  })
+
   it('logs nothing when the document is already in that slot, and a move when it is in another', async () => {
     const who = member('bookkeeper')
     const { service: s, prisma, log } = service()

@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common'
+import { ExpensesModule } from '../expenses/expenses.module'
 import { PayrollModule } from '../payroll/payroll.module'
+import { AdminExpenseMatchingController } from './admin-expense-matching.controller'
 import { AdminHighlightsController } from './admin-highlights.controller'
 import { AdminInboundController } from './admin-inbound.controller'
 import { AdminInboundService } from './admin-inbound.service'
@@ -12,12 +14,13 @@ import { AdminUsersController } from './admin-users.controller'
 import { AdminUsersService } from './admin-users.service'
 
 @Module({
-  imports: [PayrollModule],
+  imports: [PayrollModule, ExpensesModule],
   controllers: [
     AdminUsersController,
     AdminInboundController,
     AdminHighlightsController,
     AdminPayrollReadingController,
+    AdminExpenseMatchingController,
     AdminMatchStatsController,
     AdminReceiptsAddressesController,
   ],

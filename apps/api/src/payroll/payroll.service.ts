@@ -12,6 +12,7 @@ import {
   type Role,
   type PayrollDocumentKind,
   type PayrollLineSearch,
+  type BooksSplitDto,
   type PayrollSplitDto,
   type PayrollUploadResult,
   type ReportDetail,
@@ -30,6 +31,7 @@ import { describe } from '../documents/staged-file'
 import { PrismaService } from '../prisma/prisma.service'
 import { ReportsService } from '../reports/reports.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
+import { splitMarks } from '../expenses/books-note'
 import { COPIED_TYPES, itemCopy } from './mark-pdf'
 import { linesWithAmount, readStatement } from './statement-lines'
 
@@ -224,7 +226,7 @@ export class PayrollService {
       const e = await this.prisma.expense.findFirst({ where: { id, ...tenantWhere(caller) } })
       if (!e) throw new NotFoundException()
       const r = await this.reports.editable(caller, e.monthlyReportId)
-      if (!PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine))
+      if (!PAYROLL_REPORT_LINES.has(e.reportLine as ReportLine) || e.booksKey)
         throw new BadRequestException('Only payroll lines are linked to a bank statement here')
       return {
         r,
@@ -323,8 +325,14 @@ export class PayrollService {
       'expense' in link && doc.kind === 'paystub'
         ? ((link.expense.payrollSplit ?? null) as PayrollSplitDto | null)
         : null
+    // A books line's accounting export opens with how the books charge its shared cost (owner's decision, 2026-11-12).
+    const booksNote =
+      'expense' in link && doc.kind === 'payroll-details'
+        ? ((link.expense.booksSplit ?? null) as BooksSplitDto | null)
+        : null
+    const drawn = booksNote ? splitMarks(booksNote) : marks
     const bytes = COPIED_TYPES.includes(doc.contentType)
-      ? (await itemCopy(original, marks, note)).bytes
+      ? (await itemCopy(original, drawn, note, booksNote)).bytes
       : original
     const subject =
       'expense' in link ? `expense ${link.expense.itemNumber}` : 'a work-experience payment'

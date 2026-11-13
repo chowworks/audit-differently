@@ -92,22 +92,45 @@ export const PAYROLL_FOLDERS = [
   ['Timesheets', 'timesheet'],
   ['Payroll registers', 'payroll-register'],
   ['Pay stubs', 'paystub'],
-  ['Bank statements', 'bank-statement'],
-  ['Payroll details', 'payroll-details'],
+  ['Bank & card statements', 'bank-statement'],
+  ['QuickBooks transactions', 'payroll-details'],
 ] as const
 export type PayrollFolderKind = (typeof PAYROLL_FOLDERS)[number][1]
 /**
  * The folders a zip may leave out: the payroll company's per-person export (GitHub issue #22, section 8), and pay stubs
  * (a month of staff pay only has none to give).
  */
-export const OPTIONAL_FOLDERS = new Set<string>(['Payroll details', 'Pay stubs'])
+export const OPTIONAL_FOLDERS = new Set<string>(['QuickBooks transactions', 'Pay stubs'])
 /** The folder of a program names file: the same program's names in the books and the payroll company, one row each. */
 export const PROGRAM_NAMES_FOLDER = 'Program names'
+/**
+ * The folder of each engagement's account mapping (owner's decision, 2026-11-09): its chart of accounts mapped to the
+ * categories its funder bills, one file per engagement. Not proof: it comes back apart, as program names do.
+ */
+export const ACCOUNT_MAPPING_FOLDER = 'Account mapping'
+const ACCOUNT_MAPPING_NAMES = [ACCOUNT_MAPPING_FOLDER, 'Account mappings']
+/**
+ * The folder of the receipts and invoices of the books' bills (owner's decision, 2026-11-12): PDFs or photos, each
+ * matched to the bill it proves on the expenses step. Not payroll proof: it comes back apart, as the mappings do.
+ */
+export const RECEIPTS_FOLDER = 'Receipts'
+const RECEIPTS_NAMES = [RECEIPTS_FOLDER, 'Invoices', 'Receipts and invoices']
+const RECEIPT_EXTS = new Set(['pdf', 'png', 'jpg', 'jpeg'])
+/**
+ * Other names a folder goes by (owner's decision, 2026-11-09): the bank's and the card's statements share one folder,
+ * and the books' export is the whole month, its expenses too. The old names still open a zip made before.
+ */
+const FOLDER_ALIASES: Record<string, string[]> = {
+  'Bank & card statements': ['Bank statements', 'Bank and card statements'],
+  'QuickBooks transactions': ['Payroll details', 'Books transactions'],
+}
+const isFolder = (name: string, given: string) =>
+  [name, ...(FOLDER_ALIASES[name] ?? [])].some((n) => same(n, given))
 /** The folders a CSV may be in: the payroll company's journals, job reports and exports, and program names. */
-const CSV_FOLDERS = new Set<string>(['Timesheets', 'Payroll registers', 'Payroll details'])
+const CSV_FOLDERS = new Set<string>(['Timesheets', 'Payroll registers', 'QuickBooks transactions'])
 
 /**
- * A payroll zip checked against its required layout: the folders (Payroll details, Pay stubs and Program names when the
+ * A payroll zip checked against its required layout: the folders (QuickBooks transactions, Pay stubs, Program names, Account mapping and Receipts when the
  * team has them) and nothing else (a zip of the folder itself, one level up, is fine). Every problem at once, so the
  * person fixes the zip in one go. A program names file is not proof: it comes back apart, in `names`.
  */
@@ -117,10 +140,19 @@ export function sortPayrollZip(
 ): {
   files: { file: File; kind: PayrollFolderKind; folder: string }[]
   names: File[]
+  /** The zip's "Account mapping" files: not proof, sent to the engagements' account mappings. */
+  mappings: File[]
+  /** The zip's "Receipts" files: not payroll proof, sent to the month's receipts of the books' bills. */
+  receipts: File[]
   problems: string[]
 } {
   const problems: string[] = []
-  const folders = [...PAYROLL_FOLDERS.map(([name]) => name), PROGRAM_NAMES_FOLDER]
+  const folders = [
+    ...PAYROLL_FOLDERS.flatMap(([name]) => [name, ...(FOLDER_ALIASES[name] ?? [])]),
+    PROGRAM_NAMES_FOLDER,
+    ...ACCOUNT_MAPPING_NAMES,
+    ...RECEIPTS_NAMES,
+  ]
   // A zip of the folder itself puts everything under one top folder: look inside it.
   const tops = new Set(paths.map((p) => p.path.split('/')[0]))
   const strip =
@@ -129,6 +161,8 @@ export function sortPayrollZip(
     !folders.some((name) => same(name, [...tops][0]!))
   const files: { file: File; kind: PayrollFolderKind; folder: string }[] = []
   const names: File[] = []
+  const mappings: File[] = []
+  const receipts: File[] = []
   const outside: string[] = []
   const misplaced: string[] = []
   const unknown = new Set<string>()
@@ -144,7 +178,17 @@ export function sortPayrollZip(
       else misplaced.push(parts.join('/'))
       continue
     }
-    const folder = PAYROLL_FOLDERS.find(([name]) => same(name, parts[0]!))
+    if (ACCOUNT_MAPPING_NAMES.some((n) => same(n, parts[0]!))) {
+      if (csv || extOf(parts[1]!) === 'xlsx') mappings.push(p.file)
+      else misplaced.push(parts.join('/'))
+      continue
+    }
+    if (RECEIPTS_NAMES.some((n) => same(n, parts[0]!))) {
+      if (RECEIPT_EXTS.has(extOf(parts[1]!))) receipts.push(p.file)
+      else misplaced.push(parts.join('/'))
+      continue
+    }
+    const folder = PAYROLL_FOLDERS.find(([name]) => isFolder(name, parts[0]!))
     if (!folder) {
       unknown.add(parts[0]!)
       continue
@@ -160,7 +204,7 @@ export function sortPayrollZip(
       problems.push(`The zip has no "${name}" folder, or it is empty.`)
   if (unknown.size)
     problems.push(
-      `${[...unknown].map((u) => `"${u}"`).join(', ')} ${unknown.size === 1 ? 'is not one of the folders' : 'are not among the folders'}: use Timesheets, Payroll registers, Pay stubs, Bank statements, Payroll details and Program names.`
+      `${[...unknown].map((u) => `"${u}"`).join(', ')} ${unknown.size === 1 ? 'is not one of the folders' : 'are not among the folders'}: use Timesheets, Payroll registers, Pay stubs, Bank & card statements, QuickBooks transactions, Program names, Account mapping and Receipts.`
     )
   if (outside.length)
     problems.push(
@@ -168,13 +212,13 @@ export function sortPayrollZip(
     )
   if (misplaced.length)
     problems.push(
-      `${misplaced.length === 1 ? '1 file is' : `${misplaced.length} files are`} in a folder that does not take its type: a CSV goes in Timesheets, Payroll registers, Payroll details or Program names, and Program names takes an XLSX or CSV (${misplaced.slice(0, 3).join(', ')}${misplaced.length > 3 ? ', …' : ''}).`
+      `${misplaced.length === 1 ? '1 file is' : `${misplaced.length} files are`} in a folder that does not take its type: a CSV goes in Timesheets, Payroll registers, QuickBooks transactions, Program names or Account mapping, Program names and Account mapping take an XLSX or CSV, and Receipts a PDF, PNG or JPG (${misplaced.slice(0, 3).join(', ')}${misplaced.length > 3 ? ', …' : ''}).`
     )
   if (skipped.length)
     problems.push(
       `${skipped.length === 1 ? '1 file is' : `${skipped.length} files are`} not a PDF, PNG, JPG, XLSX, DOCX, CSV or ZIP (${skipped.slice(0, 3).join(', ')}${skipped.length > 3 ? ', …' : ''}).`
     )
-  return { files, names, problems }
+  return { files, names, mappings, receipts, problems }
 }
 
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase()

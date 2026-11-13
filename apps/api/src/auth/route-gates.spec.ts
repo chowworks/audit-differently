@@ -113,6 +113,9 @@ const ADMIN = [
   'GET /api/admin/payroll-reading',
   'PUT /api/admin/payroll-reading',
   'GET /api/admin/payroll-reading/history',
+  'GET /api/admin/expense-matching',
+  'PUT /api/admin/expense-matching',
+  'GET /api/admin/expense-matching/history',
   // Matching statistics: counts, sizes and durations of finished match runs, across workspaces.
   'GET /api/admin/match-stats',
   // Email administration → Receipts addresses: every address used, and releasing a previously used one (never a
@@ -247,6 +250,17 @@ const GATED = [
   'DELETE /api/staff/:staffId',
   'PUT /api/staff/:staffId/engagements/:engagementId',
   'DELETE /api/staff/:staffId/engagements/:engagementId',
+  // The month's expenses from the books, and each engagement's account mapping: owners change them, owners and
+  // auditors read them.
+  'POST /api/workspaces/:id/account-mappings',
+  'PATCH /api/workspaces/:id/account-mappings/:mappingId',
+  'DELETE /api/workspaces/:id/account-mappings/:mappingId',
+  'GET /api/workspaces/:id/expenses/:period',
+  'POST /api/workspaces/:id/expenses/:period/save',
+  // The receipts of the books' bills, and an owner's word on a bill (owner's decision, 2026-11-12).
+  'POST /api/workspaces/:id/expenses/:period/receipts',
+  'PUT /api/workspaces/:id/expenses/bills',
+  'PUT /api/workspaces/:id/expenses/payments',
 ]
 
 describe('route gates', () => {

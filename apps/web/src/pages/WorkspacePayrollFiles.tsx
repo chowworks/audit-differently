@@ -56,7 +56,12 @@ export interface PayrollFilesActions {
   /** A change is open below (unsaved): the set is changed again only once it is saved or discarded. */
   changeOpen: boolean
   /** Each answers true once the change is started, so the panel closes. */
-  onReplace: (zip: PayrollUpload, names?: File[]) => Promise<boolean>
+  onReplace: (
+    zip: PayrollUpload,
+    names?: File[],
+    mappings?: File[],
+    receipts?: File[]
+  ) => Promise<boolean>
   onAdd: (files: PayrollUpload) => Promise<boolean>
   onRemove: (f: WorkspacePayrollFileDto) => Promise<boolean>
 }
@@ -246,7 +251,9 @@ export function PayrollFilesCard({
               takesNames
               kind="navy"
               action="Upload zip and replace all"
-              onReady={(zip, _replace, names) => void actions.onReplace(zip, names).then(done)}
+              onReady={(zip, _replace, names, mappings, receipts) =>
+                void actions.onReplace(zip, names, mappings, receipts).then(done)
+              }
             />
             <div className="ad-actions justify-start">
               <Button kind="ghost" onClick={() => setPanel(null)} disabled={!!actions.busy}>

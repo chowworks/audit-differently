@@ -18,7 +18,7 @@ import {
   payrollCovers,
   payrollRowKind,
 } from '../reports/report-lines'
-import { runRules, type Finding, type RuleMonth, type RuleProof } from './rules'
+import { booksBillsOf, runRules, type Finding, type RuleMonth, type RuleProof } from './rules'
 
 const isoDate = (d: Date) => d.toISOString().slice(0, 10)
 
@@ -184,6 +184,8 @@ async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Findi
           budgetLineId: e.budgetLineId,
           // The match's own line, or a books' payroll transaction that still counts: proved as payroll.
           fromPayroll: !!e.payrollKey || !!e.payrollKind,
+          fromBooks: !!e.booksKey,
+          ...booksBillsOf(e.booksBills),
           shareOfRun: !!e.payrollKey,
           countedTwice: countedTwice(e, covers.get(report.id))
             ? PAYROLL_BUDGET_KIND_LABELS[

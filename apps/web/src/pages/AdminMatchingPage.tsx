@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import type { PayrollSettingChangeDto } from '@ad/types'
+import type { ExpenseMatchingChangeDto, PayrollSettingChangeDto } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
 import { shortDate } from '@/lib/format'
 import { Card, Empty, ErrorNote } from '@/components/ui'
+import { ExpenseMatchingSection } from '@/pages/AdminExpenseMatchingPage'
 import { HighlightsSection } from '@/pages/AdminHighlightsPage'
 import { MatchStatsSection } from '@/pages/AdminMatchStatsPage'
 import { PayrollReadingSection } from '@/pages/AdminPayrollReadingPage'
@@ -11,7 +12,8 @@ import { AdminToolHead } from '@/pages/AdminPage'
 /**
  * Admin tools → File Matching (owner's decision, 2026-10-19): one page for the payroll and receipt matchers. First how
  * they are running (statistics, every matcher), then how payroll files are read (the words and day windows) and what is
- * highlighted on payroll proof, then every change to those settings, newest first.
+ * highlighted on payroll proof, then the day windows the books' bills are matched to their proof by, then every change
+ * to those settings, newest first.
  */
 export function AdminMatchingPage() {
   // Each save changes the history, so it is read again.
@@ -29,6 +31,7 @@ export function AdminMatchingPage() {
           <h2 className="ad-group-title">Configuration</h2>
           <PayrollReadingSection onSaved={saved} />
           <HighlightsSection onSaved={saved} />
+          <ExpenseMatchingSection onSaved={saved} />
           <SettingsHistory key={version} />
         </section>
       </div>
@@ -38,7 +41,13 @@ export function AdminMatchingPage() {
 
 /** Every save of the configuration: when, who, and what it changed, in words. */
 function SettingsHistory() {
-  const { data, error } = useLoad<PayrollSettingChangeDto[]>('/admin/payroll-reading/history')
+  const payroll = useLoad<PayrollSettingChangeDto[]>('/admin/payroll-reading/history')
+  const expenses = useLoad<ExpenseMatchingChangeDto[]>('/admin/expense-matching/history')
+  const error = payroll.error ?? expenses.error
+  const data =
+    payroll.data && expenses.data
+      ? [...payroll.data, ...expenses.data].sort((a, b) => b.changedAt.localeCompare(a.changedAt))
+      : null
   return (
     <Card title="Change history">
       <ErrorNote message={error} />
@@ -71,7 +80,11 @@ function SettingsHistory() {
                   </td>
                   <td className="ad-mono text-xs">{c.changedByEmail ?? 'An admin'}</td>
                   <td className="whitespace-nowrap">
-                    {c.part === 'reading' ? 'Payroll reading' : 'Proof highlighting'}
+                    {c.part === 'reading'
+                      ? 'Payroll reading'
+                      : c.part === 'expenses'
+                        ? 'Expense matching'
+                        : 'Proof highlighting'}
                   </td>
                   <td className="text-sm">
                     {c.changes.map((line) => (
