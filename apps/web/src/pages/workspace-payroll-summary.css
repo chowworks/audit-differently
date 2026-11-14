@@ -316,16 +316,18 @@
   color: var(--muted);
   white-space: pre;
 }
-/* A pay's file chip (its file and page) wraps rather than widening the grid. */
-.wpd-recgrid .wpd-filechip {
-  white-space: normal;
+/* A pay's file and page, as plain text that wraps rather than widening the grid. */
+.wpd-file {
+  font-size: 13px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
-/* A pay's Confirm / Link to / Not grant-funded: kept narrow, so the grid fits its card. */
+/* A pay's Confirm / Link to / Not grant-funded: stacked in a narrow column, so the grid fits its card. */
 .wpd-act {
-  min-width: 200px;
+  width: 170px;
 }
 .wpd-act select {
-  max-width: 220px;
+  width: 100%;
 }
 .ad-table tr.wpd-fold td {
   padding-top: 6px;

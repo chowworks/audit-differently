@@ -1249,11 +1249,9 @@ function PayrollLine({
       return (
         <tr>
           <td>
-            {/* Whose pay it is first; the line the file prints under it. */}
+            {/* Whose pay it is; the date and amount columns carry what the line says. */}
             <span className="font-semibold">{p.named ?? p.staff?.name ?? p.fileName}</span>
-            <span className="ad-table-sub ad-mono">
-              {p.mark?.text ?? 'The whole file (scanned)'}
-            </span>
+            {!p.mark && <span className="ad-table-sub">The whole file (scanned)</span>}
             {p.notFunded && (
               <span className="ad-table-sub">
                 “{p.notFunded.reason}” · {p.notFunded.by}, {shortDate(p.notFunded.at)}
@@ -1264,10 +1262,10 @@ function PayrollLine({
           <td className="ad-num font-semibold">{p.amount != null ? money(p.amount) : ''}</td>
           <td>
             <span className="flex flex-wrap gap-1">
-              <Chip tone="muted" className="wpd-filechip">
-                {kindWord(p.kind)}: {p.fileName}
+              <span className="wpd-file">
+                {p.fileName}
                 {p.mark ? `, page ${p.mark.page}` : ''}
-              </Chip>
+              </span>
               {p.state === 'not-funded' && (
                 <Chip tone="muted">🚫 {PAY_LINE_STATE_LABELS[p.state]}</Chip>
               )}
