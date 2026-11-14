@@ -21,7 +21,8 @@ import { AddPayrollBudgetLine } from '@/components/AddPayrollBudgetLine'
 import { ENGAGEMENT_COLORS } from '@/lib/engagement-colors'
 import { EngagementMark } from '@/components/EngagementMark'
 import { money, periodLabel, shortDate } from '@/lib/format'
-import { Button, Card, Chip, Empty } from '@/components/ui'
+import { Button, Card, Chip, Empty, ErrorNote } from '@/components/ui'
+import type { ExpenseAction } from '@/pages/workspace-expenses'
 import { SLOT_LABEL } from '@/components/payroll-match/why'
 import { kindWord } from '@/pages/workspace-payroll-plan'
 import { keyOf } from '@/pages/workspace-payroll'
@@ -104,9 +105,21 @@ export function PayrollActions({
   onShow,
   onBudget,
   programs,
+  expenses,
 }: {
   period: string
   matched: boolean
+  /**
+   * The month's expense to-dos (owner's decision, 2026-11-13), with what their buttons do: open Expense matching, and
+   * upload receipts right here (owners only).
+   */
+  expenses?: {
+    rows: ExpenseAction[]
+    onOpen: () => void
+    onUpload?: (files: File[]) => void
+    busy: boolean
+    error: string | null
+  }
   /**
    * The month's engagements no program name is (`engagementsWithoutProgram`), with where to link one: a timesheet's
    * project proves nothing of theirs until then.
@@ -202,6 +215,37 @@ export function PayrollActions({
           go: <Link to={`/reports/${c.reportId}`}>View financial details →</Link>,
         })
   }
+  for (const x of expenses?.rows ?? [])
+    rows.push({
+      key: x.key,
+      sign: x.go === 'upload' ? '🧾' : '⚠️',
+      who: x.who,
+      text: x.text,
+      sub: x.sub,
+      go:
+        x.go === 'upload' && expenses!.onUpload ? (
+          <label
+            className={`ad-btn ad-btn-navy ad-btn-sm wpd-upload ${expenses!.busy ? 'is-busy' : ''}`}
+          >
+            <input
+              type="file"
+              multiple
+              accept=".pdf,.png,.jpg,.jpeg"
+              disabled={expenses!.busy}
+              aria-label="Upload receipts"
+              onChange={(ev) => {
+                expenses!.onUpload!([...(ev.target.files ?? [])])
+                ev.target.value = ''
+              }}
+            />
+            {expenses!.busy ? 'Reading…' : x.label}
+          </label>
+        ) : (
+          <button type="button" className="wpd-linkbtn" onClick={expenses!.onOpen}>
+            {x.go === 'upload' ? 'See them' : x.label} →
+          </button>
+        ),
+    })
   // Before the first match the reconciliation is not on the page: the match row above says it all.
   const counts = resolveCounts(matched ? recon : null)
   for (const k of RESOLVE_KINDS)
@@ -226,6 +270,7 @@ export function PayrollActions({
         </span>
       }
     >
+      <ErrorNote message={expenses?.error ?? null} />
       {rows.length === 0 ? (
         <p className="text-sm font-semibold text-ok">✓ Nothing to fix for {periodLabel(period)}.</p>
       ) : (

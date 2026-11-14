@@ -268,3 +268,85 @@ export function expenseSummary(d: Pick<WorkspaceExpensesDto, 'lines' | 'receipts
     engagements,
   }
 }
+
+/** One of the month's expense to-dos, as the month page's Actions card lists it. */
+export interface ExpenseAction {
+  key: string
+  text: string
+  sub: string
+  /** Who it concerns: the engagements of the lines, or the workspace. */
+  who: string
+  /** What its button does: upload receipts here, or open Expense matching. */
+  go: 'upload' | 'open'
+  label: string
+}
+
+/**
+ * The month's expense to-dos for the Actions card (owner's decision, 2026-11-13): expenses not saved yet, bills with
+ * no receipt (uploaded right there), bills with no payment found, and receipts matched to no bill. None when the month
+ * has no books export.
+ */
+export function expenseActions(
+  d: Pick<WorkspaceExpensesDto, 'file' | 'lines' | 'receipts' | 'toRemove'>
+): ExpenseAction[] {
+  if (!d.file) return []
+  const billed = billedLines(d.lines)
+  const whoOf = (ls: BooksLineDto[]) =>
+    [...new Set(ls.map((l) => l.engagementName).filter(Boolean))].join(', ') || 'Workspace'
+  const out: ExpenseAction[] = []
+  const c = saveCounts(d.lines, d.toRemove ?? [])
+  if (c.pending)
+    out.push({
+      key: 'expenses-save',
+      text: `${count(c.add + c.change + c.remove, 'expense change')} from the books not saved yet`,
+      sub: [
+        c.add ? count(c.add, 'new line') : null,
+        c.change ? count(c.change, 'changed line') : null,
+        c.remove ? count(c.remove, 'line to remove') : null,
+      ]
+        .filter(Boolean)
+        .join(', '),
+      who: whoOf(billed.filter((l) => l.saved !== 'same')),
+      go: 'open',
+      label: 'Review and save',
+    })
+  const noReceipt = billed.filter((l) => l.bills.some((b) => !b.dropped && !b.receipt))
+  const bills = noReceipt.reduce(
+    (t, l) => t + l.bills.filter((b) => !b.dropped && !b.receipt).length,
+    0
+  )
+  if (bills)
+    out.push({
+      key: 'expenses-receipts',
+      text: `${count(bills, 'bill')} ${bills === 1 ? 'needs' : 'need'} a receipt`,
+      sub: `${[...new Set(noReceipt.map((l) => l.vendor || 'No vendor'))].join(', ')}. Upload them here: each is matched to its bill by amount and date.`,
+      who: whoOf(noReceipt),
+      go: 'upload',
+      label: 'Upload receipts',
+    })
+  const unpaid = billed.filter((l) => l.bills.some((b) => !b.dropped && !b.payment))
+  const unpaidBills = unpaid.reduce(
+    (t, l) => t + l.bills.filter((b) => !b.dropped && !b.payment).length,
+    0
+  )
+  if (unpaidBills)
+    out.push({
+      key: 'expenses-payments',
+      text: `${count(unpaidBills, 'bill')} with no payment found`,
+      sub: 'Choose the statement line that paid it, or drop the bill.',
+      who: whoOf(unpaid),
+      go: 'open',
+      label: 'Find the payment',
+    })
+  const loose = unmatchedReceipts(d).length
+  if (loose)
+    out.push({
+      key: 'expenses-loose',
+      text: `${count(loose, 'receipt')} matched to no bill`,
+      sub: 'Choose the bill each proves, or leave it if it is not for this grant.',
+      who: 'Workspace',
+      go: 'open',
+      label: 'Match them',
+    })
+  return out
+}

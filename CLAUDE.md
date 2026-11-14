@@ -78,10 +78,12 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   `20261020000200`), count on the budget until the match covers that kind on the month, then are hidden and kept for
   the reconciliation's "Expenses vs payroll files" (a difference means the books are off, not the report);
   re-importing the file is how a row's choice is changed. Which tax types count is issue #29.
-- **Month End Payroll Processing** (`/workspaces/:id/payroll`, owner's choice 2026-10-20): Actions first (each with
-  Review below), Engagement Budget Tracking, then Workspace Reconciliation, whose tiles (Missing proof, To check,
-  Paid not grant-funded, Expenses differ, Staff w/o charges, Proof complete) filter its grid and the expenses table,
-  then File Management with Match again; Save returns to this page.
+- **Month End Close** (`/workspaces/:id/payroll`, renamed from Month End Payroll Processing 2026-11-13; layout owner's
+  choice 2026-10-20): Actions first (each with Review below; expense to-dos from the books export lead, with Upload
+  receipts right there), Engagement Budget Tracking, then Workspace Reconciliation, whose tiles (Missing proof, To
+  check, Paid not grant-funded, Expenses differ, Staff w/o charges, Proof complete) filter its grid and the expenses
+  table, then File Management (payroll tree plus a Receipts folder) with Match again; Save returns to this page. No
+  separate expenses card: Expense matching opens from the Actions rows or the month-end steps.
 - **Tags** = `Workspace.tagTypes` (owner-kept types and values, stable keys; "Funding source" is the built-in first
   type, migration `20261016000800`), applied as `tags` (`<type>:<value>`) on `Expense`, `WexPayment` and `Participant`,
   from the list only, never free text. A source in use can't be removed or renamed. Participant and payroll tags

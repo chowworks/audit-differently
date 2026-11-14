@@ -2,6 +2,7 @@ import { Suspense, lazy, useState, type ReactNode } from 'react'
 import {
   DOCUMENT_KIND_LABELS,
   MAX_WORKSPACE_PAYROLL_FILES,
+  type BooksReceiptDto,
   type WorkspacePayrollFileDto,
   type WorkspacePayrollFilesDto,
 } from '@ad/types'
@@ -64,6 +65,19 @@ export interface PayrollFilesActions {
   ) => Promise<boolean>
   onAdd: (files: PayrollUpload) => Promise<boolean>
   onRemove: (f: WorkspacePayrollFileDto) => Promise<boolean>
+}
+
+/**
+ * The month's receipts (the zip's Receipts folder, emailed or uploaded), shown as one more folder of the month's files
+ * (owner's decision, 2026-11-13): each with whether it proves a bill, to view or download, and Add for more.
+ */
+export interface MonthReceipts {
+  workspaceId: string
+  period: string
+  list: BooksReceiptDto[]
+  busy: boolean
+  /** Owners only: matched to the month's bills as the zip's are. */
+  onAdd?: (files: File[]) => void
 }
 
 /** Add files: one or more files into one folder of the month's set. */
@@ -169,7 +183,10 @@ export function PayrollFilesCard({
   title,
   note,
   first,
+  receipts,
 }: {
+  /** The month's receipts, as their own folder after the payroll files. */
+  receipts?: MonthReceipts
   period: string
   files: WorkspacePayrollFilesDto | null
   error: string | null
@@ -184,16 +201,19 @@ export function PayrollFilesCard({
   const [folder, setFolder] = useState<PayrollFolderKind | undefined>()
   const [shut, setShut] = useState<Set<string>>(new Set())
   const [viewing, setViewing] = useState<WorkspacePayrollFileDto | null>(null)
+  const [viewingReceipt, setViewingReceipt] = useState<BooksReceiptDto | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const api = useApi()
   const list = files?.files ?? []
   /** A file of the set as uploaded, through the API (which logs each open). */
   const fileUrl = (f: WorkspacePayrollFileDto) =>
     `/workspaces/${files!.workspaceId}/payroll/${period}/files/${f.id}/file`
-  const download = async (f: WorkspacePayrollFileDto) => {
+  const receiptUrl = (r: BooksReceiptDto) =>
+    `/workspaces/${receipts!.workspaceId}/expenses/${receipts!.period}/receipts/${r.documentId}/file`
+  const download = async (f: { fileName: string; contentType?: string }, src: string) => {
     setFileError(null)
     try {
-      const bytes = await api.bytes(fileUrl(f))
+      const bytes = await api.bytes(src)
       const url = URL.createObjectURL(new Blob([bytes], { type: f.contentType }))
       const a = document.createElement('a')
       a.href = url
@@ -342,7 +362,7 @@ export function PayrollFilesCard({
                             type="button"
                             className="wpc-open"
                             aria-label={`Download ${f.fileName}`}
-                            onClick={() => void download(f)}
+                            onClick={() => void download(f, fileUrl(f))}
                           >
                             download
                           </button>
@@ -366,7 +386,110 @@ export function PayrollFilesCard({
             })}
           </ul>
         )}
+        {receipts && (
+          <ul className="wpc-files wpc-tree" aria-label={`${periodLabel(period)} receipts`}>
+            <li className="wpc-folder">
+              <div className="wpc-folder-row">
+                <button
+                  type="button"
+                  className="wpc-folder-name"
+                  aria-expanded={!shut.has('receipts')}
+                  disabled={!receipts.list.length}
+                  onClick={() =>
+                    setShut((was) => {
+                      const next = new Set(was)
+                      if (next.has('receipts')) next.delete('receipts')
+                      else next.add('receipts')
+                      return next
+                    })
+                  }
+                >
+                  <span className="wpc-caret" aria-hidden>
+                    {receipts.list.length ? (shut.has('receipts') ? '▸' : '▾') : ''}
+                  </span>
+                  <span className="wpc-folder-icon" aria-hidden />
+                  Receipts
+                  <span className="wpc-count">
+                    {receipts.list.length
+                      ? `${receipts.list.length.toLocaleString('en-US')} ${receipts.list.length === 1 ? 'file' : 'files'}`
+                      : 'empty'}
+                  </span>
+                </button>
+                {receipts.onAdd && (
+                  <label
+                    className={`wpc-add wpc-add-file ${receipts.busy ? 'is-busy' : ''}`}
+                    aria-label="Add receipts"
+                  >
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pdf,.png,.jpg,.jpeg"
+                      disabled={receipts.busy}
+                      onChange={(ev) => {
+                        receipts.onAdd!([...(ev.target.files ?? [])])
+                        ev.target.value = ''
+                      }}
+                    />
+                    {receipts.busy ? 'Reading…' : '+ Add'}
+                  </label>
+                )}
+              </div>
+              {!shut.has('receipts') && receipts.list.length > 0 && (
+                <ul className="wpc-leaves">
+                  {[...receipts.list]
+                    .sort((a, b) =>
+                      a.fileName.localeCompare(b.fileName, 'en', {
+                        numeric: true,
+                        sensitivity: 'base',
+                      })
+                    )
+                    .map((r) => (
+                      <li key={r.documentId} className="wpc-leaf">
+                        <span className="wpc-leaf-name" title={r.fileName}>
+                          {r.fileName}
+                        </span>
+                        <span className="wpc-leaf-date">
+                          {r.transactionIds.length
+                            ? `Proves bill ${r.transactionIds.join(', ')}`
+                            : 'Matched to no bill'}
+                        </span>
+                        {/\.pdf$/i.test(r.fileName) && (
+                          <button
+                            type="button"
+                            className="wpc-open"
+                            aria-label={`View ${r.fileName}`}
+                            onClick={() => setViewingReceipt(r)}
+                          >
+                            view
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="wpc-open"
+                          aria-label={`Download ${r.fileName}`}
+                          onClick={() => void download(r, receiptUrl(r))}
+                        >
+                          download
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </li>
+          </ul>
+        )}
       </div>
+      {viewingReceipt && receipts && (
+        <Modal title={viewingReceipt.fileName} onClose={() => setViewingReceipt(null)} wide>
+          <Suspense fallback={<p className="text-sm text-soft">Opening the receipt…</p>}>
+            <StatementViewer
+              doc={{ id: viewingReceipt.documentId, sensitivity: 'financial', kind: 'receipt' }}
+              src={receiptUrl(viewingReceipt)}
+              downloadName={viewingReceipt.fileName}
+            />
+          </Suspense>
+        </Modal>
+      )}
       {viewing && files && (
         <Modal title={viewing.fileName} onClose={() => setViewing(null)} wide>
           <Suspense fallback={<p className="text-sm text-soft">Opening the file…</p>}>

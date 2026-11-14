@@ -406,3 +406,34 @@
   border-left: 4px solid var(--warn);
   background: var(--warn-tint);
 }
+/* Upload receipts from an Actions row: a button over a hidden file input (owner's decision, 2026-11-13). */
+.wpd-upload {
+  position: relative;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.wpd-upload input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.wpd-upload.is-busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+/* "+ Add" on the Receipts folder: a file input under the words (owner's decision, 2026-11-13). */
+.wpc-add-file {
+  position: relative;
+  cursor: pointer;
+}
+.wpc-add-file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.wpc-add-file.is-busy {
+  opacity: 0.6;
+  pointer-events: none;
+}

@@ -24,6 +24,7 @@ import {
   type WorkspacePayrollMonthDto,
   type WorkspacePayrollPeriodDto,
   type WorkspacePayrollRunDto,
+  type WorkspaceExpensesDto,
   type ProgramNamesDto,
   engagementsWithoutProgram,
 } from '@ad/types'
@@ -42,10 +43,12 @@ import {
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { WorkspaceExpenses } from '@/pages/WorkspaceExpenses'
 import { MonthSummary } from '@/pages/MonthSummary'
+import { expenseActions } from '@/pages/workspace-expenses'
 import {
   MAPPING_MAX_BYTES,
   RECEIPT_MAX_BYTES,
   UploadPanel,
+  mb,
   oversizeExpenseFiles,
 } from '@/components/PayrollProof'
 import { ACCOUNT_MAPPING_FOLDER, RECEIPTS_FOLDER } from '@/lib/zip-files'
@@ -58,7 +61,11 @@ import {
   useCards,
   type ResolveKind,
 } from '@/pages/WorkspacePayrollSummary'
-import { PayrollFilesCard, type PayrollUpload } from '@/pages/WorkspacePayrollFiles'
+import {
+  PayrollFilesCard,
+  type MonthReceipts,
+  type PayrollUpload,
+} from '@/pages/WorkspacePayrollFiles'
 import {
   ParticipantsFound,
   PlanWords,
@@ -150,6 +157,7 @@ const isWaiting = (r: WorkspacePayrollRunDto) =>
  */
 export function WorkspacePayrollPage() {
   const { id = '' } = useParams()
+  const api = useApi()
   const [params, setParams] = useSearchParams()
   const { data: w, error: wError, status: wStatus } = useLoad<WorkspaceDetail>(`/workspaces/${id}`)
   const {
@@ -166,6 +174,13 @@ export function WorkspacePayrollPage() {
   const files = useLoad<WorkspacePayrollFilesDto>(
     period && reader ? `/workspaces/${id}/payroll/${period}/files` : null
   )
+  // The month's expenses from the books: their to-dos on Actions and their receipts in File Management (owner's
+  // decision, 2026-11-13).
+  const expenses = useLoad<WorkspaceExpensesDto>(
+    period && reader ? `/workspaces/${id}/expenses/${period}` : null
+  )
+  const [receiptBusy, setReceiptBusy] = useState(false)
+  const [receiptError, setReceiptError] = useState<string | null>(null)
   // The staff list's engagements give each engagement card its colour, as on the staffing page.
   const staffList = useLoad<StaffListDto>(reader ? `/workspaces/${id}/staff` : null)
   // The engagements with no program name: an action, since a timesheet's project then proves nothing of theirs.
@@ -204,6 +219,47 @@ export function WorkspacePayrollPage() {
   const owner = w.myRole === 'owner'
   const shownRecon = recon.data?.period === period ? recon.data : null
   const shownFiles = files.data?.period === period ? files.data : null
+  const shownExpenses = expenses.data?.period === period ? expenses.data : null
+  /** Receipts added from Actions or File Management: matched to the month's bills as the zip's are. */
+  const addReceipts = async (list: File[]) => {
+    if (!period || !list.length) return
+    setReceiptError(null)
+    const big = list.filter((f) => f.size > RECEIPT_MAX_BYTES)
+    const fit = list.filter((f) => f.size <= RECEIPT_MAX_BYTES)
+    if (big.length)
+      setReceiptError(
+        `Over ${mb(RECEIPT_MAX_BYTES)}, left out: ${big.map((f) => f.name).join(', ')}.`
+      )
+    if (!fit.length) return
+    setReceiptBusy(true)
+    try {
+      for (let at = 0; at < fit.length; at += RECEIPTS_AT_ONCE) {
+        const form = new FormData()
+        for (const f of fit.slice(at, at + RECEIPTS_AT_ONCE)) form.append('files', f)
+        expenses.setData(
+          await api.upload<WorkspaceExpensesDto>(
+            `/workspaces/${id}/expenses/${period}/receipts`,
+            form
+          )
+        )
+      }
+      setSavedNote(`Added ${fit.length === 1 ? fit[0]!.name : `${fit.length} receipts`}.`)
+    } catch (e) {
+      setReceiptError((e as Error).message)
+    } finally {
+      setReceiptBusy(false)
+    }
+  }
+  const monthReceipts: MonthReceipts | undefined =
+    period && shownExpenses && shownExpenses.file
+      ? {
+          workspaceId: w.id,
+          period,
+          list: shownExpenses.receipts,
+          busy: receiptBusy,
+          onAdd: owner ? (list: File[]) => void addReceipts(list) : undefined,
+        }
+      : undefined
   // The month has payroll files (or one was saved just now): the engagement cards show.
   const saved = !!shownFiles?.files.length || !!shownRecon?.pays.length || cardsVersion > 0
   const filesError = files.loading ? null : files.error
@@ -211,15 +267,15 @@ export function WorkspacePayrollPage() {
     <>
       <nav className="ad-crumbs" aria-label="Breadcrumb">
         <Link to="/workspaces">Workspace Manager</Link> /{' '}
-        <Link to={`/workspaces/${w.id}`}>{w.name}</Link> / Month End Payroll Processing
+        <Link to={`/workspaces/${w.id}`}>{w.name}</Link> / Month End Close
       </nav>
       <div className="ad-head">
         <div>
           <p className="ad-eyebrow">Workspace</p>
-          <h1 className="ad-h1">Month End Payroll Processing</h1>
+          <h1 className="ad-h1">Month End Close</h1>
           <p className="ad-sub">
-            One set of payroll files for the month, matched to every engagement&apos;s payroll
-            items, existing staff and engagement participants.
+            One set of files for the month: payroll and expenses, matched to every engagement and
+            proved.
           </p>
         </div>
         {periods.length > 0 && (
@@ -348,6 +404,21 @@ export function WorkspacePayrollPage() {
                   setResolve(k)
                   document.getElementById('wpd-grid')?.scrollIntoView({ behavior: 'smooth' })
                 }}
+                expenses={
+                  shownExpenses
+                    ? {
+                        rows: expenseActions(shownExpenses),
+                        onOpen: () => {
+                          setSavedNote(null)
+                          setFlow('expenses')
+                          window.scrollTo({ top: 0 })
+                        },
+                        onUpload: owner ? (list) => void addReceipts(list) : undefined,
+                        busy: receiptBusy,
+                        error: receiptError,
+                      }
+                    : undefined
+                }
               />
             </div>
           )}
@@ -365,24 +436,6 @@ export function WorkspacePayrollPage() {
                   (d.cards ?? []).map((c) => c.engagementId)
                 )}
               />
-            </div>
-          )}
-          {saved && !focus && (
-            <div style={{ order: 3 }}>
-              <Card
-                title="Expenses from the books"
-                aside={
-                  <Button size="sm" kind="navy" onClick={() => setFlow('expenses')}>
-                    {owner ? 'Review and save expenses' : 'See expenses'}
-                  </Button>
-                }
-              >
-                <p className="text-sm text-soft">
-                  The month&apos;s other expenses: every line of the books export that is no
-                  one&apos;s pay, on the engagement its class is and the budget line its account
-                  maps to.
-                </p>
-              </Card>
             </div>
           )}
           {saved && !focus && (
@@ -422,7 +475,7 @@ export function WorkspacePayrollPage() {
                     setMatchKey((n) => n + 1)
                   }}
                 >
-                  ← Back to {periodLabel(period)}&apos;s summary
+                  ← Back to {periodLabel(period)}
                 </button>
               )}
               <WorkspaceMatch
@@ -431,6 +484,7 @@ export function WorkspacePayrollPage() {
                 alone={focus}
                 again={again}
                 fileStats={<FileStats files={shownFiles} data={shownRecon} />}
+                receipts={monthReceipts}
                 onOpen={() => {
                   setFocus(true)
                   window.scrollTo({ top: 0 })
@@ -460,7 +514,12 @@ export function WorkspacePayrollPage() {
               />
             </div>
           ) : (
-            <PayrollFilesCard period={period} files={shownFiles} error={filesError} />
+            <PayrollFilesCard
+              period={period}
+              files={shownFiles}
+              error={filesError}
+              receipts={monthReceipts}
+            />
           )}
         </div>
       )}
@@ -487,7 +546,10 @@ function WorkspaceMatch({
   fileStats,
   alone = false,
   again = 0,
+  receipts,
 }: {
+  /** The month's receipts, a folder of File Management. */
+  receipts?: MonthReceipts
   workspaceId: string
   period: string
   /** Raised by the page (a month not matched yet): Match again starts here, as its own button does. */
@@ -1113,6 +1175,7 @@ function WorkspaceMatch({
         period={period}
         files={files}
         error={filesError}
+        receipts={receipts}
         title={`File Management (${files!.files.length} saved)`}
         note={
           <>
@@ -1150,6 +1213,7 @@ function WorkspaceMatch({
           period={period}
           files={files}
           error={filesError}
+          receipts={receipts}
           actions={{
             busy,
             error: fileError,
