@@ -8,7 +8,7 @@ import {
   type WorkspacePayrollFileDto,
   type WorkspacePayrollFilesDto,
 } from '@ad/types'
-import { periodLabel, shortDate } from '@/lib/format'
+import { isCsv, periodLabel, shortDate } from '@/lib/format'
 import { PAYROLL_FOLDERS, RECEIPTS_FOLDER, type PayrollFolderKind } from '@/lib/zip-files'
 import { FILE_MAX_BYTES, RECEIPT_MAX_BYTES } from '@/components/PayrollProof'
 import { Button, Card, Empty, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
@@ -17,6 +17,9 @@ import { useApi } from '@/hooks/useApi'
 /** pdf.js is large: it loads when a file is first viewed. */
 const StatementViewer = lazy(() =>
   import('@/components/StatementViewer').then((m) => ({ default: m.StatementViewer }))
+)
+const CsvViewer = lazy(() =>
+  import('@/components/CsvViewer').then((m) => ({ default: m.CsvViewer }))
 )
 
 export type PayrollUpload = { file: File; kind: PayrollFolderKind }[]
@@ -450,7 +453,7 @@ export function PayrollFilesCard({
                             {f.fileName}
                           </span>
                           <span className="wpc-leaf-date">{shortDate(f.uploadedAt)}</span>
-                          {f.contentType === 'application/pdf' && (
+                          {(f.contentType === 'application/pdf' || isCsv(f)) && (
                             <button
                               type="button"
                               className="wpc-open"
@@ -613,17 +616,21 @@ export function PayrollFilesCard({
       {viewing && files && (
         <Modal title={viewing.fileName} onClose={() => setViewing(null)} wide>
           <Suspense fallback={<p className="text-sm text-soft">Opening the file…</p>}>
-            <StatementViewer
-              doc={{
-                id: viewing.id,
-                sensitivity: viewing.personal ? 'personal' : 'financial',
-                // The month's payroll files open like the other payroll files, pay stubs too (owner's decision,
-                // 2026-10-16).
-                kind: viewing.personal ? 'paystub' : viewing.kind,
-              }}
-              src={fileUrl(viewing)}
-              downloadName={viewing.fileName}
-            />
+            {isCsv(viewing) ? (
+              <CsvViewer src={fileUrl(viewing)} downloadName={viewing.fileName} />
+            ) : (
+              <StatementViewer
+                doc={{
+                  id: viewing.id,
+                  sensitivity: viewing.personal ? 'personal' : 'financial',
+                  // The month's payroll files open like the other payroll files, pay stubs too (owner's decision,
+                  // 2026-10-16).
+                  kind: viewing.personal ? 'paystub' : viewing.kind,
+                }}
+                src={fileUrl(viewing)}
+                downloadName={viewing.fileName}
+              />
+            )}
           </Suspense>
         </Modal>
       )}

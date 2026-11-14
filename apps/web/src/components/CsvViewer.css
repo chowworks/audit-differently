@@ -1,0 +1,19 @@
+/* The CSV viewer (CsvViewer.tsx): the file's rows as a grid, as a spreadsheet shows them, in the statement viewer's pane. */
+.ad-csv-pane {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.ad-csv {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ad-csv td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  white-space: nowrap;
+}
+.ad-csv tr:nth-child(even) td {
+  background: var(--surface-alt);
+}
