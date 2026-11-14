@@ -34,7 +34,10 @@ import type {
   WorkspacePayrollSaveInput,
   WorkspacePayrollStartInput,
 } from '@ad/types'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
+import { zipEntries } from '../engagements/zip-stream'
 import { EngagementsService } from '../engagements/engagements.service'
 import { StaffService } from '../staff/staff.service'
 import { CallerService, UserId } from '../core/caller'
@@ -157,6 +160,31 @@ export class WorkspacePayrollController {
     @Param('period') period: string
   ): Promise<WorkspacePayrollFilesDto> {
     return this.payroll.files(await this.callers.load(userId), id, period)
+  }
+
+  /** File Management as one zip, in the payroll zip's folders. Owners only; logged once. */
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Get('workspaces/:id/payroll/:period/files.zip')
+  async filesZip(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('period') period: string,
+    @Res() res: Response
+  ): Promise<void> {
+    const zip = await this.payroll.filesZip(await this.callers.load(userId), id, period)
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${zip.name.replace(/[^\x20-\x7e]|["\\]/g, '')}"`
+    )
+    res.setHeader('Cache-Control', 'no-store')
+    try {
+      await pipeline(Readable.from(zipEntries(zip.entries)), res)
+    } catch (e) {
+      // Nothing was sent yet: answer with the error. Part way: cut the response so the download fails.
+      if (!res.headersSent) throw e
+      res.destroy()
+    }
   }
 
   /** One file of the month's set as uploaded: to view or download. Logged. */
