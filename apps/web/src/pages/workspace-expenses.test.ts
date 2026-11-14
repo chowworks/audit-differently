@@ -3,6 +3,7 @@ import type { BooksLineDto } from '@ad/types'
 import {
   byBudgetLine,
   engagementGroups,
+  expenseActions,
   expenseSummary,
   lineProof,
   nothingNew,
@@ -400,6 +401,76 @@ describe("the Expense matching step and the Summary (owner's decisions, 2026-11-
     expect(s.engagements).toEqual([
       { id: 'e-ycp', name: 'Youth Coding Pathway', total: 110, lines: 2, proofShare: 1 / 3 },
     ])
+  })
+})
+
+describe("the month's expense to-dos on the Actions card (owner's decision, 2026-11-13)", () => {
+  const bill = (id: string, receipt: boolean, paid: boolean) => ({
+    transactionId: id,
+    date: '2026-09-08',
+    vendor: 'PayPeople',
+    amount: 10,
+    receipt: receipt ? { documentId: `r-${id}`, fileName: `${id}.pdf`, by: 'auto' as const } : null,
+    paidFrom: 'bank' as const,
+    payment: paid
+      ? {
+          documentId: 'st',
+          fileName: 'bank.pdf',
+          card: false,
+          line: { page: 1, x: 0, y: 0, width: 1, height: 1, text: '10.00' },
+          by: 'auto' as const,
+        }
+      : null,
+    paymentChoices: [],
+    dropped: false,
+  })
+  const file = { id: 'f', fileName: 'books.xlsx' }
+
+  it('lists what is not saved, the bills with no receipt (to upload here), unpaid bills and loose receipts', () => {
+    const rows = expenseActions({
+      file,
+      toRemove: [],
+      lines: [
+        line({ key: 'a', vendor: 'Maple Properties', bills: [bill('1', false, true)] }),
+        line({
+          key: 'b',
+          vendor: 'PayPeople',
+          saved: 'same',
+          bills: [bill('2', true, true), bill('3', false, false)],
+        }),
+      ],
+      receipts: [
+        {
+          documentId: 'r-x',
+          fileName: 'x.pdf',
+          amount: 5,
+          date: null,
+          vendor: null,
+          transactionIds: [],
+        },
+      ],
+    })
+    expect(rows.map((r) => [r.key, r.text, r.go])).toEqual([
+      ['expenses-save', '1 expense change from the books not saved yet', 'open'],
+      ['expenses-receipts', '2 bills need a receipt', 'upload'],
+      ['expenses-payments', '1 bill with no payment found', 'open'],
+      ['expenses-loose', '1 receipt matched to no bill', 'open'],
+    ])
+    expect(rows[1]!.sub).toMatch(/^Maple Properties, PayPeople\./)
+    expect(rows[1]!.who).toBe('Youth Coding Pathway')
+  })
+
+  it('has nothing to do when every line is saved and proved, or when the month has no books export', () => {
+    const done = [line({ saved: 'same', bills: [bill('1', true, true)] })]
+    expect(expenseActions({ file, toRemove: [], lines: done, receipts: [] })).toEqual([])
+    expect(
+      expenseActions({
+        file: null,
+        toRemove: [],
+        lines: [line({ bills: [bill('1', false, false)] })],
+        receipts: [],
+      })
+    ).toEqual([])
   })
 })
 

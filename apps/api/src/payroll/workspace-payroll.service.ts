@@ -2827,7 +2827,7 @@ export class WorkspacePayrollService {
       run.workspaceId,
       files.map((f) => ({ ...f, bytes: () => this.storage.read(f.storageKey) })),
       names,
-      'Month End Payroll Processing'
+      'Month End Close'
     )
     return this.dto(caller, await this.open(caller, runId))
   }
