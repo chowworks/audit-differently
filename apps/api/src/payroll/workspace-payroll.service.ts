@@ -126,6 +126,7 @@ import {
   type StaffRow,
 } from './staff-match'
 import { payMonthOf, payRunsOf, periodOn, runOfLine, suggestedRuns } from './pay-runs'
+import { payFactsOf, type PayFacts } from './pay-facts'
 import { chargesOf } from './payroll-details'
 import { cleanProgramNames, programNameRows, programNamesIn } from './program-names'
 import {
@@ -1759,6 +1760,16 @@ export class WorkspacePayrollService {
     const away = awayLines(planned.files, run.period)
     // A bank line that is a pay run's debit: how many registers it pays (two registers of one run share it).
     const payRuns = payRunsOf(planned.files)
+    // Each pay's amount, date and payee, as this match read its file (`payFactsOf`).
+    const factsOf = (f: RunFile, line: StatementLine | null) =>
+      payFactsOf({
+        kind: f.kind as PayLineKind,
+        line,
+        period: run.period,
+        fileLines: proofFile(f).lines,
+        run: payRuns.find((r) => r.fileId === f.id) ?? null,
+        stub: plan.stubs.find((x) => x.fileId === f.id) ?? null,
+      })
     const registersOf = (fileId: string, mark: StatementLine | null) =>
       (mark &&
         payRuns.filter((r) => r.debit?.fileId === fileId && sameLine(r.debit.line, mark)).length) ||
@@ -1901,6 +1912,7 @@ export class WorkspacePayrollService {
                 period: run.period,
                 kind: f.kind,
                 ...(l ? { mark: cleanMark(l) as object } : {}),
+                ...factsData(factsOf(f, l)),
                 ...(f.kind === 'bank-statement' ? { registers: registersOf(f.id, l) } : {}),
                 flags: [
                   ...(stubFlags.get(f.id) ?? []),
@@ -1954,6 +1966,39 @@ export class WorkspacePayrollService {
                 registers,
               },
             })
+          }
+        }
+
+        // A file already in the set: its pays' amount, date and payee as this match reads them (a pay saved before
+        // these were kept gets them here).
+        const unchangedPays = change.matching.filter((f) => f.documentId && isPayKind(f.kind))
+        if (unchangedPays.length) {
+          const kept = await tx.payrollPayLine.findMany({
+            where: { documentId: { in: unchangedPays.map((f) => f.documentId!) } },
+            select: {
+              id: true,
+              documentId: true,
+              mark: true,
+              amount: true,
+              payDate: true,
+              payee: true,
+            },
+          })
+          for (const l of kept) {
+            const file = unchangedPays.find((f) => f.documentId === l.documentId)!
+            const mark = l.mark as StatementLine | null
+            const line = mark
+              ? (payLinesOf(proofFile(file)).find((x) => !!x && sameLine(x, mark)) ?? mark)
+              : null
+            const want = factsData(factsOf(file, line))
+            if (
+              String(l.amount ?? '') === String(want.amount ?? '') &&
+              (l.payDate?.toISOString().slice(0, 10) ?? null) ===
+                (want.payDate?.toISOString().slice(0, 10) ?? null) &&
+              l.payee === want.payee
+            )
+              continue
+            await tx.payrollPayLine.update({ where: { id: l.id }, data: want })
           }
         }
 
@@ -2729,6 +2774,7 @@ export class WorkspacePayrollService {
       id ? items.find((i) => i.target === target && i.id === id) : undefined
     const several = severalPeopleLines(files, planned.staff, planned.participants)
     const away = awayLines(files, period)
+    const runsNow = payRunsOf(files)
     const pays: PayLineDto[] = []
     const totalsOnly: string[] = []
     for (const f of run.files) {
@@ -2765,6 +2811,16 @@ export class WorkspacePayrollService {
               ? { id: guess.staff.id, name: guess.staff.name }
               : null,
           named: payeeOf(kind, line, stub?.named ?? person?.staff.name ?? guess?.staff.name),
+          ...(({ amount, payDate }) => ({ amount, payDate }))(
+            payFactsOf({
+              kind,
+              line,
+              period,
+              fileLines: proofFile(f).lines,
+              run: runsNow.find((r) => r.fileId === f.id) ?? null,
+              stub: stub ?? null,
+            })
+          ),
         }
         // By the lists: a person's line linked to an engagement they are on, or a stub's payment (made or changed). A
         // link two people share marks the first one's line and highlights both, so its highlights count too.
@@ -3064,7 +3120,7 @@ export class WorkspacePayrollService {
               : null,
           flags,
           staff: person ? { id: person.id, name: person.name } : null,
-          named: payeeOf(kind, mark, person?.name),
+          ...keptFacts(line, kind, mark, person?.name),
         }
         const on =
           coveredBy(items, line.documentId, kind, mark, line.document.sha256) ??
@@ -3845,6 +3901,13 @@ const HELD =
 /** A run file as the matcher reads it. */
 const proofFileOf = (f: RunFile): MatchFile => ({ ...proofFile(f), documentId: f.documentId })
 
+/** A pay's facts as the PayrollPayLine columns keep them. */
+const factsData = (x: PayFacts) => ({
+  amount: x.amount === null ? null : x.amount.toFixed(2),
+  payDate: x.payDate ? new Date(`${x.payDate}T00:00:00Z`) : null,
+  payee: x.payee,
+})
+
 /**
  * What was found of each person on the staff list in the set, as StaffPayProof rows: their timesheets, register rows
  * (with this period's pay) and bank lines. A bank line found by its amount alone is kept as `guessed`, unless a person
@@ -4210,6 +4273,24 @@ export function unlistedPeople(
 }
 
 /** Whose pay a line is, for the Paid column: the person found, else a register row's own name. */
+/**
+ * A saved pay's Paid, Amount and Date: what its last match kept, else (a pay saved before these were kept) what its
+ * kept line says.
+ */
+function keptFacts(
+  row: { amount: unknown; payDate: Date | null; payee: string | null; period: string },
+  kind: PayLineKind,
+  mark: StatementLine | null,
+  person?: string
+): Pick<PayLineDto, 'named' | 'amount' | 'payDate'> {
+  const fallback = payFactsOf({ kind, line: mark, period: row.period })
+  return {
+    named: person ?? row.payee ?? payeeOf(kind, mark),
+    amount: row.amount != null ? Number(row.amount) : fallback.amount,
+    payDate: row.payDate ? row.payDate.toISOString().slice(0, 10) : fallback.payDate,
+  }
+}
+
 function payeeOf(kind: PayLineKind, line: StatementLine | null, found?: string | null) {
   if (found) return found
   return kind === 'payroll-register' && line ? (registerPerson(line.text)?.name ?? null) : null

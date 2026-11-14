@@ -192,7 +192,8 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   `20261017000500`; owners only, by policy, its files included). Starting again for the same month answers the open run,
   and a file sent again (same kind and sha256) is skipped. Save files each file **once** as a workspace document
   (`<workspaceId>/workspace/<period>/`) linked from each item it proves, and keeps every person-pay found in it
-  (`PayrollPayLine`: register rows, bank payments, pay stubs; only the not-grant-funded reason ever changes). A chosen
+  (`PayrollPayLine`: register rows, bank payments, pay stubs, each with its amount, date and payee as the match read
+  them, `pay-facts.ts`, never guessed; only the not-grant-funded reason, and what a match reads again, ever change). A chosen
   item's closed or submitted month is reopened first, after the owner confirms the list and gives one reason, inside the
   save's own transaction (`ReportsService.reopenWith`/`sendBackWith`), so a failed save reopens nothing. The reconciliation (owners alone read it, as the whole month end page: auditors don't see that working page, owner's decision 2026-11-14; one read line, counts only)
   shows each pay as matched, guessed, unassigned or not grant-funded, and each item with no proof; owners link a pay by

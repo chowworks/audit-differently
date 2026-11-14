@@ -764,6 +764,10 @@ model PayrollPayLine {
   /// A bank line that is a pay run's debit: how many of the month's registers it pays (two registers of one run share
   /// it). Set by each Save (migration 20261102000100); null on any other line.
   registers        Int?
+  /// The pay's amount, date and payee as the match read them (migration 20261114000200); null where the file doesn't say.
+  amount           Decimal?  @db.Decimal(12, 2)
+  payDate          DateTime? @db.Date
+  payee            String?
   createdAt        DateTime  @default(now())
   document         Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
