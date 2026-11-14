@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common'
+import { ConflictException, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import type { BooksBillDto, BooksLineDto } from '@ad/types'
 import { member, W } from '../core/testing/callers'
@@ -479,5 +479,67 @@ describe("ExpensesService: an owner's word on a bill", () => {
         { field: 'Payment line', before: null, after: 'PIXEL TOOLS 80.00' },
       ],
     })
+  })
+})
+
+describe("ExpensesService: a receipt opened from the Expense matching step (owner's decision, 2026-11-13)", () => {
+  const receipt = {
+    id: 'd-receipt',
+    workspaceId: W,
+    engagementId: null,
+    period: '2026-09',
+    kind: 'receipt',
+    sensitivity: 'financial',
+    fileName: 'pixel.pdf',
+    contentType: 'application/pdf',
+    storageKey: `${W}/workspace/receipts/pixel.pdf`,
+  }
+  const make = (doc: object | null) => {
+    const prisma = { document: { findFirst: jest.fn().mockResolvedValue(doc) } }
+    const log = fakeLog(prisma)
+    const storage = { read: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.4')) }
+    const s = new ExpensesService(
+      prisma as never,
+      log as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      storage as never
+    )
+    return { s, prisma, log, storage }
+  }
+
+  it("serves the month's receipt to an owner or an auditor, and logs the open", async () => {
+    for (const role of ['owner', 'auditor'] as const) {
+      const { s, prisma, log } = make(receipt)
+      const f = await s.receiptFile(member(role), W, '2026-09', 'd-receipt')
+      expect(f).toMatchObject({ contentType: 'application/pdf', fileName: 'pixel.pdf' })
+      expect(prisma.document.findFirst.mock.calls[0][0].where).toMatchObject({
+        id: 'd-receipt',
+        workspaceId: W,
+        period: '2026-09',
+        sensitivity: 'financial',
+      })
+      expect(log.entries[0]).toMatchObject({
+        resource: 'document',
+        action: 'read',
+        subjectId: 'd-receipt',
+      })
+    }
+  })
+
+  it('finds nothing for another workspace, a file stored outside it, or a month not YYYY-MM', async () => {
+    await expect(
+      make(receipt).s.receiptFile(member('owner', 'ws-2'), W, '2026-09', 'd-receipt')
+    ).rejects.toThrow(NotFoundException)
+    const { s, storage } = make({ ...receipt, storageKey: 'ws-2/workspace/receipts/pixel.pdf' })
+    await expect(s.receiptFile(owner, W, '2026-09', 'd-receipt')).rejects.toThrow(NotFoundException)
+    expect(storage.read).not.toHaveBeenCalled()
+    await expect(make(null).s.receiptFile(owner, W, '2026-09', 'nope')).rejects.toThrow(
+      NotFoundException
+    )
+    await expect(make(receipt).s.receiptFile(owner, W, 'Sept', 'd-receipt')).rejects.toThrow(
+      'YYYY-MM'
+    )
   })
 })

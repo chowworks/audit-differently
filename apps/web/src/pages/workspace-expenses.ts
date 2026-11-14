@@ -158,3 +158,113 @@ export function statementLineWords(p: { fileName: string; line: { page: number; 
 /** The month's receipts that prove no bill yet. */
 export const unmatchedReceipts = (d: Pick<WorkspaceExpensesDto, 'receipts'>) =>
   d.receipts.filter((r) => !r.transactionIds.length)
+
+/**
+ * A billed line's proof, as the Expense matching step's columns show it (owner's decision, 2026-11-13): its bills with a
+ * receipt and with a payment, of those not dropped, and the books' split on a shared cost. Fully proved when every kept
+ * bill has both, and a shared cost has its split: a line with some receipts missing is not proved.
+ */
+export function lineProof(l: Pick<BooksLineDto, 'bills' | 'allocation' | 'split'>) {
+  const kept = l.bills.filter((b) => !b.dropped)
+  const receipts = { have: kept.filter((b) => b.receipt).length, of: kept.length }
+  const payments = { have: kept.filter((b) => b.payment).length, of: kept.length }
+  /** 'none': the line is one bill's whole cost, nothing to share out. */
+  const allocation: 'on-file' | 'missing' | 'none' = !l.allocation
+    ? 'none'
+    : l.split
+      ? 'on-file'
+      : 'missing'
+  return {
+    receipts,
+    payments,
+    allocation,
+    proved:
+      kept.length > 0 &&
+      receipts.have === kept.length &&
+      payments.have === kept.length &&
+      allocation !== 'missing',
+  }
+}
+
+/** The month's billed lines, in date order. */
+export const billedLines = (lines: BooksLineDto[]) =>
+  lines.filter((l) => l.status === 'billed').sort((a, b) => a.date.localeCompare(b.date))
+
+/** "2 of 5 expenses fully proved": the billed lines whose every bill has its receipt and payment. */
+export function provedCount(lines: BooksLineDto[]) {
+  const billed = billedLines(lines)
+  return { proved: billed.filter((l) => lineProof(l).proved).length, total: billed.length }
+}
+
+/**
+ * The billed lines dated in another month than the one open (owner's decision, 2026-11-13: an upload into the wrong
+ * month is said before Save, not found after). Each line is saved on the month of its own date, so these land there.
+ */
+export function otherMonthLines(lines: BooksLineDto[], period: string) {
+  const other = billedLines(lines).filter((l) => l.date.slice(0, 7) !== period)
+  return { lines: other, months: [...new Set(other.map((l) => l.date.slice(0, 7)))].sort() }
+}
+
+/** A group's lines by budget line, each with its total, in the order first met. */
+export function byBudgetLine(lines: BooksLineDto[]) {
+  const by = new Map<string, { name: string; lines: BooksLineDto[]; total: number }>()
+  for (const l of lines) {
+    const name = l.budgetLineName ?? 'No budget line'
+    const g = by.get(name) ?? { name, lines: [], total: 0 }
+    g.lines.push(l)
+    if (l.status === 'billed') g.total = cents(g.total + l.amount)
+    by.set(name, g)
+  }
+  return [...by.values()]
+}
+
+/**
+ * Nothing for Save to do: every billed line is saved as it is, and nothing saved is to be removed (owner's decision,
+ * 2026-11-13: the step says so plainly instead of showing the whole month again as if new).
+ */
+export function nothingNew(d: Pick<WorkspaceExpensesDto, 'lines' | 'toRemove'>) {
+  const c = saveCounts(d.lines, d.toRemove ?? [])
+  return c.pending === 0 && c.same > 0
+}
+
+/** What the Summary step shows of the month's expenses: what was read, billed and proved. */
+export function expenseSummary(d: Pick<WorkspaceExpensesDto, 'lines' | 'receipts'>) {
+  const billed = billedLines(d.lines)
+  const bills = billed.flatMap((l) => l.bills.filter((b) => !b.dropped))
+  const engagements = engagementGroups(d.lines).map((g) => {
+    const mine = g.lines.filter((l) => l.status === 'billed')
+    const kept = mine.flatMap((l) => l.bills.filter((b) => !b.dropped))
+    return {
+      id: g.id,
+      name: g.name,
+      total: g.total,
+      lines: mine.length,
+      proofShare: kept.length
+        ? kept.filter((b) => b.receipt && b.payment).length / kept.length
+        : mine.length
+          ? 0
+          : 1,
+    }
+  })
+  return {
+    linesRead: d.lines.length,
+    billed: billed.length,
+    total: cents(billed.reduce((t, l) => t + l.amount, 0)),
+    bills: bills.length,
+    withReceipt: bills.filter((b) => b.receipt).length,
+    paid: bills.filter((b) => b.payment).length,
+    notes: billed.filter((l) => l.split).length,
+    proved: billed.filter((l) => lineProof(l).proved).length,
+    unmatchedReceipts: unmatchedReceipts(d).length,
+    /** The vendors of the lines with a bill still missing its receipt, once each. */
+    missingReceipts: [
+      ...new Set(
+        billed
+          .filter((l) => lineProof(l).receipts.have < lineProof(l).receipts.of)
+          .map((l) => l.vendor)
+      ),
+    ],
+    unpaid: billed.filter((l) => lineProof(l).payments.have < lineProof(l).payments.of).length,
+    engagements,
+  }
+}

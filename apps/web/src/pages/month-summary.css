@@ -1,0 +1,301 @@
+/* The month end's Summary step (MonthSummary.tsx): what was done and verified, drawn in with green checks. */
+.msum {
+  display: grid;
+  gap: 22px;
+}
+.msum-hero {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 12px 0 4px;
+  text-align: center;
+}
+.msum-bigcheck {
+  width: 96px;
+  height: 96px;
+}
+.msum-bigcheck circle {
+  fill: var(--ok-tint);
+  stroke: var(--primary);
+  stroke-width: 4;
+  transform-origin: center;
+}
+.msum-bigcheck path {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 70;
+  stroke-dashoffset: 0;
+}
+.msum-title {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 800;
+  text-wrap: balance;
+}
+.msum-replay {
+  padding: 4px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.msum-cols,
+.msum-engs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 16px;
+}
+.msum-panel,
+.msum-eng {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  min-width: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.msum-panel-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.msum-eyebrow {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.msum-panel-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+.msum-ring {
+  flex: none;
+  width: 84px;
+  height: 84px;
+}
+.msum-ring-track {
+  fill: none;
+  stroke: var(--surface-alt);
+  stroke-width: 9;
+}
+.msum-ring-value {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 9;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
+.msum-ring text {
+  fill: var(--ink);
+  font-size: 16px;
+  font-weight: 800;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.msum-checks {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.msum-checks li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.msum-tick {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  transform-origin: center;
+}
+.msum-tick svg {
+  width: 12px;
+  height: 12px;
+}
+.msum-tick path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.msum-tick-warn {
+  background: var(--warn);
+}
+.msum-eng-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.msum-eng-total {
+  font-size: 1.4rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.msum-bar-row {
+  display: grid;
+  grid-template-columns: 76px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.875rem;
+}
+.msum-meter {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--surface-alt);
+}
+.msum-meter i {
+  display: block;
+  width: var(--w);
+  height: 100%;
+  border-radius: 99px;
+  background: var(--primary);
+}
+.msum-amount {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.msum-todo {
+  display: grid;
+  gap: 10px;
+  padding: 16px 20px;
+  border-radius: 12px;
+  background: var(--warn-tint);
+}
+.msum-todo-title {
+  margin: 0;
+  color: var(--warn);
+  font-weight: 800;
+}
+.msum-todo-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.msum-fix {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.msum-alldone {
+  margin: 0;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: var(--ok-tint);
+  color: var(--ok);
+  font-weight: 700;
+}
+
+/* The moment Summary opens: the big check draws itself, the facts tick in one by one, the rings fill (their transition)
+   and the bars grow. Everything is visible at rest; with reduced motion nothing moves. */
+@media (prefers-reduced-motion: no-preference) {
+  .msum-play .msum-bigcheck circle {
+    animation: msum-pop 0.5s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+  }
+  .msum-play .msum-bigcheck path {
+    animation: msum-draw 0.55s 0.35s ease-out both;
+  }
+  .msum-play .msum-title {
+    animation: msum-rise 0.5s 0.5s both;
+  }
+  .msum-play .msum-checks li {
+    animation: msum-rise 0.45s both;
+    animation-delay: calc(0.75s + var(--i, 0) * 90ms);
+  }
+  .msum-play .msum-checks .msum-tick {
+    animation: msum-tick 0.4s both;
+    animation-delay: calc(0.85s + var(--i, 0) * 90ms);
+  }
+  .msum-play .msum-ring-value {
+    transition: stroke-dashoffset 1.2s 0.9s cubic-bezier(0.3, 0.7, 0.2, 1);
+  }
+  .msum-play .msum-meter i {
+    animation: msum-grow 1s both;
+    animation-delay: calc(1.3s + var(--i, 0) * 120ms);
+  }
+  .msum-play .msum-todo,
+  .msum-play .msum-alldone {
+    animation: msum-rise 0.5s 1.9s both;
+  }
+}
+@keyframes msum-pop {
+  from {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes msum-draw {
+  from {
+    stroke-dashoffset: 70;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes msum-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes msum-tick {
+  0% {
+    transform: scale(0);
+  }
+  70% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes msum-grow {
+  from {
+    width: 0;
+  }
+  to {
+    width: var(--w);
+  }
+}

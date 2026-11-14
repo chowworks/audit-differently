@@ -41,6 +41,7 @@ import {
 } from '@/components/payroll-match/AiReadBox'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { WorkspaceExpenses } from '@/pages/WorkspaceExpenses'
+import { MonthSummary } from '@/pages/MonthSummary'
 import {
   MAPPING_MAX_BYTES,
   RECEIPT_MAX_BYTES,
@@ -129,6 +130,8 @@ const subOf = (i: WorkspacePayrollItemDto) =>
 const many = (n: number, one: string, more = `${one}s`) =>
   `${n.toLocaleString('en-US')} ${n === 1 ? one : more}`
 /** Files go up to the run 20 at a time, the server's limit for one request. */
+/** The month end's steps (owner's decision, 2026-11-13). */
+const MONTH_END_STEPS = ['Upload', 'Payroll matching', 'Expense matching', 'Summary'] as const
 const BATCH = 20
 /** Receipts sent at once (the server's limit for one request). */
 const RECEIPTS_AT_ONCE = 20
@@ -179,8 +182,11 @@ export function WorkspacePayrollPage() {
   /** What Save did, said once over the summary it returns to. */
   const [savedNote, setSavedNote] = useState<string | null>(null)
   const [resolve, setResolve] = useState<ResolveKind | null>(null)
-  /** The step after payroll: the month's expenses from the books, opened by Save or from the summary. */
-  const [expensesOpen, setExpensesOpen] = useState(false)
+  /**
+   * The steps after payroll (owner's decision, 2026-11-13): Expense matching, opened by payroll's Save or from the month's
+   * page, then Summary, opened by the expenses' Save.
+   */
+  const [flow, setFlow] = useState<'expenses' | 'summary' | null>(null)
   // Another month starts afresh: no note, filter or "saved just now" carried over from the last one.
   const [shownPeriod, setShownPeriod] = useState(period)
   if (shownPeriod !== period) {
@@ -189,7 +195,7 @@ export function WorkspacePayrollPage() {
     setSavedNote(null)
     setResolve(null)
     setFocus(false)
-    setExpensesOpen(false)
+    setFlow(null)
   }
   const d = useCards(id, period ?? '', period ? cardsVersion : 0, !!period)
   if (wStatus === 404 || status === 404 || (w && !reader)) return <NotFoundPage />
@@ -234,36 +240,64 @@ export function WorkspacePayrollPage() {
           </label>
         )}
       </div>
-      {period && expensesOpen ? (
+      {period && flow ? (
         <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
           <button
             type="button"
             className="wpd-back"
             onClick={() => {
-              setExpensesOpen(false)
+              setFlow(null)
               window.scrollTo({ top: 0 })
             }}
           >
-            ← Back to {periodLabel(period)}&apos;s summary
+            ← Back to {periodLabel(period)}
           </button>
-          {owner && (
-            <Stepper
-              steps={['Upload', 'Match', 'Expenses'] as const}
-              current="Expenses"
-              lastDone={false}
+          {savedNote && flow === 'expenses' && <Notice tone="ok">{savedNote}</Notice>}
+          {flow === 'expenses' ? (
+            <WorkspaceExpenses
+              workspaceId={w.id}
+              period={period}
+              stepper={
+                owner ? (
+                  <Stepper steps={MONTH_END_STEPS} current="Expense matching" lastDone={false} />
+                ) : undefined
+              }
+              onDone={() => {
+                setFlow(null)
+                setSavedNote(null)
+                window.scrollTo({ top: 0 })
+              }}
+              onSaved={(_, note) => {
+                setFlow('summary')
+                setSavedNote(note)
+                setCardsVersion((n) => n + 1)
+                void recon.reload()
+                window.scrollTo({ top: 0 })
+              }}
+            />
+          ) : (
+            <MonthSummary
+              workspaceId={w.id}
+              period={period}
+              stepper={<Stepper steps={MONTH_END_STEPS} current="Summary" />}
+              recon={shownRecon}
+              cards={d.cards}
+              files={shownFiles ? shownFiles.files.length : null}
+              onFix={(step) => {
+                if (step === 'expenses') setFlow('expenses')
+                else {
+                  setFlow(null)
+                  setFocus(true)
+                }
+                setSavedNote(null)
+                window.scrollTo({ top: 0 })
+              }}
+              onDone={() => {
+                setFlow(null)
+                window.scrollTo({ top: 0 })
+              }}
             />
           )}
-          {savedNote && <Notice tone="ok">{savedNote}</Notice>}
-          <WorkspaceExpenses
-            workspaceId={w.id}
-            period={period}
-            onDone={(note) => {
-              setExpensesOpen(false)
-              setSavedNote(note)
-              setCardsVersion((n) => n + 1)
-              window.scrollTo({ top: 0 })
-            }}
-          />
         </div>
       ) : !period ? (
         <Empty>No engagement has a month yet. Start one on an engagement&apos;s page first.</Empty>
@@ -338,7 +372,7 @@ export function WorkspacePayrollPage() {
               <Card
                 title="Expenses from the books"
                 aside={
-                  <Button size="sm" kind="navy" onClick={() => setExpensesOpen(true)}>
+                  <Button size="sm" kind="navy" onClick={() => setFlow('expenses')}>
                     {owner ? 'Review and save expenses' : 'See expenses'}
                   </Button>
                 }
@@ -420,7 +454,7 @@ export function WorkspacePayrollPage() {
                   setFocus(false)
                   setMatchKey((n) => n + 1)
                   setSavedNote(`Saved the payroll for ${periodLabel(period)}.`)
-                  setExpensesOpen(true)
+                  setFlow('expenses')
                   window.scrollTo({ top: 0 })
                 }}
               />
@@ -477,8 +511,8 @@ function WorkspaceMatch({
   /** The match open on its own, with nothing else on the page (no files card above it). */
   alone?: boolean
 }) {
-  // Expenses, the step after Save, opens on the page (WorkspaceExpenses).
-  const STEPS = ['Upload', 'Match', 'Expenses'] as const
+  // Expense matching, the step after Save, opens on the page (WorkspaceExpenses); then Summary (MonthSummary).
+  const STEPS = MONTH_END_STEPS
   const [step, setStep] = useState<'Upload' | 'Match'>('Upload')
   useEffect(() => onStep?.(step), [step, onStep])
   /** "Read the files with AI", ticked on the Upload step: unticked each time the page opens (#22). */
@@ -1137,7 +1171,7 @@ function WorkspaceMatch({
           !ai.reading && <ProvedCount proved={proved.length} total={proved.length + open.length} />
         }
       >
-        <Stepper steps={STEPS} current={step} />
+        <Stepper steps={STEPS} current={step === 'Match' ? 'Payroll matching' : 'Upload'} />
         <ErrorNote message={runError} />
         {expenseWarning && <Notice tone="warn">{expenseWarning}</Notice>}
         {(runError || fileError) && stuck && againButton}

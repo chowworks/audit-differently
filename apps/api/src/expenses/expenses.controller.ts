@@ -9,12 +9,14 @@ import {
   Patch,
   Post,
   Put,
+  Res,
   UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common'
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express'
+import type { Response } from 'express'
 import type {
   AccountMappingDto,
   BooksBillInput,
@@ -25,6 +27,7 @@ import type {
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
 import { ExpensesService, MAX_BOOKS_RECEIPTS } from './expenses.service'
+import { sendInline } from '../payroll/payroll-match.controller'
 
 /**
  * The month's expenses from the books (owner's decision, 2026-11-09): the lines of the accounting export in the month's
@@ -78,6 +81,22 @@ export class ExpensesController {
     @Param('period') period: string
   ): Promise<WorkspaceExpensesDto> {
     return this.expenses.expenses(await this.callers.load(userId), id, period)
+  }
+
+  /** One of the month's receipts as uploaded: to view. Logged. */
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('workspaces/:id/expenses/:period/receipts/:documentId/file')
+  async receiptFile(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('period') period: string,
+    @Param('documentId') documentId: string,
+    @Res() res: Response
+  ): Promise<void> {
+    sendInline(
+      res,
+      await this.expenses.receiptFile(await this.callers.load(userId), id, period, documentId)
+    )
   }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })

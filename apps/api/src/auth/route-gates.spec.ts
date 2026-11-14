@@ -259,6 +259,7 @@ const GATED = [
   'POST /api/workspaces/:id/expenses/:period/save',
   // The receipts of the books' bills, and an owner's word on a bill (owner's decision, 2026-11-12).
   'POST /api/workspaces/:id/expenses/:period/receipts',
+  'GET /api/workspaces/:id/expenses/:period/receipts/:documentId/file',
   'PUT /api/workspaces/:id/expenses/bills',
   'PUT /api/workspaces/:id/expenses/payments',
 ]
