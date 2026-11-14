@@ -361,17 +361,15 @@ describe('WorkspacePayrollService', () => {
       )
     })
 
-    it('lets owners and auditors read the reconciliation, never a bookkeeper', async () => {
+    it('lets owners read the reconciliation, never a bookkeeper or an auditor', async () => {
       const s = await setup()
-      // A bookkeeper finds nothing here: 404, so the screen shows the app's not-found page.
-      await expect(s.service.reconciliation(bookkeeper, W, '2026-09')).rejects.toThrow(/Not Found/)
-      await expect(s.service.periods(bookkeeper, W)).rejects.toThrow(/Not Found/)
-      await expect(s.service.latest(bookkeeper, W, '2026-09')).rejects.toThrow(/Not Found/)
-      // An auditor reads the page and never has an upload of their own.
-      await expect(s.service.latest(auditor, W, '2026-09')).resolves.toBeNull()
-      await expect(s.service.reconciliation(auditor, W, '2026-09')).resolves.toMatchObject({
-        can: { change: false },
-      })
+      // A bookkeeper or an auditor finds nothing here: 404, so the screen shows the app's not-found page (owner's
+      // decision, 2026-11-14: the month end is the owner's working page).
+      for (const who of [bookkeeper, auditor]) {
+        await expect(s.service.reconciliation(who, W, '2026-09')).rejects.toThrow(/Not Found/)
+        await expect(s.service.periods(who, W)).rejects.toThrow(/Not Found/)
+        await expect(s.service.latest(who, W, '2026-09')).rejects.toThrow(/Not Found/)
+      }
       await expect(s.service.reconciliation(owner, W, '2026-09')).resolves.toMatchObject({
         can: { change: true },
       })
@@ -476,7 +474,7 @@ describe('WorkspacePayrollService', () => {
       s.prisma.payrollPayLine.groupBy.mockResolvedValueOnce([
         { period: '2026-09', _count: { _all: 40 } },
       ])
-      expect(await s.service.periods(auditor, W)).toEqual([
+      expect(await s.service.periods(owner, W)).toEqual([
         { period: '2026-09', months: 3, payLines: 40 },
         { period: '2026-08', months: 2, payLines: 0 },
       ])
@@ -1162,10 +1160,10 @@ describe('WorkspacePayrollService', () => {
   })
 
   describe("a file of the month's set", () => {
-    it('opens a file of the set as uploaded to owners and auditors, one read line each, and nothing outside the set', async () => {
+    it('opens a file of the set as uploaded to owners, one read line each, and nothing outside the set', async () => {
       const s = await setup()
       s.setDocs.push(onFile('d-reg', { kind: 'payroll-register', fileName: 'register.pdf' }))
-      const got = await s.service.setFile(auditor, W, '2026-09', 'd-reg')
+      const got = await s.service.setFile(owner, W, '2026-09', 'd-reg')
       expect(got).toEqual({
         bytes: new Uint8Array(s.bytes),
         contentType: 'application/pdf',
@@ -1178,6 +1176,7 @@ describe('WorkspacePayrollService', () => {
       })
       await expect(s.service.setFile(owner, W, '2026-09', 'd-elsewhere')).rejects.toThrow()
       await expect(s.service.setFile(bookkeeper, W, '2026-09', 'd-reg')).rejects.toThrow()
+      await expect(s.service.setFile(auditor, W, '2026-09', 'd-reg')).rejects.toThrow(/Not Found/)
     })
   })
 })

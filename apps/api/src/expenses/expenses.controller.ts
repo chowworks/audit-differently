@@ -31,8 +31,8 @@ import { sendInline } from '../payroll/payroll-match.controller'
 
 /**
  * The month's expenses from the books (owner's decision, 2026-11-09): the lines of the accounting export in the month's
- * payroll files, routed to engagements and budget lines, and each engagement's account mapping. Owners save; owners
- * and auditors read.
+ * payroll files, routed to engagements and budget lines, and each engagement's account mapping. Owners save and
+ * read; no one else sees it (owner's decision, 2026-11-14).
  */
 @Controller()
 @UseGuards(AuthenticatedGuard)

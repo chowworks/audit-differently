@@ -807,13 +807,14 @@ describe('WorkspacePayrollService by the lists', () => {
       expect(JSON.stringify(out.sharedStaffOvercharged)).not.toMatch(/Morgan|2000|4400/)
     })
 
-    it('is for owners and auditors: a bookkeeper finds nothing', async () => {
+    it('is for owners alone: a bookkeeper or an auditor finds nothing', async () => {
       const s = cards(setup())
       await expect(s.service.engagements(bookkeeper, W, '2027-03')).rejects.toThrow(/Not Found/)
       await expect(s.service.engagements(member('owner', 'ws-2'), W, '2027-03')).rejects.toThrow(
         /Not Found/
       )
-      await expect(s.service.engagements(auditor, W, '2027-03')).resolves.toMatchObject({
+      await expect(s.service.engagements(auditor, W, '2027-03')).rejects.toThrow(/Not Found/)
+      await expect(s.service.engagements(owner, W, '2027-03')).resolves.toMatchObject({
         period: '2027-03',
       })
     })
@@ -867,7 +868,7 @@ describe('WorkspacePayrollService by the lists', () => {
           mark: at('3001 Riley Example 10.00 140.00', 9),
         }
       )
-      const out = await s.service.reconciliation(auditor, W, '2027-03')
+      const out = await s.service.reconciliation(owner, W, '2027-03')
       const byId = (id: string) => out.pays.find((p) => p.id === id)!
       // Morgan's row: on In-School Youth's staff salaries line, where the register is linked.
       expect(byId('pl-m')).toMatchObject({

@@ -343,9 +343,8 @@ export function WorkspacePage() {
           <div className="grid gap-4">
             {w.canManage && <Rename w={w} onChange={reload} />}
             <ReceiptsAddress w={w} onChange={setData} />
-            {(w.myRole === 'owner' || w.myRole === 'auditor') && (
-              <MonthEnd w={w} onChange={reload} />
-            )}
+            {/* Month end is the owner's working page: auditors don't see it (owner's decision, 2026-11-14). */}
+            {w.myRole === 'owner' && <MonthEnd w={w} onChange={reload} />}
           </div>
         </section>
       </div>

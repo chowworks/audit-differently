@@ -56,6 +56,7 @@ import {
   type WorkspacePayrollStartInput,
   type ProgramNames,
   type ProgramNamesDto,
+  type ReportDetail,
 } from '@ad/types'
 import { Prisma, type Document } from '@prisma/client'
 import { ChecksService } from '../checks/checks.service'
@@ -225,7 +226,7 @@ interface LinkWrite {
  * matching again: they are kept while the file they were made on stays the same file (its name and contents). When that
  * file changes or leaves, they go, and the reconciliation says so (`PayrollDroppedDecision`).
  *
- * Owners change it; owners and auditors read the reconciliation; nothing here is a bookkeeper's.
+ * Owners change it and read the reconciliation; nothing here is a bookkeeper's or an auditor's.
  */
 /**
  * A payroll line in the access log: its number, date, amounts and account by value; whose pay (a name) and the
@@ -283,11 +284,12 @@ export class WorkspacePayrollService {
   }
 
   /**
-   * Owners and auditors read the page; anyone else, a bookkeeper included, finds nothing here (404, so the screen shows
-   * the app's own not-found page rather than a refusal).
+   * Owners read the page (owner's decision, 2026-11-14: the month end is their working page, auditors don't see it);
+   * anyone else, a bookkeeper or an auditor, finds nothing here (404, so the screen shows the app's own not-found page
+   * rather than a refusal).
    */
   private reader(caller: Caller, workspaceId: string) {
-    if (!workspaceRole(caller, workspaceId, ['owner', 'auditor'])) throw new NotFoundException()
+    if (!workspaceRole(caller, workspaceId, ['owner'])) throw new NotFoundException()
   }
 
   private period(given: unknown): string {
@@ -312,7 +314,7 @@ export class WorkspacePayrollService {
     return docs.filter((d) => keyInWorkspace(d))
   }
 
-  /** The month's set as the page lists it, for Remove a file. Owners and auditors; one list line. */
+  /** The month's set as the page lists it, for Remove a file. Owners only; one list line. */
   async files(
     caller: Caller,
     workspaceId: string,
@@ -345,8 +347,8 @@ export class WorkspacePayrollService {
   }
 
   /**
-   * One file of the month's set as it was uploaded, to view or download from the files card. Owners and auditors read
-   * the set; a personal file opens to its roles (personalRolesFor) alone. Each open is one read line.
+   * One file of the month's set as it was uploaded, to view or download from the files card. Owners read the
+   * set; a personal file opens to its roles (personalRolesFor) alone. Each open is one read line.
    */
   async setFile(
     caller: Caller,
@@ -1123,8 +1125,8 @@ export class WorkspacePayrollService {
   }
 
   /**
-   * The caller's own unsaved run of the month, for the page to pick up where it was; one read line, as `get`. An
-   * auditor never has one (null); anyone not an owner or auditor finds nothing here (404, as `reader`).
+   * The caller's own unsaved run of the month, for the page to pick up where it was; one read line, as `get`. Anyone
+   * not an owner finds nothing here (404, as `reader`).
    */
   async latest(
     caller: Caller,
@@ -2861,7 +2863,7 @@ export class WorkspacePayrollService {
 
   /**
    * Every person-pay kept from the month's workspace payroll files and where it landed, and the reverse: each
-   * engagement's payroll item still missing a proof. Owners and auditors; one read line when it is opened, naming
+   * engagement's payroll item still missing a proof. Owners only; one read line when it is opened, naming
    * counts only (never a name or an amount).
    */
   async reconciliation(
@@ -2879,6 +2881,40 @@ export class WorkspacePayrollService {
       action: 'read',
       description: `Opened the payroll reconciliation for ${monthName(p)}: ${howMany(out.pays.length, 'pay')}, ${howMany(out.counts.unassigned, 'unassigned')}, ${howMany(out.unproved.length, 'payroll item')} missing proof${out.dropped.length ? `, ${howMany(out.dropped.length, 'decision')} dropped` : ''}`,
     })
+    return out
+  }
+
+  /**
+   * Each engagement's month for the period, as its month page has it (owner's decision, 2026-11-14: the month end's
+   * rows are the month page's rows, so the two can't drift). Owners only; one read line names the months and counts,
+   * never a name or an amount, when the page opens; `again` is the page fetching them after the owner's own change
+   * on it, which is not another read.
+   */
+  async months(
+    caller: Caller,
+    workspaceId: string,
+    period: unknown,
+    again = false
+  ): Promise<ReportDetail[]> {
+    this.reader(caller, workspaceId)
+    const p = this.period(period)
+    const rows = await this.prisma.monthlyReport.findMany({
+      where: { workspaceId, period: p },
+      select: { id: true },
+    })
+    const out: ReportDetail[] = []
+    for (const r of rows) out.push(await this.reports.fresh(caller, r.id))
+    if (!again)
+      await this.log.log(caller, {
+        workspaceId,
+        resource: 'workspace',
+        subjectId: workspaceId,
+        action: 'read',
+        description: `Opened the month end's expenses and payroll for ${monthName(p)}: ${howMany(out.length, 'month')}, ${howMany(
+          out.reduce((n, d) => n + d.documents.length, 0),
+          'document'
+        )}`,
+      })
     return out
   }
 
@@ -3116,7 +3152,7 @@ export class WorkspacePayrollService {
   // ── The engagement cards ─────────────────────────────────────────────────
 
   /**
-   * One card per engagement with a month for the period (owners and auditors; anyone else 404): its staff payroll
+   * One card per engagement with a month for the period (owners only; anyone else 404): its staff payroll
    * charge this month, its staff budget (approved, charged before, left after this month), the people tagged to it with
    * the pay and proofs the saved files hold for each, and the check: covered when the charge is not more than the pay
    * of everyone tagged to it (each person's full pay counts, so it is an upper bound; pay is never split). Above the

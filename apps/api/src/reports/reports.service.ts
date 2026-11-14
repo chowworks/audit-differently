@@ -587,6 +587,9 @@ export class ReportsService {
         resource: 'expense',
         subjectId: expenseId,
         subject: `expense ${existing.itemNumber}`,
+        workspacePayroll: workspaceRole(caller, r.workspaceId!, ['owner'])
+          ? { period: r.period }
+          : undefined,
         purpose,
         words: purposeLabel,
         find: (tx, documentId) =>
@@ -790,6 +793,9 @@ export class ReportsService {
         resource: 'report',
         subjectId: wexId,
         subject: `a work-experience payment in ${monthName(r.period)}`,
+        workspacePayroll: workspaceRole(caller, r.workspaceId!, ['owner'])
+          ? { period: r.period }
+          : undefined,
         purpose,
         words: purposeLabel,
         find: (tx, documentId) =>

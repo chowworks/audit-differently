@@ -277,24 +277,60 @@
   color: var(--warn);
   font-weight: 600;
 }
-.wpd-tiles {
+/* The reconciliation's three tiles, red, yellow and green, as the month page's (owner's decision, 2026-11-14). */
+.wpd-rtiles {
   display: grid;
-  /* Six tiles on one row on a laptop; they wrap on a phone. */
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  scroll-margin-top: 16px;
 }
-.wpd-tilebtn {
-  text-align: left;
-  cursor: pointer;
-  font: inherit;
+.wpd-rtiles .ad-tile {
+  min-width: 0;
 }
-/* Labels wrap to different heights: the numbers sit on one line at the tiles' foot. */
-.wpd-tilebtn .ad-tile-value {
-  margin-top: auto;
-}
-.wpd-tilebtn[aria-pressed='true'] {
+.wpd-rtiles .ad-tile[aria-pressed='true'] {
   outline: 3px solid var(--navy);
   outline-offset: -1px;
+}
+@media (max-width: 640px) {
+  .wpd-rtiles {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+/* An engagement's header row in Expenses & Proof and Payroll & Proof, and its folded complete rows. */
+.ad-table tr.wpd-group td {
+  background: var(--surface-alt);
+  font-weight: 700;
+}
+.wpd-group-end {
+  float: right;
+  margin-left: 12px;
+}
+.wpd-group-name {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.wpd-group-meta {
+  font-weight: 500;
+  color: var(--muted);
+  white-space: pre;
+}
+/* A pay's file chip (its file and page) wraps rather than widening the grid. */
+.wpd-recgrid .wpd-filechip {
+  white-space: normal;
+}
+/* A pay's Confirm / Link to / Not grant-funded: kept narrow, so the grid fits its card. */
+.wpd-act {
+  min-width: 200px;
+}
+.wpd-act select {
+  max-width: 220px;
+}
+.ad-table tr.wpd-fold td {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  font-size: 13px;
 }
 
 .wpd-actions-title {
@@ -331,32 +367,10 @@
   cursor: pointer;
 }
 
-.wpd-stats-head {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
 .wpd-stats {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 12px;
-}
-.wpd-eng {
-  display: inline-flex;
-  align-items: baseline;
-}
-
-.ad-tile.wpd-tile-red {
-  border-top-color: var(--danger);
-}
-.ad-tile.wpd-tile-yellow {
-  border-top-color: #f2c200;
-}
-.ad-tile.wpd-tile-grey {
-  border-top-color: #9aa5b1;
 }
 /* A card whose month started after the last match: its payroll is not on it until the files are matched again. */
 .wpd-unmatched {
@@ -401,4 +415,13 @@
 .wpc-add-file.is-busy {
   opacity: 0.6;
   pointer-events: none;
+}
+/* An engagement group folds on a click, as the month page's sections do. */
+.ad-table tr.wpd-group {
+  cursor: pointer;
+}
+.wpd-group-caret {
+  display: inline-block;
+  width: 14px;
+  color: var(--muted);
 }

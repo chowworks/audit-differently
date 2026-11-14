@@ -24,6 +24,7 @@ import type {
   PayrollMatchProgress,
   PayrollReconciliationDto,
   ProgramNamesDto,
+  ReportDetail,
   StaffListDto,
   StaffSuggestionDto,
   WorkspacePayrollFilesDto,
@@ -45,7 +46,7 @@ import { WorkspacePayrollService } from './workspace-payroll.service'
 /**
  * "Match payroll & timecards" for the whole workspace and a month, and its reconciliation. Each month has one set of
  * payroll files; an owner changes it (replace all, add files, remove a file, match again) by a run that is checked and
- * then saved. Owners run it and change the reconciliation; owners and auditors read them.
+ * then saved. Owners run it and change the reconciliation; owners alone read them.
  */
 @Controller()
 @UseGuards(AuthenticatedGuard)
@@ -114,6 +115,17 @@ export class WorkspacePayrollController {
     @Param('period') period: string
   ): Promise<PayrollReconciliationDto> {
     return this.payroll.reconciliation(await this.callers.load(userId), id, period)
+  }
+
+  /** Each engagement's month for the period, as its month page has it: the month end's rows. */
+  @Get('workspaces/:id/payroll/:period/months')
+  async months(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('period') period: string,
+    @Query('again') again?: string
+  ): Promise<ReportDetail[]> {
+    return this.payroll.months(await this.callers.load(userId), id, period, again === '1')
   }
 
   /** The engagement cards: each engagement's staff payroll charge against the pay in the saved files. */
