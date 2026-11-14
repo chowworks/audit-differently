@@ -2205,6 +2205,14 @@ export interface PayLineDto {
    * person. Null when no one is read (a bank line, a scanned stub): the file name shows instead.
    */
   named?: string | null
+  /**
+   * What the pay is (owner's decision, 2026-11-14), shown in the Amount and Date columns: a pay stub's net pay and pay
+   * period end, a register row's net and its run's pay date, a bank line's amount and date. Null where the file doesn't
+   * say: never guessed.
+   */
+  amount?: number | null
+  /** yyyy-mm-dd. */
+  payDate?: string | null
 }
 
 /** A workspace payroll match: the run's files, every open slot's match across the engagements, and the person-pays. */

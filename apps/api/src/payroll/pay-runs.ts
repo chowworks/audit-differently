@@ -75,7 +75,7 @@ export function datesOf(text: string): string[] {
 }
 
 /** A bank line's dates: full dates, or a month and day alone (09/24) in the given year, as statements often print. */
-function bankDates(text: string, year: number): string[] {
+export function bankDates(text: string, year: number): string[] {
   const full = datesOf(text)
   if (full.length) return full
   return [...text.matchAll(/(?<![\d/.])(\d{1,2})\/(\d{1,2})(?![\d/])/g)]

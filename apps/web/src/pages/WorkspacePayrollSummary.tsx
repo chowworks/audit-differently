@@ -1260,8 +1260,8 @@ function PayrollLine({
               </span>
             )}
           </td>
-          <td className="whitespace-nowrap">—</td>
-          <td className="ad-num"></td>
+          <td className="whitespace-nowrap">{p.payDate ? shortDate(p.payDate) : '—'}</td>
+          <td className="ad-num font-semibold">{p.amount != null ? money(p.amount) : ''}</td>
           <td>
             <span className="flex flex-wrap gap-1">
               <Chip tone="muted" className="wpd-filechip">

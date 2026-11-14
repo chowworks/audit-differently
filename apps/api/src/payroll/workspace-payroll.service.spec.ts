@@ -132,7 +132,12 @@ async function setup(opts: { statusB?: string; links?: Record<string, Link[]> } 
     },
     payrollDroppedDecision: { createMany: jest.fn() },
     payrollMatchFile: { createMany: jest.fn() },
-    payrollPayLine: { createMany: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+    payrollPayLine: {
+      createMany: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     staffPayProof: { deleteMany: jest.fn(), createMany: jest.fn() },
     wexPayment: {
       create: jest.fn(async ({ data }) => ({ id: `wx-${++n}`, ...data })),
@@ -625,6 +630,14 @@ describe('WorkspacePayrollService', () => {
         'Riley Example 10.00 140.00',
       ])
       expect(kept.every((r: { documentId: string }) => r.documentId === doc.id)).toBe(true)
+      // Each pay keeps whose it is; a row with hours and pay but no heading to tell them apart keeps no amount.
+      expect(
+        kept.map((r: { payee: string; amount: string | null }) => [r.payee, r.amount])
+      ).toEqual([
+        ['Jordan Sample', null],
+        ['Casey Demo', null],
+        ['Riley Example', null],
+      ])
       // A file filed just now has no links: they go in one statement, not one upsert each.
       expect(s.tx.wexPaymentDocument.upsert).not.toHaveBeenCalled()
       expect(s.tx.wexPaymentDocument.createMany).toHaveBeenCalledTimes(1)
