@@ -41,3 +41,7 @@ export const payPeriodWords = (start: string, end: string) => {
     ? `${mon(start)} ${day(start)}–${day(end)}, ${year}`
     : `${mon(start)} ${day(start)} – ${mon(end)} ${day(end)}, ${year}`
 }
+
+/** A payroll CSV (timesheet, register, payroll details): shown as a table in the app. */
+export const isCsv = (f: { contentType?: string; fileName: string }) =>
+  /csv/i.test(f.contentType ?? '') || /\.csv$/i.test(f.fileName)
