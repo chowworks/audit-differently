@@ -386,7 +386,7 @@ export class DocumentsService {
    * After a removal committed, the stored object goes too. If storage refuses, the person's request still stands:
    * the leftover is written to the server log and the access log, by document id and key, so it can be found.
    */
-  private async dropStored(
+  async dropStored(
     caller: Caller,
     doc: { id: string; workspaceId: string; kind: string; storageKey: string }
   ): Promise<void> {

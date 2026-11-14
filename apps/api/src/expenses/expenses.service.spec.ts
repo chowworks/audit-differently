@@ -543,3 +543,117 @@ describe("ExpensesService: a receipt opened from the Expense matching step (owne
     )
   })
 })
+
+describe("ExpensesService: removing a receipt from File Management (owner's decision, 2026-11-14)", () => {
+  const draft = { status: 'draft', period: '2026-09', engagement: { name: 'Youth Coding Program' } }
+  const receipt = (over: object = {}) => ({
+    id: 'd-receipt',
+    workspaceId: W,
+    engagementId: null,
+    engagement: null,
+    period: '2026-09',
+    kind: 'receipt',
+    sensitivity: 'financial',
+    fileName: 'pixel.pdf',
+    storageKey: `${W}/workspace/2026-09/pixel.pdf`,
+    _count: { participants: 0, staffPayProofs: 0, payLines: 0 },
+    ...over,
+  })
+  const make = (
+    doc: object | null,
+    links: { itemNumber: string; month: object }[] = [],
+    held = 0
+  ) => {
+    const prisma = {
+      document: {
+        findFirst: jest.fn().mockResolvedValue(doc),
+        delete: jest.fn().mockResolvedValue(doc),
+      },
+      payrollMatchFile: { count: jest.fn().mockResolvedValue(held) },
+      expenseDocument: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue(
+            links.map((l) => ({ expense: { itemNumber: l.itemNumber, monthlyReport: l.month } }))
+          ),
+      },
+      wexPaymentDocument: { findMany: jest.fn().mockResolvedValue([]) },
+    }
+    const log = fakeLog(prisma)
+    const documents = { dropStored: jest.fn().mockResolvedValue(undefined) }
+    const s = new ExpensesService(
+      prisma as never,
+      log as never,
+      {} as never,
+      documents as never,
+      {} as never,
+      {} as never
+    )
+    const dto = jest
+      .spyOn(s as unknown as { dto: () => unknown }, 'dto')
+      .mockReturnValue({ receipts: [] })
+    jest.spyOn(s as unknown as { planOf: () => Promise<unknown> }, 'planOf').mockResolvedValue({})
+    return { s, prisma, log, documents, dto }
+  }
+
+  it('deletes the receipt and its file, and logs which expenses lose it as proof', async () => {
+    const { s, prisma, log, documents } = make(receipt(), [{ itemNumber: 'QB-9003', month: draft }])
+    await s.removeReceipt(owner, W, '2026-09', 'd-receipt')
+    expect(prisma.document.delete).toHaveBeenCalledWith({ where: { id: 'd-receipt' } })
+    expect(log.entries[0]).toMatchObject({
+      resource: 'document',
+      action: 'delete',
+      subjectId: 'd-receipt',
+    })
+    expect(log.entries[0]!.description).toContain('expense QB-9003 no longer has it as proof')
+    expect(documents.dropStored).toHaveBeenCalled()
+  })
+
+  it('is an owner’s alone: a bookkeeper or auditor is refused, another workspace finds nothing', async () => {
+    for (const role of ['bookkeeper', 'auditor'] as const)
+      await expect(
+        make(receipt()).s.removeReceipt(member(role), W, '2026-09', 'd-receipt')
+      ).rejects.toThrow('Only an owner')
+    await expect(
+      make(receipt()).s.removeReceipt(member('owner', 'ws-2'), W, '2026-09', 'd-receipt')
+    ).rejects.toThrow(NotFoundException)
+    await expect(make(null).s.removeReceipt(owner, W, '2026-09', 'nope')).rejects.toThrow(
+      NotFoundException
+    )
+    const outside = make(receipt({ storageKey: 'ws-2/workspace/2026-09/pixel.pdf' }))
+    await expect(outside.s.removeReceipt(owner, W, '2026-09', 'd-receipt')).rejects.toThrow(
+      NotFoundException
+    )
+    expect(outside.prisma.document.delete).not.toHaveBeenCalled()
+  })
+
+  it('refuses while it proves a line of a closed or submitted month, and deletes nothing', async () => {
+    const { s, prisma, log, documents } = make(receipt(), [
+      { itemNumber: 'QB-9003', month: { ...draft, status: 'submitted' } },
+    ])
+    await expect(s.removeReceipt(owner, W, '2026-09', 'd-receipt')).rejects.toThrow(
+      /submitted: reopen that month first/
+    )
+    expect(prisma.document.delete).not.toHaveBeenCalled()
+    expect(log.entries).toHaveLength(0)
+    expect(documents.dropStored).not.toHaveBeenCalled()
+  })
+
+  it('refuses one filed on an engagement month that is not a draft, used elsewhere, or held by an upload', async () => {
+    const filed = receipt({
+      engagementId: 'e-a',
+      storageKey: `${W}/e-a/2026-09/pixel.pdf`,
+      engagement: { monthlyReports: [{ ...draft, status: 'closed' }] },
+    })
+    await expect(make(filed).s.removeReceipt(owner, W, '2026-09', 'd-receipt')).rejects.toThrow(
+      ConflictException
+    )
+    const used = receipt({ _count: { participants: 0, staffPayProofs: 1, payLines: 0 } })
+    await expect(make(used).s.removeReceipt(owner, W, '2026-09', 'd-receipt')).rejects.toThrow(
+      'payroll proof'
+    )
+    await expect(
+      make(receipt(), [], 1).s.removeReceipt(owner, W, '2026-09', 'd-receipt')
+    ).rejects.toThrow('not saved yet')
+  })
+})

@@ -1128,6 +1128,91 @@ export class ExpensesService {
   }
 
   /**
+   * Removes one of the month's receipts from File Management (owner's decision, 2026-11-14: a hard delete, the owner's
+   * choice). Owners only. The row, its links to the lines it proves and its bill choices go in one transaction with the
+   * access-log line, then the file. The lines it proved are left without that proof, which their month's checks flag.
+   * Refused while it proves a line of a month that is not a draft (reopen the month first), while its own engagement
+   * month is not a draft, or while something else uses it (a participant, payroll proof, an unsaved payroll upload).
+   */
+  async removeReceipt(
+    caller: Caller,
+    workspaceId: string,
+    given: unknown,
+    documentId: string
+  ): Promise<WorkspaceExpensesDto> {
+    this.owner(caller, workspaceId)
+    const period = this.period(given)
+    const month = {
+      select: { status: true, period: true, engagement: { select: { name: true } } },
+    }
+    const doc = await this.prisma.document.findFirst({
+      where: {
+        id: documentId,
+        workspaceId,
+        period,
+        sensitivity: 'financial',
+        kind: { in: [...RECEIPT_KINDS] },
+      },
+      include: {
+        engagement: { select: { monthlyReports: { where: { period }, ...month } } },
+        _count: { select: { participants: true, staffPayProofs: true, payLines: true } },
+      },
+    })
+    if (!doc || !keyInWorkspace(doc)) throw new NotFoundException()
+    if (doc._count.participants + doc._count.staffPayProofs + doc._count.payLines > 0)
+      throw new ConflictException(
+        `${doc.fileName} is also used as a participant's record or as payroll proof, so it stays`
+      )
+    if (await this.prisma.payrollMatchFile.count({ where: { documentId } }))
+      throw new ConflictException(
+        `${doc.fileName} is in a payroll upload that is not saved yet: save or discard that upload first`
+      )
+    const own = doc.engagement?.monthlyReports[0]
+    if (own && own.status !== 'draft')
+      throw new ConflictException(
+        `${doc.fileName} is filed on ${own.engagement.name}'s ${monthName(own.period)}, which is ${own.status}: reopen that month first to remove it`
+      )
+    await this.log.change(
+      caller,
+      async (tx) => {
+        const links = await tx.expenseDocument.findMany({
+          where: { documentId },
+          select: { expense: { select: { itemNumber: true, monthlyReport: month } } },
+        })
+        const wex = await tx.wexPaymentDocument.findMany({
+          where: { documentId },
+          select: { wexPayment: { select: { monthlyReport: month } } },
+        })
+        const locked = [
+          ...links.map((l) => l.expense.monthlyReport),
+          ...wex.map((w) => w.wexPayment.monthlyReport),
+        ].find((r) => r.status !== 'draft')
+        if (locked)
+          throw new ConflictException(
+            `${doc.fileName} is proof in ${locked.engagement.name}'s ${monthName(locked.period)}, which is ${locked.status}: reopen that month first to remove it`
+          )
+        // The links and bill choices go with the row (Cascade, SetNull); the month lock (month_is_draft) is checked
+        // above, for the database checks it on a link's insert and update only.
+        await tx.document.delete({ where: { id: documentId } })
+        return { items: [...new Set(links.map((l) => l.expense.itemNumber))].sort() }
+      },
+      (done) => ({
+        workspaceId,
+        resource: 'document',
+        subjectId: doc.id,
+        action: 'delete',
+        description: `Removed the receipt ${doc.fileName} from ${monthName(period)}'s receipts in File Management${
+          done.items.length
+            ? `; ${done.items.length === 1 ? 'expense' : 'expenses'} ${done.items.join(', ')} no longer ${done.items.length === 1 ? 'has' : 'have'} it as proof`
+            : ''
+        }`,
+      })
+    )
+    await this.documents.dropStored(caller, doc)
+    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period))
+  }
+
+  /**
    * An owner's word on one bill's payment: the line of the month's statements that paid it (one of the bill's
    * choices), or null to match it again. A dropped bill has none.
    */
