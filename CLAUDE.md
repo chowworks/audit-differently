@@ -465,7 +465,11 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
   at" beside the owner's Staff and Participants, with a green "✓ N matched"), each proof found as its file, "✓ Found,
   page N" (or a guess, or missing) and Show, one "How Auto-Match decided" panel for every reason (closed until Show), no
   "fully proved" panel, a short "What Save will do" beside the footer, and the footer Back: upload / Discard (a red
-  text link) / "Save and continue". Change one only with the other.
+  text link) / "Save and continue". Change one only with the other. They also match the same way (owner's decision,
+  2026-11-14): the wizard's slots are worked out by the owner's rules for its one month (`month-plan.ts`: `planMatch`,
+  so a staff line takes only its tagged people's rows, then Auto-Match's sure pick), it reads the month's workspace
+  files beside the engagement's own (replacing removes only the engagement's), both count an item complete as Payroll &
+  Proof does, and both flag two files that disagree.
 
 Keep the words short: one bold line that says the point, then steps as a list, never a paragraph that wraps three
 times. Look at it in the browser at the width it will be used before showing it to the owner.

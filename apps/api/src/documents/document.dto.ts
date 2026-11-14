@@ -21,6 +21,7 @@ export function documentDto(d: {
   size: number
   period: string | null
   uploadedAt: Date
+  engagementId?: string | null
 }): DocumentDto {
   return {
     id: d.id,
@@ -31,5 +32,6 @@ export function documentDto(d: {
     size: d.size,
     period: d.period,
     uploadedAt: d.uploadedAt.toISOString(),
+    ...(d.engagementId === null ? { workspace: true } : {}),
   }
 }

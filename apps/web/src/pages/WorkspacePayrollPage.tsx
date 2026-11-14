@@ -82,6 +82,7 @@ import {
   MatchFooter,
   ProofFoot,
   ProvedCount,
+  ReadingProgress,
   RemainingSection,
   MatchedBy,
   UnsavedNote,
@@ -1155,7 +1156,7 @@ function WorkspaceMatch({
                   ? '⚠️ ⚡ Best guess: check it'
                   : unread(value)
                     ? '✓ Chosen: no text found, check it by eye'
-                    : `✓ ${isAuto ? (isConfirmed ? 'Confirmed' : `⚡ Found${c?.mark ? `, page ${c.mark.page}` : ''}`) : 'Chosen'}`
+                    : `✓ ${isAuto ? (isConfirmed ? 'Confirmed' : `${c?.ai ? '✨ Found by AI' : '⚡ Found'}${c?.mark ? `, page ${c.mark.page}` : ''}`) : 'Chosen'}`
           }
           onShow={
             value && marks.length > 0
@@ -1321,7 +1322,15 @@ function WorkspaceMatch({
           run &&
           !waiting &&
           !pollError &&
-          !ai.reading && <ProvedCount proved={proved.length} total={proved.length + open.length} />
+          !ai.reading && (
+            <ProvedCount
+              // Complete as Payroll & Proof counts it: two files that disagree need a look first.
+              proved={
+                proved.filter((p) => !run.plan.twoProofs.some((t) => keyOf(t) === p.key)).length
+              }
+              total={proved.length + open.length}
+            />
+          )
         }
       >
         <Stepper steps={STEPS} current={step === 'Match' ? 'Payroll matching' : 'Upload'} />
@@ -1384,13 +1393,7 @@ function WorkspaceMatch({
 
         {step === 'Match' && run && waiting && (
           <div className="grid gap-4">
-            <p className="text-sm font-semibold" role="status">
-              <span className="ad-hourglass" aria-hidden="true">
-                ⏳
-              </span>{' '}
-              Reading the files on the server: {shown.read} of {shown.total} done
-              {shown.failed ? `, ${shown.failed} could not be read` : ''}
-            </p>
+            <ReadingProgress progress={shown} />
             <HandCard
               title="Reading your files"
               icon="⏳"
@@ -1431,7 +1434,7 @@ function WorkspaceMatch({
                     <thead>
                       <tr>
                         <th>Engagement</th>
-                        <th>Paid</th>
+                        <th>Vendor/Participant Paid</th>
                         <th>Date</th>
                         <th className="ad-num">Amount</th>
                         <th>Timesheet</th>

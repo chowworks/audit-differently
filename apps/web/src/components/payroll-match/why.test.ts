@@ -58,7 +58,7 @@ describe('"How Auto-Match decided", on both payroll match screens', () => {
   })
 
   it('counts the items fully proved', () => {
-    expect(provedWords(1, 1)).toBe('1 of 1 payroll item fully proved')
-    expect(provedWords(5, 7)).toBe('5 of 7 payroll items fully proved')
+    expect(provedWords(1, 1)).toBe('1 of 1 payroll item complete')
+    expect(provedWords(5, 7)).toBe('5 of 7 payroll items complete')
   })
 })

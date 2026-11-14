@@ -89,7 +89,41 @@ async function setup(opts: { replace?: boolean; status?: string } = {}) {
       ]),
     },
     document: { findMany: jest.fn().mockResolvedValue(earlier) },
-    monthlyReport: { findFirst: jest.fn().mockResolvedValue({ id: 'r-1', period: '2026-09' }) },
+    monthlyReport: {
+      findFirst: jest.fn().mockResolvedValue({ id: 'r-1', period: '2026-09' }),
+      // The month as the owner's match reads it (month-plan.ts): the same payment, with nothing linked yet.
+      findMany: jest.fn().mockResolvedValue([
+        {
+          id: 'r-1',
+          engagementId: 'e-1',
+          period: '2026-09',
+          status: 'draft',
+          engagement: { id: 'e-1', name: 'In-School Youth' },
+          expenses: [],
+          wexPayments: [
+            {
+              id: 'w-jordan',
+              grossAmount: 280,
+              payPeriodStart: new Date('2026-09-07T00:00:00Z'),
+              payPeriodEnd: new Date('2026-09-20T00:00:00Z'),
+              stubDocumentId: null,
+              stubTookOver: false,
+              participant: { id: 'p-1', displayName: 'Jordan Sample', participantId: 'P-1' },
+              documents: [],
+            },
+          ],
+        },
+      ]),
+    },
+    staffMember: { findMany: jest.fn().mockResolvedValue([]) },
+    participant: {
+      findMany: jest
+        .fn()
+        .mockResolvedValue([
+          { id: 'p-1', engagementId: 'e-1', displayName: 'Jordan Sample', participantId: 'P-1' },
+        ]),
+    },
+    workspace: { findFirst: jest.fn().mockResolvedValue({ programNames: null }) },
     matchRunStat: { createMany: jest.fn() },
   }
   const lines: string[] = []
@@ -249,7 +283,7 @@ describe('PayrollMatchService', () => {
       expect(s.tx.document.create).not.toHaveBeenCalled()
     })
 
-    it('refuses a bank statement with no line found for the payment', async () => {
+    it("refuses a staff line's proof that is not its own people's rows, as the owner's match does", async () => {
       const s = await setup()
       const run = await s.prisma.payrollMatchRun.findFirst()
       // The sample pay stub, as a bank statement: nothing on it is a $1,234.56 staff payroll of December.
@@ -267,7 +301,7 @@ describe('PayrollMatchService', () => {
         s.service.save(caller, 'run-1', {
           links: [{ target: 'expense', id: 'e-staff', slot: 'bank', fileId: 'f-stub' }],
         })
-      ).rejects.toThrow(/No line for this payment was found/)
+      ).rejects.toThrow(/is not the evidence of payment of expense RYS-18/)
       expect(s.tx.document.create).not.toHaveBeenCalled()
     })
 
@@ -351,6 +385,64 @@ describe('PayrollMatchService', () => {
       expect(s.documents.removeReplaced).toHaveBeenCalledWith(caller, s.earlier[0])
       expect(s.tx.document.create.mock.invocationCallOrder[0]).toBeLessThan(
         s.documents.removeReplaced.mock.invocationCallOrder[0]!
+      )
+    })
+
+    it("reads the month's workspace files with the engagement's own, once each, and replacing removes only the engagement's", async () => {
+      const s = await setup({ replace: false })
+      const doc = (id: string, engagementId: string | null, sha256: string) => ({
+        id,
+        engagementId,
+        kind: 'timesheet',
+        sensitivity: 'financial',
+        fileName: `${id}.pdf`,
+        contentType: 'application/pdf',
+        size: 10,
+        sha256,
+        workspaceId: W,
+        period: '2026-09',
+        storageKey: `${W}/${engagementId ?? 'workspace'}/2026-09/${id}.pdf`,
+      })
+      // The owner's file, the bookkeeper's copy of it, and the engagement's own other file.
+      s.prisma.document.findMany.mockResolvedValueOnce([
+        doc('d-ws', null, 'same'),
+        doc('d-copy', 'e-1', 'same'),
+        doc('d-own', 'e-1', 'other'),
+      ])
+      Object.assign(s.tx, {
+        payrollMatchRun: { ...s.tx.payrollMatchRun, create: jest.fn().mockResolvedValue(s.run) },
+      })
+      const created: string[] = []
+      Object.assign(s.prisma, {
+        payrollMatchFile: {
+          create: jest.fn(async ({ data }) => void created.push(data.documentId)),
+        },
+      })
+      ;(s.service as unknown as { worker: unknown }).worker = { kick: jest.fn() }
+      ;(s.service as unknown as { sweep: unknown }).sweep = jest.fn()
+      await s.service.start(caller, 'r-1', false)
+      expect(s.prisma.document.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            OR: [{ engagementId: 'e-1' }, { engagementId: null }],
+          }),
+        })
+      )
+      expect(created).toEqual(['d-ws', 'd-own'])
+
+      s.prisma.document.findMany.mockClear()
+      s.prisma.document.findMany.mockResolvedValueOnce([])
+      await s.service.start(caller, 'r-1', true)
+      expect(s.prisma.document.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ OR: [{ engagementId: null }] }),
+        })
+      )
+
+      const r = await setup({ replace: true })
+      await r.service.save(caller, 'run-1', { links: [link] })
+      expect(r.prisma.document.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ engagementId: 'e-1' }) })
       )
     })
 

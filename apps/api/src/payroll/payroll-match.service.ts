@@ -11,7 +11,9 @@ import {
   type PayrollMatchProgress,
   type PayrollMatchRunDto,
   type PayrollMatchSaveInput,
+  type PayrollCandidate,
   type PayrollSlot,
+  type PayrollSlotMatch,
   type ReportDetail,
   type ReportLine,
   type StatementLine,
@@ -37,6 +39,7 @@ import type { PageItem } from './statement-lines'
 import { COPIED_TYPES, itemCopy } from './mark-pdf'
 import { overPayLineCap } from './pay-lines'
 import { workspaceItems } from './workspace-items'
+import { monthSlots, type MonthFile } from './month-plan'
 import { isCardStatement } from './card-statement'
 import { countsOnBudget, holdsPayroll, payrollCovers } from '../reports/report-lines'
 
@@ -167,15 +170,28 @@ export class PayrollMatchService {
         description: `Started matching payroll for ${monthName(r.period)}${replace ? ", replacing the month's payroll files" : ''}`,
       })
     )
-    if (!replace) {
-      const docs = await this.prisma.document.findMany({
+    {
+      // The month's workspace payroll files (the owner's Month End Close) always join, so both screens match against
+      // the same proof; the engagement's own files only without `replace`. Replacing never removes a workspace file.
+      const found = await this.prisma.document.findMany({
         where: {
-          engagementId: r.engagementId,
           period: r.period,
           kind: { in: [...PAYROLL_DOCUMENT_KINDS] },
+          OR: replace
+            ? [{ engagementId: null }]
+            : [{ engagementId: r.engagementId }, { engagementId: null }],
           ...tenantWhere(caller),
         },
+        orderBy: { uploadedAt: 'asc' },
         take: MAX_RUN_FILES,
+      })
+      // The same bytes filed twice (the bookkeeper's copy and the owner's) are read once.
+      const seen = new Set<string>()
+      const docs = found.filter((d) => {
+        const key = `${d.kind}:${d.sha256}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
       })
       for (const d of docs) {
         if (!keyInWorkspace(d)) continue
@@ -205,7 +221,7 @@ export class PayrollMatchService {
         this.worker.kick()
       }
     }
-    return this.dto(await this.load(caller, run.id))
+    return this.dto(caller, await this.load(caller, run.id))
   }
 
   /** The run, its starter's own, on a month still open for changes. */
@@ -287,7 +303,7 @@ export class PayrollMatchService {
       action: 'create',
       description: `Sent ${howMany(staged.length, 'payroll file')} for ${monthName(r.period)} to be read and matched`,
     })
-    return this.dto(await this.load(caller, run.id))
+    return this.dto(caller, await this.load(caller, run.id))
   }
 
   /** The run as the wizard shows it, opened again (a reload): one read line. */
@@ -299,7 +315,7 @@ export class PayrollMatchService {
       action: 'read',
       description: `Opened the payroll match for ${monthName(r.period)} (${howMany(run.files.length, 'file')})`,
     })
-    return this.dto(run)
+    return this.dto(caller, run)
   }
 
   /** One file's bytes, for the viewer: every payroll file opens there, a pay stub too. Logged. */
@@ -335,24 +351,7 @@ export class PayrollMatchService {
     if (!f || !f.storageKey.startsWith(`${r.workspaceId}/`)) throw new NotFoundException()
     const item = (await this.items(r.id)).find((i) => i.target === target && i.id === id)
     if (!item || !slotsOf(item.proof).includes(slot as PayrollSlot)) throw new NotFoundException()
-    const highlight = await this.highlights.current()
-    const match = matchSlot(
-      item.proof,
-      slot as PayrollSlot,
-      [
-        {
-          id: f.id,
-          kind: f.kind as PayrollDocumentKind,
-          fileName: f.fileName,
-          lines: f.lines as unknown as StatementLine[],
-          items: f.items as unknown as PageItem[],
-        },
-      ],
-      highlight[PAYROLL_SLOT_KIND[slot as PayrollSlot]],
-      // A staff line's bank line may be its pay run's debit, read from the upload's registers.
-      run.files.map(proofFile)
-    )
-    const c = match.candidates[0]
+    const c = await this.candidateOf(caller, run, item, slot as PayrollSlot, f)
     const marks = c?.marks.length ? c.marks : c?.mark ? [c.mark] : []
     const original = new Uint8Array(await this.storage.read(f.storageKey))
     const bytes = COPIED_TYPES.includes(f.contentType)
@@ -379,11 +378,18 @@ export class PayrollMatchService {
       throw new BadRequestException('The files are still being read. Save once they are done.')
     const items = new Map((await this.items(r.id)).map((i) => [`${i.target}-${i.id}`, i]))
     const links = Array.isArray(input?.links) ? input.links : []
-    const highlight = await this.highlights.current()
     if (links.length > 2000) throw new BadRequestException('Too many links at once')
     const files = new Map(run.files.map((f) => [f.id, f]))
-    const runFiles = run.files.map(proofFile)
-    const chosen = links.map((l) => {
+    const slots = await this.slotsFor(caller, run)
+    const chosen: {
+      item: typeof items extends Map<string, infer I> ? I : never
+      slot: PayrollSlot
+      file: RunFileRow
+      mark: ReturnType<typeof cleanMark> | null
+      marks: ReturnType<typeof cleanMark>[]
+      payRun: boolean
+    }[] = []
+    for (const l of links) {
       const item = items.get(`${l?.target}-${l?.id}`)
       if (!item) throw new BadRequestException('A payroll item is not of this month')
       if (!slotsOf(item.proof).includes(l.slot))
@@ -391,14 +397,13 @@ export class PayrollMatchService {
       const f = files.get(l.fileId)
       if (!f || f.kind !== PAYROLL_SLOT_KIND[l.slot])
         throw new BadRequestException(`Choose a ${SLOT_WORDS[l.slot]} of this zip`)
-      // The line and the highlights are worked out here, as Show draws them: never taken from the browser.
-      const found = matchSlot(
-        item.proof,
-        l.slot,
-        [proofFile(f)],
-        highlight[PAYROLL_SLOT_KIND[l.slot]],
-        runFiles
-      ).candidates[0]
+      // The line and the highlights are worked out here, as Show draws them: never taken from the browser. A staff line
+      // takes only what its own people's rows prove (month-plan.ts).
+      const found = await this.candidateOf(caller, run, item, l.slot, f, slots)
+      if (!found)
+        throw new BadRequestException(
+          `${f.fileName} is not the ${SLOT_WORDS[l.slot]} of ${item.subject}: a staff line takes only the rows of the people tagged to it in Engagement staffing`
+        )
       const mark = found?.mark ? cleanMark(found.mark) : null
       // A bank statement proves a payment by its line alone: with no line found on it, it is not this payment's proof
       // (the line is found under Unmatched payments, after Save).
@@ -408,8 +413,15 @@ export class PayrollMatchService {
         )
       const marks = (found?.marks ?? []).slice(0, 20).map(cleanMark)
       // A pay run's debit, matched to the run that paid the item: the month's check reads it so.
-      return { item, slot: l.slot, file: f, mark, marks, payRun: found?.payRun === true && !!mark }
-    })
+      chosen.push({
+        item,
+        slot: l.slot,
+        file: f,
+        mark,
+        marks,
+        payRun: found?.payRun === true && !!mark,
+      })
+    }
     const earlier = run.replace
       ? await this.prisma.document.findMany({
           where: {
@@ -751,12 +763,51 @@ export class PayrollMatchService {
     ]
   }
 
-  private async dto(run: RunRow): Promise<PayrollMatchRunDto> {
+  /**
+   * Every slot of the month's items as the owner's workspace match works it out (`month-plan.ts`), from this run's
+   * files: what Show draws, what Save links and what the wizard offers.
+   */
+  private async slotsFor(caller: Caller, run: RunRow): Promise<PayrollSlotMatch[]> {
+    const files: MonthFile[] = run.files.map((f) => ({
+      ...proofFile(f),
+      documentId: f.documentId,
+      sha256: f.sha256,
+    }))
+    return monthSlots(this.prisma, caller, {
+      workspaceId: run.workspaceId!,
+      reportId: run.monthlyReportId!,
+      period: (await this.periodOf(run, caller))!,
+      files,
+      highlight: await this.highlights.current(),
+      replace: run.replace,
+    })
+  }
+
+  /** The candidate one file is for one slot: as the slots offer it, else (a participant's pay) read on its own. */
+  private async candidateOf(
+    caller: Caller,
+    run: RunRow,
+    item: { target: 'expense' | 'wex'; id: string; proof: ProofItem },
+    slot: PayrollSlot,
+    f: RunFileRow,
+    slots?: PayrollSlotMatch[]
+  ): Promise<PayrollCandidate | undefined> {
+    const all = slots ?? (await this.slotsFor(caller, run))
+    const m = all.find((x) => x.target === item.target && x.id === item.id && x.slot === slot)
+    const offered = m?.candidates.find((c) => c.fileId === f.id)
+    if (offered || item.target === 'expense') return offered
+    const highlight = await this.highlights.current()
+    return matchSlot(
+      item.proof,
+      slot,
+      [proofFile(f)],
+      highlight[PAYROLL_SLOT_KIND[slot]],
+      run.files.map(proofFile)
+    ).candidates[0]
+  }
+
+  private async dto(caller: Caller, run: RunRow): Promise<PayrollMatchRunDto> {
     const files: ProofFile[] = run.files.map(proofFile)
-    const [items, highlight] = await Promise.all([
-      this.items(run.monthlyReportId!),
-      this.highlights.current(),
-    ])
     return {
       id: run.id,
       replace: run.replace,
@@ -773,11 +824,7 @@ export class PayrollMatchService {
         personal: f.sensitivity === 'personal',
         overLineCap: overPayLineCap(f),
       })),
-      slots: items.flatMap((i) =>
-        slotsOf(i.proof).map((slot) =>
-          matchSlot(i.proof, slot, files, highlight[PAYROLL_SLOT_KIND[slot]], files)
-        )
-      ),
+      slots: await this.slotsFor(caller, run),
       runs: suggestedRuns(payRunsOf(files)),
       ai: PayrollAiService.summary(run.files),
     }
@@ -805,6 +852,6 @@ export class PayrollMatchService {
       names,
       'Match payroll & timecards'
     )
-    return this.dto(await this.load(caller, run.id))
+    return this.dto(caller, await this.load(caller, run.id))
   }
 }
