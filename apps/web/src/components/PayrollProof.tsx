@@ -3,7 +3,6 @@ import {
   ZIP_FOLDER_LIST,
   andList,
   PAYROLL_PERSONAL_KINDS,
-  DOCUMENT_KIND_LABELS,
   PAYROLL_DOCUMENT_KINDS,
   isPayrollLine,
   PAYROLL_SLOT_KIND,
@@ -40,6 +39,7 @@ import {
   MatchFooter,
   ProofFoot,
   ProvedCount,
+  ReadingProgress,
   LineCapNotes,
   RemainingSection,
   MatchedBy,
@@ -112,11 +112,6 @@ const slotsOf = (item: PayrollItem): PayrollSlot[] =>
     ? ['timesheet', 'register', 'stub']
     : ['timesheet', 'register', 'bank']
 
-const kindLabel = (k: PayrollDocumentKind) => {
-  const w = DOCUMENT_KIND_LABELS[k]
-  return w.charAt(0).toUpperCase() + w.slice(1)
-}
-
 /** The item's bank statement line, if one is marked. */
 const markedLine = (item: PayrollItem) =>
   item.documents.find(
@@ -141,7 +136,7 @@ export function PayrollProof({
   onChange: (report: ReportDetail) => void
   onNotice: (text: string) => void
 }) {
-  const STEPS = ['Upload', 'Match', 'Unmatched payments', 'Done'] as const
+  const STEPS = ['Upload', 'Payroll matching', 'Unmatched payments', 'Summary'] as const
   // An opening picks up the person's unsaved run of the month (the job keeps reading while the wizard is closed);
   // without one it starts at Upload.
   const [step, setStep] = useState<(typeof STEPS)[number]>('Upload')
@@ -177,7 +172,7 @@ export function PayrollProof({
       .then((open) => {
         if (gone || !open) return
         setRun(open)
-        setStep('Match')
+        setStep('Payroll matching')
       })
       .catch((e: Error) => {
         if (!gone) setRunError(e.message)
@@ -201,7 +196,7 @@ export function PayrollProof({
       api.post<PayrollMatchRunDto>(`/payroll-match/${id}/ai-read`, { fileIds }),
     onRun: setRun,
   })
-  const atAi = step === 'Match' && !!run && !waiting && !pollError && ai.reading
+  const atAi = step === 'Payroll matching' && !!run && !waiting && !pollError && ai.reading
   // Before the first poll, the run's own files say how far reading is.
   const shownProgress = progress ?? {
     total: run?.files.length ?? 0,
@@ -267,10 +262,18 @@ export function PayrollProof({
   }
 
   // With a run that replaces them, the month's earlier payroll files are left out of the grid until Save removes them.
+  // The workspace's files (the owner's Month End Close upload) stay: replacing never removes them.
   const kept = (ds: AttachedDocument<DocumentPurpose>[]) =>
     run?.replace
-      ? ds.filter((d) => !PAYROLL_DOCUMENT_KINDS.includes(d.document.kind as PayrollDocumentKind))
+      ? ds.filter(
+          (d) =>
+            d.document.workspace ||
+            !PAYROLL_DOCUMENT_KINDS.includes(d.document.kind as PayrollDocumentKind)
+        )
       : ds
+  // The engagement's own payroll files of the month: the ones a replacing Save removes.
+  const ownFiles = r.payrollDocuments.filter((d) => !d.workspace).length
+  const workspaceFiles = r.payrollDocuments.length - ownFiles
   const items: PayrollItem[] = [
     ...r.expenses
       .filter((e) => isPayrollLine(e))
@@ -325,6 +328,14 @@ export function PayrollProof({
     fileId: string
   ): PayrollCandidate | undefined =>
     matchOf(item, slot)?.candidates.find((c) => c.fileId === fileId)
+  // The files a slot may take: a staff line only what its own people's rows prove, as on the owner's match (the
+  // server offers nothing else); a participant's pay any file of the kind.
+  const offered = (item: PayrollItem, slot: PayrollSlot) => {
+    const ofKind = files.filter((d) => d.kind === PAYROLL_SLOT_KIND[slot])
+    if (item.kind !== 'staff') return ofKind
+    const ids = new Set(matchOf(item, slot)?.candidates.map((c) => c.fileId))
+    return ofKind.filter((d) => ids.has(d.id))
+  }
   // A bank statement proves a payment only by its line: one picked where no line was found is not saved as proof,
   // and its payment goes on to Unmatched payments to have the line found there.
   const noLine = (item: PayrollItem, slot: PayrollSlot, fileId: string) =>
@@ -359,8 +370,18 @@ export function PayrollProof({
   const [unmatched, setUnmatched] = useState<string[]>([])
   const unmatchedItems = staffItems.filter((i) => unmatched.includes(keyOf(i)))
   const stillUnmatched = unmatchedItems.filter((i) => !markedLine(i)).length
-  const doneItems = items.filter(isProved)
-  const proved = doneItems.length
+  // Complete after Save, as Payroll & Proof counts it: every proof on file or chosen here (a bank statement with its
+  // line), none a guess and none a second file that disagrees with the one on file.
+  const proved = items.filter((i) =>
+    slotsOf(i).every((slot) => {
+      if (has(i, slot)) return true
+      const v = pick(i, slot)
+      if (!v || noLine(i, slot, v)) return false
+      const auto = !picks[keyOf(i)]?.[slot]
+      const m = matchOf(i, slot)
+      return !auto || (!!candidate(i, slot, v)?.sure && !m?.twoProofs)
+    })
+  ).length
   const q = search.trim().toLowerCase()
   const shown = q
     ? openItems.filter((i) => `${i.title} ${i.sub} ${i.amount}`.toLowerCase().includes(q))
@@ -374,6 +395,55 @@ export function PayrollProof({
       .map((slot) => {
         return { target: item.target, id: item.id, slot, fileId: pick(item, slot) }
       })
+  )
+
+  // What Save will do, as the owner's match says it beside its footer: the files, the proofs, what needs a look.
+  const twoFiles = items.flatMap((item) =>
+    slotsOf(item)
+      .filter((slot) => {
+        const v = pick(item, slot)
+        return (
+          !has(item, slot) && !!v && !picks[keyOf(item)]?.[slot] && matchOf(item, slot)?.twoProofs
+        )
+      })
+      .map((slot) => ({ key: `${keyOf(item)}-${slot}`, title: item.title, slot }))
+  )
+  const saveWords = run && (
+    <section aria-label="What Save will do">
+      <h3 className="mx-work-title">What Save will do</h3>
+      <ul className="grid list-disc gap-1 pl-5 text-sm">
+        <li>
+          <b>Files:</b>{' '}
+          {[
+            `${run.files.filter((f) => f.staged).length} new to file`,
+            `${run.files.filter((f) => !f.staged).length} already on file`,
+            ...(run.replace && ownFiles
+              ? [`${ownFiles} earlier ${ownFiles === 1 ? 'file' : 'files'} removed`]
+              : []),
+          ].join(', ')}
+          .
+        </li>
+        <li>
+          <b>
+            {toSave.length} {toSave.length === 1 ? 'proof' : 'proofs'} to link
+          </b>
+          , each with its line highlighted.
+        </li>
+        {twoFiles.length > 0 && (
+          <li>
+            <b>⚠️ Two different files as one proof</b> (both are kept):
+            <ul className="mt-1 grid gap-0.5">
+              {twoFiles.map((t) => (
+                <li key={t.key}>
+                  {t.title}: two different {SLOT_LABEL[t.slot].toLowerCase()} files, check which is
+                  right
+                </li>
+              ))}
+            </ul>
+          </li>
+        )}
+      </ul>
+    </section>
   )
 
   /** Start a run (with the zip's files, or none to match what is already on file) and send the files, 20 at a time. */
@@ -399,7 +469,7 @@ export function PayrollProof({
       }
       setRun(current)
       setPicks({})
-      setStep('Match')
+      setStep('Payroll matching')
     } catch (e) {
       setRunError((e as Error).message)
     } finally {
@@ -415,7 +485,7 @@ export function PayrollProof({
     setSaveError(null)
     try {
       // The month's payroll files before Save: a run that replaces removes every one of them.
-      const removed = run.replace ? r.payrollDocuments.length : 0
+      const removed = run.replace ? ownFiles : 0
       const report = await api.post<ReportDetail>(`/payroll-match/${run.id}/save`, {
         links: toSave,
       })
@@ -521,7 +591,7 @@ export function PayrollProof({
       )
     }
     if (!r.can.edit || !run) return <Chip tone="warn">missing</Chip>
-    const options = files.filter((d) => d.kind === PAYROLL_SLOT_KIND[slot])
+    const options = offered(item, slot)
     const value = pick(item, slot)
     const auto = !picks[keyOf(item)]?.[slot] && !!value
     const c = value ? candidate(item, slot, value) : undefined
@@ -531,7 +601,7 @@ export function PayrollProof({
       ? 'missing'
       : noLine(item, slot, value)
         ? 'noline'
-        : auto && !c?.sure
+        : (auto && !c?.sure) || (auto && matchOf(item, slot)?.twoProofs)
           ? 'guess'
           : 'ok'
     return (
@@ -542,11 +612,17 @@ export function PayrollProof({
           value={value}
           onChange={(e) => setPick(item, slot, e.target.value)}
         >
-          <option value="">{options.length ? 'Choose…' : 'None uploaded'}</option>
+          <option value="">
+            {options.length ? 'Choose…' : item.kind === 'staff' ? 'None found' : 'None uploaded'}
+          </option>
           {options.map((d) => (
             <option key={d.id} value={d.id}>
               {d.fileName}
-              {d.scanned ? ' (scanned)' : ''}
+              {d.status === 'failed'
+                ? ' (no text found, check it by eye)'
+                : d.scanned
+                  ? ' (scanned)'
+                  : ''}
             </option>
           ))}
         </select>
@@ -555,11 +631,15 @@ export function PayrollProof({
           text={
             state === 'missing'
               ? undefined
-              : state === 'noline'
-                ? '⚠️ No line found: next step'
-                : state === 'guess'
-                  ? '⚠️ ⚡ Best guess: check it'
-                  : `✓ ${auto ? `${c?.ai ? '✨ Found by AI' : '⚡ Found'}${c?.mark ? `, page ${c.mark.page}` : ''}` : 'Chosen'}`
+              : auto && matchOf(item, slot)?.twoProofs
+                ? '⚠️ A different file is already on file: check which is right'
+                : state === 'noline'
+                  ? '⚠️ No line found: next step'
+                  : state === 'guess'
+                    ? '⚠️ ⚡ Best guess: check it'
+                    : files.find((d) => d.id === value)?.status === 'failed'
+                      ? '✓ Chosen: no text found, check it by eye'
+                      : `✓ ${auto ? `${c?.ai ? '✨ Found by AI' : '⚡ Found'}${c?.mark ? `, page ${c.mark.page}` : ''}` : 'Chosen'}`
           }
           onShow={value && (c?.marks.length || c?.mark) ? () => show(item, slot, value) : undefined}
         />
@@ -593,7 +673,7 @@ export function PayrollProof({
               .map(keyOf)
             if (!(await saveAll())) return
             setUnmatched(left)
-            setStep(left.length ? 'Unmatched payments' : 'Done')
+            setStep(left.length ? 'Unmatched payments' : 'Summary')
           })(),
       }}
     />
@@ -606,24 +686,9 @@ export function PayrollProof({
       aside={<ProvedCount proved={proved} total={items.length} />}
     >
       <Stepper steps={STEPS} current={step} />
-      {run && step === 'Match' && waiting && (
+      {run && step === 'Payroll matching' && waiting && (
         <div className="grid gap-4">
-          <div className="grid gap-2">
-            <p className="text-sm font-semibold" role="status">
-              <span className="ad-hourglass" aria-hidden="true">
-                ⏳
-              </span>{' '}
-              Reading the files on the server: {shownProgress.read} of {shownProgress.total} done
-              {shownProgress.failed ? `, ${shownProgress.failed} could not be read` : ''}
-            </p>
-            <span className="ad-progress" aria-hidden="true">
-              <span
-                style={{
-                  width: `${shownProgress.total ? ((shownProgress.read + shownProgress.failed) / shownProgress.total) * 100 : 0}%`,
-                }}
-              />
-            </span>
-          </div>
+          <ReadingProgress progress={shownProgress} />
           <HandCard
             title="Reading your files"
             icon="⏳"
@@ -634,14 +699,14 @@ export function PayrollProof({
           {matchActions}
         </div>
       )}
-      {run && step === 'Match' && pollError && (
+      {run && step === 'Payroll matching' && pollError && (
         <>
           <ErrorNote message={pollError} />
           {matchActions}
         </>
       )}
-      {run && step === 'Match' && !waiting && !pollError && (
-        <UnsavedNote removing={run.replace ? r.payrollDocuments.length : 0} />
+      {run && step === 'Payroll matching' && !waiting && !pollError && (
+        <UnsavedNote removing={run.replace ? ownFiles : 0} />
       )}
       {step === 'Unmatched payments' && <ErrorNote message={saveError} />}
       {step === 'Upload' && (
@@ -666,9 +731,9 @@ export function PayrollProof({
             <p className="ad-hand-address">
               <span className="ad-hand-address-label">Already in {periodLabel(r.period)}</span>
               <span>
-                {PAYROLL_DOCUMENT_KINDS.map((k) => {
+                {PAYROLL_FOLDERS.map(([name, k]) => {
                   const n = r.payrollDocuments.filter((d) => d.kind === k).length
-                  return `${n} ${kindLabel(k).toLowerCase()}${n === 1 ? '' : 's'}`
+                  return `${name}: ${n}`
                 }).join(' · ')}
               </span>
               <a href="/samples/payroll-sample.zip" download>
@@ -689,7 +754,8 @@ export function PayrollProof({
                 />
               )}
               <UploadPanel
-                existing={r.payrollDocuments.length}
+                existing={ownFiles}
+                workspaceFiles={workspaceFiles}
                 busy={reading}
                 onReady={(zip, replace) => void startRun(zip, replace)}
                 onSkip={r.payrollDocuments.length ? () => void startRun([], false) : undefined}
@@ -697,7 +763,7 @@ export function PayrollProof({
             </>
           ) : (
             <div className="ad-actions justify-end">
-              <Button kind="primary" onClick={() => setStep('Match')}>
+              <Button kind="primary" onClick={() => setStep('Payroll matching')}>
                 Next: match
               </Button>
             </div>
@@ -706,7 +772,7 @@ export function PayrollProof({
       )}
 
       {atAi && <AiReadingNote progress={ai.progress} error={null} />}
-      {step === 'Match' && !waiting && !pollError && !atAi && run && (
+      {step === 'Payroll matching' && !waiting && !pollError && !atAi && run && (
         <>
           {ai.error && <AiReadingNote progress={null} error={ai.error} />}
           <LineCapNotes files={run.files.filter((f) => f.overLineCap)} />
@@ -717,14 +783,15 @@ export function PayrollProof({
           )}
         </>
       )}
-      {step === 'Match' && !waiting && !pollError && !atAi && items.length === 0 && (
+      {step === 'Payroll matching' && !waiting && !pollError && !atAi && items.length === 0 && (
         <>
           <Empty>No payroll lines or work-experience payments this month.</Empty>
           <ErrorNote message={saveError} />
+          {saveWords}
           {matchActions}
         </>
       )}
-      {step === 'Match' && !waiting && !pollError && !atAi && items.length > 0 && (
+      {step === 'Payroll matching' && !waiting && !pollError && !atAi && items.length > 0 && (
         <>
           {openItems.length === 0 ? (
             <Empty>Auto-Match proved every payroll item this month.</Empty>
@@ -794,10 +861,14 @@ export function PayrollProof({
                         if (chosen.has(keyOf(i)))
                           next[keyOf(i)] = {
                             ...next[keyOf(i)],
-                            ...(bulk.timesheet && !has(i, 'timesheet')
+                            ...(bulk.timesheet &&
+                            !has(i, 'timesheet') &&
+                            offered(i, 'timesheet').some((d) => d.id === bulk.timesheet)
                               ? { timesheet: bulk.timesheet }
                               : {}),
-                            ...(bulk.register && !has(i, 'register')
+                            ...(bulk.register &&
+                            !has(i, 'register') &&
+                            offered(i, 'register').some((d) => d.id === bulk.register)
                               ? { register: bulk.register }
                               : {}),
                           }
@@ -884,6 +955,7 @@ export function PayrollProof({
               ]}
             />
           )}
+          {saveWords}
           {matchActions}
         </>
       )}
@@ -953,17 +1025,17 @@ export function PayrollProof({
             </ul>
           </section>
           <div className="ad-actions justify-between">
-            <Button kind="ghost" onClick={() => setStep('Match')}>
+            <Button kind="ghost" onClick={() => setStep('Payroll matching')}>
               Back: match
             </Button>
-            <Button kind="primary" onClick={() => setStep('Done')}>
+            <Button kind="primary" onClick={() => setStep('Summary')}>
               Next
             </Button>
           </div>
         </div>
       )}
 
-      {step === 'Done' && items.length === 0 && (
+      {step === 'Summary' && items.length === 0 && (
         // No payroll item to prove: say so, never "complete", and ask the person to confirm it was meant.
         <div className="grid gap-4">
           <HandCard
@@ -1004,7 +1076,7 @@ export function PayrollProof({
           </div>
         </div>
       )}
-      {step === 'Done' && items.length > 0 && (
+      {step === 'Summary' && items.length > 0 && (
         <div className="grid gap-4">
           <div className="ad-done">
             <span className="ad-done-check" aria-hidden="true">
@@ -1048,7 +1120,7 @@ export function PayrollProof({
             <p>Each item&apos;s proof shows on its row in Payroll &amp; Proof.</p>
           </HandCard>
           <div className="ad-actions justify-start">
-            <Button kind="ghost" onClick={() => setStep('Match')}>
+            <Button kind="ghost" onClick={() => setStep('Payroll matching')}>
               Back: match
             </Button>
           </div>
@@ -1126,6 +1198,7 @@ export function oversizeExpenseFiles(mappings: File[], receipts: File[]) {
  */
 export function UploadPanel({
   existing,
+  workspaceFiles = 0,
   busy,
   onReady,
   onSkip,
@@ -1144,6 +1217,8 @@ export function UploadPanel({
   busy: string | null
   /** How many payroll files the month already has: "Replace them" is offered when there are any. */
   existing: number
+  /** The month's workspace payroll files (Month End Close), which replacing leaves in place. */
+  workspaceFiles?: number
   /**
    * The zip checked and sorted: send it to be read and matched. `names`: its "Program names" files, which are not proof
    * (the workspace's program names, merged from them).
@@ -1177,6 +1252,8 @@ export function UploadPanel({
   // Too big to take: the zip, the number of files, or one file over the server's limit. Said as it is, not as a layout problem.
   const [tooBig, setTooBig] = useState<string | null>(null)
   const [replace, setReplace] = useState(replaceFirst)
+  // The folders this screen reads: the workspace's own (program names, account mappings, receipts) only an owner's does.
+  const read = ZIP_FOLDER_LIST.filter((f) => takesNames || f.holds === 'payroll-proof')
   const choose = async (zip: File | undefined) => {
     setFiles([])
     setNames([])
@@ -1239,7 +1316,7 @@ export function UploadPanel({
         </p>
       )}
       <Field
-        label={`One zip with the folders ${andList(ZIP_FOLDER_LIST.filter((f) => f.required).map((f) => f.name))} (and ${andList(ZIP_FOLDER_LIST.filter((f) => !f.required).map((f) => f.name))}, when you have them), as in the sample above. Files as your payroll company and books export them: PDF, XLSX or CSV, and a zip of pay stubs as it comes.`}
+        label={`One zip with the folders ${andList(read.filter((f) => f.required).map((f) => f.name))} (and ${andList(read.filter((f) => !f.required).map((f) => f.name))}, when you have them), as in the sample above. Files as your payroll company and books export them: PDF, XLSX or CSV, and a zip of pay stubs as it comes.`}
         required
         hint={`Up to ${mb(ZIP_MAX_BYTES)} and ${maxFiles.toLocaleString('en-US')} files; each file up to ${mb(FILE_MAX_BYTES)}.`}
       >
@@ -1305,12 +1382,26 @@ export function UploadPanel({
                 </Notice>
               ) : null
             })()}
-          {names.length > 0 && !takesNames && (
-            <p className="text-sm text-soft">
-              The {PROGRAM_NAMES_FOLDER} folder is read only when an owner uploads the zip on Month
-              End Payroll Processing; here it is left out.
-            </p>
-          )}
+          {!takesNames &&
+            (() => {
+              // The workspace's own folders: only an owner reads them (Month End Close), so here they are left out.
+              const left = (
+                [
+                  [PROGRAM_NAMES_FOLDER, names.length],
+                  [ACCOUNT_MAPPING_FOLDER, mappings.length],
+                  [RECEIPTS_FOLDER, receipts.length],
+                ] as const
+              ).filter(([, n]) => n > 0)
+              if (!left.length) return null
+              const n = left.reduce((sum, [, k]) => sum + k, 0)
+              return (
+                <Notice tone="warn">
+                  Left out here: {andList(left.map(([name]) => name))} ({n}{' '}
+                  {n === 1 ? 'file' : 'files'}). An owner adds {left.length === 1 ? 'it' : 'them'}{' '}
+                  on Month End Close.
+                </Notice>
+              )
+            })()}
         </>
       )}
       {existing > 0 && (
@@ -1321,8 +1412,11 @@ export function UploadPanel({
               Replace this month&apos;s {existing} payroll {existing === 1 ? 'file' : 'files'}
             </b>
             <small>
-              Matching uses only this zip. The earlier files are removed, with their matches, when
-              you save at the end; nothing changes if you close before then.
+              Matching uses only this zip
+              {workspaceFiles > 0 &&
+                ` and the ${workspaceFiles} workspace ${workspaceFiles === 1 ? 'file' : 'files'} from Month End Close, which stay`}
+              . The earlier files are removed, with their matches, when you save at the end; nothing
+              changes if you close before then.
             </small>
           </span>
         </label>

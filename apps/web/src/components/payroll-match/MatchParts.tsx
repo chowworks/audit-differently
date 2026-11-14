@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { MAX_PAY_LINES, type PayrollMatchRunDto } from '@ad/types'
+import { MAX_PAY_LINES, type PayrollMatchProgress, type PayrollMatchRunDto } from '@ad/types'
 import { shortDate } from '@/lib/format'
 import { Button, ErrorNote, Notice } from '@/components/ui'
 import '@/components/match-pairs.css'
@@ -11,7 +11,26 @@ import { WHY_RESULT, provedWords, type WhyBlock } from './why'
  * here and both change.
  */
 
-/** "N of M payroll items fully proved", beside the card's title. */
+/** "Reading the files on the server: 3 of 8 done", with its bar, while the job reads the upload. */
+export function ReadingProgress({ progress }: { progress: PayrollMatchProgress }) {
+  const { read, failed, total } = progress
+  return (
+    <div className="grid gap-2">
+      <p className="text-sm font-semibold" role="status">
+        <span className="ad-hourglass" aria-hidden="true">
+          ⏳
+        </span>{' '}
+        Reading the files on the server: {read} of {total} done
+        {failed ? `, ${failed} could not be read` : ''}
+      </p>
+      <span className="ad-progress" aria-hidden="true">
+        <span style={{ width: `${total ? ((read + failed) / total) * 100 : 0}%` }} />
+      </span>
+    </div>
+  )
+}
+
+/** "N of M payroll items complete", beside the card's title. */
 export function ProvedCount({ proved, total }: { proved: number; total: number }) {
   return <span className="text-xs text-soft">{provedWords(proved, total)}</span>
 }

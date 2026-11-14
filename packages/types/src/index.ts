@@ -530,6 +530,8 @@ export interface DocumentDto {
   size: number
   period: string | null
   uploadedAt: string
+  /** A workspace file (the owner's Month End Close upload), on no one engagement; only ever set true. */
+  workspace?: true
 }
 
 /**
@@ -2005,6 +2007,11 @@ export interface PayrollSlotMatch {
   /** The candidate Auto-Match chose (its fileId), or null when none fits or two fit equally. */
   pick: string | null
   why: string
+  /**
+   * The pick is a second file, different from the one already on the item as this proof, and the two disagree (pay,
+   * hours or dates): both stay, and the screen says to check which is right (as the reconciliation flags it).
+   */
+  twoProofs?: true
 }
 
 /** How far the background job is with a run's files. */
