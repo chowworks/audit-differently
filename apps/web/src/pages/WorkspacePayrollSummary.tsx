@@ -13,7 +13,6 @@ import {
   type PayrollReconciliationDto,
   type BooksRunDto,
   type PayrollSlot,
-  type WorkspacePayrollFilesDto,
   type WorkspacePayrollOutputDto,
 } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
@@ -197,7 +196,7 @@ export function PayrollActions({
         color,
         who: c.engagementName,
         text: `No budget line takes ${PAYROLL_BUDGET_KIND_LABELS[k].toLowerCase()}`,
-        sub: 'Its payroll from the files is left off the budget. Add the line, then Match again and Save.',
+        sub: 'Its payroll from the files is left off the budget. Add the line, then Re-match with same files and Save.',
         go: onBudget ? (
           <AddPayrollBudgetLine engagementId={c.engagementId} kind={k} onAdded={onBudget} />
         ) : (
@@ -402,7 +401,7 @@ export function BudgetTracking({
                   </p>
                   {onMatchAgain && (
                     <Button size="sm" kind="navy" onClick={onMatchAgain}>
-                      Match again
+                      Re-match with same files
                     </Button>
                   )}
                 </div>
@@ -640,47 +639,6 @@ const TILES: { key: Tile; label: string; tone: 'red' | 'yellow' | 'grey' | 'ok' 
   { key: 'nocharge', label: TILE_LABEL.nocharge, tone: 'grey' },
   { key: 'proved', label: TILE_LABEL.proved, tone: 'ok' },
 ]
-
-/** What the month's files hold, in one short line for File Management. */
-export function FileStats({
-  files,
-  data,
-}: {
-  files: WorkspacePayrollFilesDto | null
-  data: PayrollReconciliationDto | null
-}) {
-  if (!files || !data) return null
-  const n = (k: string) => files.files.filter((f) => f.kind === k).length
-  const runs = n('payroll-register')
-  // A run's debit pays each of its registers: two registers paid together share one debit.
-  const debits = Math.min(
-    runs,
-    Math.max(
-      data.registersDebited ?? 0,
-      data.pays.filter((p) => p.kind === 'bank-statement' && p.state === 'matched').length
-    )
-  )
-  return (
-    <p className="wpd-filestats">
-      <span className="wpd-pill wpd-pill-ok">
-        <b>{runs}</b> pay {runs === 1 ? 'run' : 'runs'}
-      </span>
-      <span className="wpd-pill wpd-pill-ok">
-        <b>{n('paystub')}</b> pay stubs
-      </span>
-      <span className={`wpd-pill ${debits < runs ? 'wpd-pill-bad' : 'wpd-pill-ok'}`}>
-        {debits < runs ? '⚠️' : '✓'}{' '}
-        <b>
-          {debits} of {runs}
-        </b>{' '}
-        bank debits found
-      </span>
-      <span className="wpd-pill wpd-pill-muted">
-        <b>{data.otherBankLines}</b> other bank lines, not payroll
-      </span>
-    </p>
-  )
-}
 
 const dateWords = (start: string, end: string) =>
   start === end ? shortDate(start) : `${shortDate(start)} – ${shortDate(end)}`

@@ -55,7 +55,6 @@ import {
 import { ACCOUNT_MAPPING_FOLDER, RECEIPTS_FOLDER } from '@/lib/zip-files'
 import {
   BudgetTracking,
-  FileStats,
   PayrollActions,
   ResolveGrid,
   colorsOf,
@@ -495,7 +494,6 @@ export function WorkspacePayrollPage() {
                 compact={saved && !focus}
                 alone={focus}
                 again={again}
-                fileStats={<FileStats files={shownFiles} data={shownRecon} />}
                 receipts={monthReceipts}
                 onOpen={() => {
                   setFocus(true)
@@ -540,7 +538,8 @@ export function WorkspacePayrollPage() {
 }
 
 /**
- * The month's payroll files and the change to them: Replace all, Add files, Remove a file or Match again, each a run
+ * The month's payroll files and the change to them: Re-match with new files, Add files, Remove a file or Re-match with
+ * same files, each a run
  * that is read, checked and saved. Owners only.
  */
 function WorkspaceMatch({
@@ -555,7 +554,6 @@ function WorkspaceMatch({
   compact = false,
   onStep,
   onOpen,
-  fileStats,
   alone = false,
   again = 0,
   receipts,
@@ -578,10 +576,8 @@ function WorkspaceMatch({
   compact?: boolean
   /** The page shows the match on its own while it runs. */
   onStep?: (step: 'Upload' | 'Match') => void
-  /** Match again on the files card opens the match on its own. */
+  /** Re-match with new files on the files card opens the match on its own. */
   onOpen?: () => void
-  /** What the files hold, one short line on the File Management card. */
-  fileStats?: React.ReactNode
   /** The match open on its own, with nothing else on the page (no files card above it). */
   alone?: boolean
 }) {
@@ -591,6 +587,8 @@ function WorkspaceMatch({
   useEffect(() => onStep?.(step), [step, onStep])
   /** "Read the files with AI", ticked on the Upload step: unticked each time the page opens (#22). */
   const [withAi, setWithAi] = useState(false)
+  /** "Re-match with new files" opened the match: its upload starts with "Replace them" ticked. */
+  const [replaceFirst, setReplaceFirst] = useState(false)
   const payrollAi = usePayrollAi()
   const [run, setRun] = useState<WorkspacePayrollRunDto | null>(null)
   const [progress, setProgress] = useState<PayrollMatchProgress | null>(null)
@@ -901,7 +899,7 @@ function WorkspaceMatch({
   const againAction = hasFiles && (
     <div className="ad-actions justify-start">
       <Button kind="navy" disabled={!!busy} onClick={() => void matchAgain()}>
-        {busy === 'Matching again…' ? busy : 'Match again'}
+        {busy === 'Matching again…' ? busy : 'Re-match with same files'}
       </Button>
       <span className="text-sm text-soft">
         Matches the month&apos;s files again, after a participant or a staff tag was added.
@@ -1179,8 +1177,8 @@ function WorkspaceMatch({
     </HandCard>
   )
 
-  // The files, last on the page, with Match again first: after a list changes, matching the
-  // same files again is the fix, not changing them. Match again opens the match on its own, where its AI choice is.
+  // The files, last on the page, with the two re-matches first (owner's decision, 2026-11-14): after a list changes,
+  // matching the same files again is the fix; new files replace the set only through the match, never on their own.
   if (compact && step === 'Upload' && hasFiles && !run)
     return (
       <PayrollFilesCard
@@ -1188,30 +1186,41 @@ function WorkspaceMatch({
         files={files}
         error={filesError}
         receipts={receipts}
-        title={`File Management (${files!.files.length} saved)`}
+        title="File Management"
         note={
           <>
             <ErrorNote message={runError} />
             {expenseWarning && <Notice tone="warn">{expenseWarning}</Notice>}
-            {fileStats}
             <p className="text-sm">
-              <b>Added a participant or tagged staff since?</b> Match again: it reads these same
-              files with the lists as they are now. Replace or add files only when one is wrong or
-              missing.
+              <b>Added a participant or tagged staff since?</b> Re-match with same files: it reads
+              these files with the lists as they are now. Re-match with new files only when the
+              month&apos;s zip changed.
             </p>
+            {aiBox}
           </>
         }
         first={
-          <Button kind="navy" size="sm" disabled={!!busy} onClick={onOpen}>
-            Match again
-          </Button>
+          <>
+            <Button kind="navy" size="sm" disabled={!!busy} onClick={() => void matchAgain()}>
+              {busy === 'Matching again…' ? busy : 'Re-match with same files'}
+            </Button>
+            <Button
+              kind="navy"
+              size="sm"
+              disabled={!!busy}
+              onClick={() => {
+                setReplaceFirst(true)
+                onOpen?.()
+              }}
+            >
+              Re-match with new files
+            </Button>
+          </>
         }
         actions={{
           busy,
           error: fileError,
           changeOpen: !!run,
-          onReplace: (zip, names, mappings, receipts) =>
-            upload('replace', zip, 'files', names, mappings, receipts),
           onAdd: (added) => upload('add', added, 'files'),
           onRemove: removeFile,
         }}
@@ -1230,8 +1239,6 @@ function WorkspaceMatch({
             busy,
             error: fileError,
             changeOpen: !!run,
-            onReplace: (zip, names, mappings, receipts) =>
-              upload('replace', zip, 'files', names, mappings, receipts),
             onAdd: (added) => upload('add', added, 'files'),
             onRemove: removeFile,
           }}
@@ -1289,6 +1296,7 @@ function WorkspaceMatch({
               // files with, or Skip to match the saved files again.
               <UploadPanel
                 existing={files!.files.length}
+                replaceFirst={replaceFirst}
                 busy={busy}
                 maxFiles={MAX_WORKSPACE_PAYROLL_FILES}
                 takesNames

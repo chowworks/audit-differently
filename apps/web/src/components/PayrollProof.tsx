@@ -1127,6 +1127,7 @@ export function UploadPanel({
   busy,
   onReady,
   onSkip,
+  replaceFirst = false,
   maxFiles = ZIP_MAX_FILES,
   action = 'Upload zip and match',
   kind = 'primary',
@@ -1156,6 +1157,8 @@ export function UploadPanel({
   ) => void
   /** Already uploaded this month: match those files again without uploading more. */
   onSkip?: () => void
+  /** "Replace them" starts ticked (the workspace match's "Re-match with new files"). */
+  replaceFirst?: boolean
   /** How many files the zip may hold (a workspace month's set holds more than one engagement's month). */
   maxFiles?: number
   /** The upload button's words. */
@@ -1171,7 +1174,7 @@ export function UploadPanel({
   const [problems, setProblems] = useState<string[]>([])
   // Too big to take: the zip, the number of files, or one file over the server's limit. Said as it is, not as a layout problem.
   const [tooBig, setTooBig] = useState<string | null>(null)
-  const [replace, setReplace] = useState(false)
+  const [replace, setReplace] = useState(replaceFirst)
   const choose = async (zip: File | undefined) => {
     setFiles([])
     setNames([])
