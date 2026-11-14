@@ -355,41 +355,6 @@
 .ad-tile.wpd-tile-yellow {
   border-top-color: #f2c200;
 }
-.wpd-filestats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0;
-  font-size: 13px;
-}
-/* One figure of the month's files, as a tinted pill. */
-.wpd-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-}
-.wpd-pill b {
-  font-size: 14px;
-}
-.wpd-pill-ok {
-  background: #e6f4ea;
-  border-color: #bfe3cb;
-  color: var(--ok);
-}
-.wpd-pill-bad {
-  background: #fdecec;
-  border-color: #f5c2c2;
-  color: var(--danger);
-}
-.wpd-pill-muted {
-  background: #f1f3f6;
-  border-color: var(--line);
-  color: var(--muted);
-}
-
 .ad-tile.wpd-tile-grey {
   border-top-color: #9aa5b1;
 }
