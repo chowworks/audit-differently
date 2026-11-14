@@ -83,7 +83,7 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   choice 2026-10-20): Actions first (each with Review below; expense to-dos from the books export lead, with Upload
   receipts right there), Engagement Budget Tracking, then the reconciliation laid out as the month page's (owner's decision
   2026-11-14): three tiles, red (proof missing), yellow (an alert) and green (complete), over Expenses & Proof and
-  Payroll & Proof, each grouped by engagement every group folded until opened or a tile or search narrows the rows, complete rows folded and what is on no engagement yet last, a tile
+  Payroll & Proof, each grouped by engagement, each engagement's group open with its complete rows shown and what is on no engagement yet folded and last (owner's decision 2026-11-14), every group open while a tile or search narrows the rows, a tile
   filtering both and each with its own search, then File Management (one tree: the payroll folders and a Receipts folder, whose receipts an owner removes for
   good; no file count or stat chips; Download zip gives every file in the payroll zip's own folders, Receipts included,
   one export line; Add files lists the same folders as the tree) with Re-match with same files and Re-match with new files (the match wizard with

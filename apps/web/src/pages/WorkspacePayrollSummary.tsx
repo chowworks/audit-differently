@@ -742,12 +742,13 @@ function GroupedRows<R extends { key: string; tone: Tone; group: string }>({
   /** What the folded rows are: "fully proved" in an engagement, "settled" on none. */
   foldWords: (group: string) => string
 }) {
-  // Every group starts closed, and opens while a tile or a search narrows the rows; `flipped` holds the
-  // groups the owner opened or closed against that, until the narrowing changes. `open` holds groups
-  // whose complete rows the owner opened.
+  // Each engagement's group starts open with its complete rows shown, and what is on no engagement yet starts closed
+  // (owner's decision, 2026-11-14); every group opens while a tile or a search narrows the rows. `flipped` holds the
+  // groups the owner opened or closed against that, until the narrowing changes. `hid` holds groups whose complete
+  // rows the owner hid.
   const [flipped, setFlipped] = useState<Set<string>>(new Set())
   useEffect(() => setFlipped(new Set()), [narrowed])
-  const [open, setOpen] = useState<Set<string>>(new Set())
+  const [hid, setHid] = useState<Set<string>>(new Set())
   const flip = (set: Set<string>, id: string) => {
     const n = new Set(set)
     if (n.has(id)) n.delete(id)
@@ -759,8 +760,9 @@ function GroupedRows<R extends { key: string; tone: Tone; group: string }>({
       {grouped(rows, names).map((g) => {
         const mine = all.filter((r) => r.group === g.id)
         const done = mine.filter((r) => r.tone === 'green')
-        const isClosed = narrowed === flipped.has(g.id)
-        const unfolded = narrowed || open.has(g.id)
+        const closedFirst = !narrowed && g.id === NO_ENGAGEMENT
+        const isClosed = closedFirst !== flipped.has(g.id)
+        const unfolded = narrowed || !hid.has(g.id)
         const shown = unfolded ? g.rows : g.rows.filter((r) => r.tone !== 'green')
         const greens = g.rows.filter((r) => r.tone === 'green').length
         const report = reports.get(g.id)
@@ -811,7 +813,7 @@ function GroupedRows<R extends { key: string; tone: Tone; group: string }>({
                     type="button"
                     className="wpd-linkbtn"
                     aria-expanded={unfolded}
-                    onClick={() => setOpen(flip(open, g.id))}
+                    onClick={() => setHid(flip(hid, g.id))}
                   >
                     {unfolded
                       ? `− Hide ${greens} ${foldWords(g.id)}`
