@@ -110,7 +110,7 @@ describe('filesFromZip', () => {
       []
     )
     expect(problems).toEqual([
-      '1 file is in a folder that does not take its type: a CSV goes in Timesheets, Payroll registers, QuickBooks transactions, Program names or Account mapping, Program names and Account mapping take an XLSX or CSV, and Receipts a PDF, PNG or JPG (Bank statements/b.csv).',
+      '1 file is in a folder that does not take its type: a CSV goes in Timesheets, Payroll registers, QuickBooks transactions, Program names or Account mapping, Program names takes CSV or XLSX, Account mapping takes CSV or XLSX, Receipts takes PDF, PNG or JPG (Bank statements/b.csv).',
     ])
   })
 

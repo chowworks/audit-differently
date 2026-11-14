@@ -11,6 +11,7 @@ import type {
   WorkspaceExpensesDto,
   WorkspaceExpensesSavedDto,
 } from '@ad/types'
+import { ACCOUNT_MAPPING_FOLDER, RECEIPTS_FOLDER, zipFolder } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty, ErrorNote, Modal, Notice } from '@/components/ui'
@@ -252,8 +253,8 @@ export function WorkspaceExpenses({
       {!d.file ? (
         <Empty>
           The month&apos;s files have no books export with expenses. Put the month&apos;s QuickBooks
-          Transaction List with Splits in the zip&apos;s QuickBooks transactions folder, and upload
-          again.
+          Transaction List with Splits in the zip&apos;s{' '}
+          {zipFolder('payroll-proof', 'payroll-details').name} folder, and upload again.
         </Empty>
       ) : (
         <>
@@ -377,8 +378,8 @@ export function WorkspaceExpenses({
                 </label>
               </h3>
               <p className="text-sm text-soft">
-                No receipts for the month yet. Put them in the zip&apos;s Receipts folder, email
-                them to the month, or upload them here.
+                No receipts for the month yet. Put them in the zip&apos;s {RECEIPTS_FOLDER} folder,
+                email them to the month, or upload them here.
               </p>
             </section>
           )}
@@ -1089,12 +1090,12 @@ function Mappings({
     return (
       <p className="text-sm text-soft">
         No account mapping yet. Put each engagement&apos;s chart of accounts mapping (account number
-        and the category it bills to) in the zip&apos;s <b>Account mapping</b> folder.
+        and the category it bills to) in the zip&apos;s <b>{ACCOUNT_MAPPING_FOLDER}</b> folder.
       </p>
     )
   return (
     <div className="grid gap-3">
-      <h4 className="font-bold">Account mapping</h4>
+      <h4 className="font-bold">{ACCOUNT_MAPPING_FOLDER}</h4>
       {d.mappings.map((m) => {
         const e = d.engagements.find((x) => x.id === m.engagementId)
         return (

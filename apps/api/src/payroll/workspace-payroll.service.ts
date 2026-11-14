@@ -16,8 +16,7 @@ import {
   MAX_WORKSPACE_PAYROLL_FILES,
   PAY_LINE_FLAGS,
   PAYROLL_DOCUMENT_KINDS,
-  PAYROLL_FOLDERS,
-  RECEIPTS_FOLDER,
+  ZIP_FOLDER_LIST,
   PAYROLL_SLOT_KIND,
   STAFF_REPORT_LINES,
   WEX_REPORT_LINES,
@@ -419,12 +418,12 @@ export class WorkspacePayrollService {
       pathOf(folder, d.fileName.replace(/[\\/]/g, '-')),
       async () => new Uint8Array(await this.storage.read(d.storageKey)),
     ]
-    const entries = [
-      ...PAYROLL_FOLDERS.flatMap(([folder, kind]) =>
-        readable.filter((d) => d.kind === kind).map((d) => entry(folder, d))
-      ),
-      ...receipts.filter((d) => keyInWorkspace(d)).map((d) => entry(RECEIPTS_FOLDER, d)),
-    ]
+    // Each folder that keeps its files, in the zip's order (ZIP_FOLDER_LIST).
+    const entries = ZIP_FOLDER_LIST.filter((f) => f.stored).flatMap((f) =>
+      'kind' in f
+        ? readable.filter((d) => d.kind === f.kind).map((d) => entry(f.name, d))
+        : receipts.filter((d) => keyInWorkspace(d)).map((d) => entry(f.name, d))
+    )
     await this.log.log(caller, {
       workspaceId,
       resource: 'export',

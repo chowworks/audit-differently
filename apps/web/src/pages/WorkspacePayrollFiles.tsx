@@ -2,13 +2,15 @@ import { Suspense, lazy, useState, type ReactNode } from 'react'
 import {
   DOCUMENT_KIND_LABELS,
   MAX_WORKSPACE_PAYROLL_FILES,
+  ZIP_FOLDER_LIST,
+  andList,
   type BooksReceiptDto,
   type WorkspacePayrollFileDto,
   type WorkspacePayrollFilesDto,
 } from '@ad/types'
 import { periodLabel, shortDate } from '@/lib/format'
-import { PAYROLL_FOLDERS, type PayrollFolderKind } from '@/lib/zip-files'
-import { FILE_MAX_BYTES } from '@/components/PayrollProof'
+import { PAYROLL_FOLDERS, RECEIPTS_FOLDER, type PayrollFolderKind } from '@/lib/zip-files'
+import { FILE_MAX_BYTES, RECEIPT_MAX_BYTES } from '@/components/PayrollProof'
 import { Button, Card, Empty, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
 import { useApi } from '@/hooks/useApi'
 
@@ -128,32 +130,68 @@ function RemoveReceipt({
   )
 }
 
-/** Add files: one or more files into one folder of the month's set. */
+/** A folder Add files puts files in: a payroll folder, or Receipts. */
+type AddFolder = PayrollFolderKind | 'receipt'
+/** File Management's folders, the zip's own that keep their files, in its order: the tree and Add files list them. */
+const STORED = ZIP_FOLDER_LIST.filter((f) => f.stored)
+const valueOf = (f: (typeof STORED)[number]): AddFolder =>
+  'kind' in f ? (f.kind as PayrollFolderKind) : 'receipt'
+const extensionsOf = (kind: AddFolder | ''): readonly string[] =>
+  STORED.find((f) => valueOf(f) === kind)?.extensions ?? [
+    ...new Set(STORED.filter((f) => 'kind' in f).flatMap((f) => [...f.extensions])),
+  ]
+const typesWords = (exts: readonly string[]) =>
+  andList([...new Set(exts.map((e) => (e === 'jpeg' ? 'JPG' : e.toUpperCase())))]).replace(
+    / and ([^,]*)$/,
+    ' or $1'
+  )
+const names = (list: File[]) =>
+  `${list
+    .slice(0, 3)
+    .map((f) => f.name)
+    .join(', ')}${list.length > 3 ? ', …' : ''}`
+
+/**
+ * Add files: one or more files into one folder of File Management, the same folders as its tree, in its order. Payroll
+ * files then go through the match (checked, then saved); receipts are filed and matched to the month's bills.
+ */
 function AddFiles({
   count,
   busy,
   folder,
   onAdd,
+  onReceipts,
   onCancel,
 }: {
   count: number
   busy: string | null
   /** The folder it was opened from, chosen already. */
-  folder?: PayrollFolderKind
+  folder?: AddFolder
   onAdd: (files: PayrollUpload) => void
+  /** Owners only: Receipts is offered when given. */
+  onReceipts?: (files: File[]) => void
   onCancel: () => void
 }) {
   const [chosen, setChosen] = useState<File[]>([])
-  const [kind, setKind] = useState<PayrollFolderKind | ''>(folder ?? '')
-  const big = chosen.filter((f) => f.size > FILE_MAX_BYTES)
-  const filesError = big.length
-    ? `Over 25 MB: ${big
-        .slice(0, 3)
-        .map((f) => f.name)
-        .join(', ')}${big.length > 3 ? ', …' : ''}`
-    : count + chosen.length > MAX_WORKSPACE_PAYROLL_FILES
-      ? `The month would hold ${(count + chosen.length).toLocaleString('en-US')} files; the limit is ${MAX}`
-      : null
+  const [kind, setKind] = useState<AddFolder | ''>(folder ?? '')
+  const receipt = kind === 'receipt'
+  const big = chosen.filter((f) => f.size > (receipt ? RECEIPT_MAX_BYTES : FILE_MAX_BYTES))
+  const exts = extensionsOf(kind)
+  const wrongType = kind
+    ? chosen.filter((f) => !exts.includes(f.name.split('.').pop()?.toLowerCase() ?? ''))
+    : []
+  const filesError = wrongType.length
+    ? `${STORED.find((f) => valueOf(f) === kind)!.name} takes ${typesWords(exts)}: ${names(wrongType)}`
+    : big.length && receipt
+      ? `Over 10 MB: ${names(big)}`
+      : big.length
+        ? `Over 25 MB: ${big
+            .slice(0, 3)
+            .map((f) => f.name)
+            .join(', ')}${big.length > 3 ? ', …' : ''}`
+        : !receipt && count + chosen.length > MAX_WORKSPACE_PAYROLL_FILES
+          ? `The month would hold ${(count + chosen.length).toLocaleString('en-US')} files; the limit is ${MAX}`
+          : null
   const kindError = chosen.length > 0 && !kind ? 'Choose the folder they go in' : null
   const toFix = [filesError && 'the files', kindError && 'the folder'].filter(Boolean)
   return (
@@ -161,7 +199,9 @@ function AddFiles({
       className="grid gap-3"
       onSubmit={(e) => {
         e.preventDefault()
-        if (chosen.length && kind && !toFix.length) onAdd(chosen.map((file) => ({ file, kind })))
+        if (!chosen.length || !kind || toFix.length) return
+        if (kind === 'receipt') onReceipts?.(chosen)
+        else onAdd(chosen.map((file) => ({ file, kind })))
       }}
     >
       {toFix.length > 0 && (
@@ -173,12 +213,14 @@ function AddFiles({
         label="Files to add"
         required
         error={filesError}
-        hint={`PDF, PNG, JPG, XLSX or DOCX, each up to 25 MB. The month holds up to ${MAX} files.`}
+        hint={`${typesWords(exts)}, each up to ${receipt ? '10' : '25'} MB.${
+          receipt ? '' : ` The month holds up to ${MAX} files.`
+        }`}
       >
         <input
           type="file"
           multiple
-          accept=".pdf,.png,.jpg,.jpeg,.xlsx,.docx"
+          accept={exts.map((e) => `.${e}`).join(',')}
           className="block w-full text-sm"
           onChange={(e) => setChosen([...(e.target.files ?? [])])}
         />
@@ -187,17 +229,21 @@ function AddFiles({
         label="Folder"
         required
         error={kindError}
-        hint="The zip's folder for what these files are. A file of the same name in the folder is replaced."
+        hint={
+          receipt
+            ? 'Each receipt is filed here, then matched to its bill by amount and date.'
+            : "The zip's folder for what these files are. A file of the same name in the folder is replaced."
+        }
       >
         <select
           className={inputClass}
           value={kind}
-          onChange={(e) => setKind(e.target.value as PayrollFolderKind | '')}
+          onChange={(e) => setKind(e.target.value as AddFolder | '')}
         >
           <option value="">Choose…</option>
-          {PAYROLL_FOLDERS.map(([name, k]) => (
-            <option key={k} value={k}>
-              {name}
+          {STORED.filter((f) => onReceipts || valueOf(f) !== 'receipt').map((f) => (
+            <option key={f.name} value={valueOf(f)}>
+              {f.name}
             </option>
           ))}
         </select>
@@ -212,7 +258,9 @@ function AddFiles({
           disabled={!chosen.length || !kind || toFix.length > 0 || !!busy}
         >
           {busy ??
-            `Upload ${chosen.length || ''} ${chosen.length === 1 ? 'file' : 'files'} and match`}
+            `${receipt ? 'Add' : 'Upload'} ${chosen.length || ''} ${
+              receipt ? 'receipt' : 'file'
+            }${chosen.length === 1 ? '' : 's'} and match`}
         </Button>
       </div>
     </form>
@@ -335,6 +383,13 @@ export function PayrollFilesCard({
             busy={actions.busy}
             folder={folder}
             onAdd={(added) => void actions.onAdd(added).then(done)}
+            onReceipts={
+              receipts?.onAdd &&
+              ((added) => {
+                receipts.onAdd!(added)
+                setPanel(null)
+              })
+            }
             onCancel={() => setPanel(null)}
           />
         )}
@@ -452,7 +507,7 @@ export function PayrollFilesCard({
                       {receipts.list.length ? (shut.has('receipts') ? '▸' : '▾') : ''}
                     </span>
                     <span className="wpc-folder-icon" aria-hidden />
-                    Receipts
+                    {RECEIPTS_FOLDER}
                     <span className="wpc-count">
                       {receipts.list.length
                         ? `${receipts.list.length.toLocaleString('en-US')} ${receipts.list.length === 1 ? 'file' : 'files'}`
@@ -467,7 +522,9 @@ export function PayrollFilesCard({
                       <input
                         type="file"
                         multiple
-                        accept=".pdf,.png,.jpg,.jpeg"
+                        accept={extensionsOf('receipt')
+                          .map((e) => `.${e}`)
+                          .join(',')}
                         disabled={receipts.busy}
                         onChange={(ev) => {
                           receipts.onAdd!([...(ev.target.files ?? [])])

@@ -1,4 +1,4 @@
-import { DEFAULT_HIGHLIGHTS, DEFAULT_PAYROLL_READING, NOT_OURS } from '@ad/types'
+import { DEFAULT_HIGHLIGHTS, DEFAULT_PAYROLL_READING, NOT_OURS, PAYROLL_FOLDERS } from '@ad/types'
 import { PROGRAM_NAMES, sampleFiles } from '../../prisma/payroll-workspace-sample'
 import { member, W } from '../core/testing/callers'
 import { dbTestsEnabled } from '../core/testing/tenant-db'
@@ -13,13 +13,7 @@ import { WorkspacePayrollService } from './workspace-payroll.service'
 // Training. pdf.js needs Node's VM modules, as the database specs do (`npm test` sets the flag).
 const suite = dbTestsEnabled ? describe : describe.skip
 const owner = member('owner')
-const KIND: Record<string, string> = {
-  Timesheets: 'timesheet',
-  'Payroll registers': 'payroll-register',
-  'Pay stubs': 'paystub',
-  'Bank & card statements': 'bank-statement',
-  'QuickBooks transactions': 'payroll-details',
-}
+const KIND: Record<string, string> = Object.fromEntries(PAYROLL_FOLDERS)
 const ISY = { id: 'e-isy', name: 'In-School Youth Coding Pathway' }
 const AIT = { id: 'e-ait', name: 'Adult IT Training' }
 const mark = { page: 1, x: 40, y: 600, width: 300, height: 12, text: 'a line' }

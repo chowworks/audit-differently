@@ -1537,20 +1537,131 @@ export const PAYROLL_DOCUMENT_KINDS = [
 ] as const
 export type PayrollDocumentKind = (typeof PAYROLL_DOCUMENT_KINDS)[number]
 
-/** The payroll zip's folders, as the sample has them, and the document type each holds. */
-export const PAYROLL_FOLDERS = [
-  ['Timesheets', 'timesheet'],
-  ['Payroll registers', 'payroll-register'],
-  ['Pay stubs', 'paystub'],
-  ['Bank & card statements', 'bank-statement'],
-  ['QuickBooks transactions', 'payroll-details'],
-] as const satisfies readonly (readonly [string, PayrollDocumentKind])[]
-/**
- * The payroll zip's folder of the receipts and invoices of the books' bills (owner's decision, 2026-11-12): PDFs or
- * photos, each matched to the bill it proves on the expenses step. Not payroll proof: it comes back apart, as the
- * mappings do.
- */
-export const RECEIPTS_FOLDER = 'Receipts'
+// ── The payroll zip's folders ──────────────────────────────────────────────
+// The one list of the month's zip folders (owner's decision, 2026-11-14): the upload's check, the screens that name
+// them, File Management's tree, its Add files list and its download all read it. A new folder is one entry here.
+
+/** What a folder's files become. */
+export type ZipFolderHolds = 'payroll-proof' | 'program-names' | 'account-mapping' | 'receipts'
+
+export interface ZipFolder {
+  /** As the zip, the sample and every screen name it. */
+  name: string
+  /** Older names a zip made before still opens with (owner's decision, 2026-11-09). */
+  aliases: readonly string[]
+  holds: ZipFolderHolds
+  /** The document kind of a payroll proof folder's files. */
+  kind?: PayrollDocumentKind
+  /** A zip without it (or with it empty) is refused. */
+  required: boolean
+  /** The file types it takes, by extension. */
+  extensions: readonly string[]
+  /** Its files are kept as files: File Management shows them, Add files adds to it and Download zip writes it. */
+  stored: boolean
+}
+
+const PROOF_FILES = ['pdf', 'png', 'jpg', 'jpeg', 'xlsx', 'docx'] as const
+
+/** Every folder of the payroll zip, in its order. */
+export const ZIP_FOLDER_LIST = [
+  {
+    name: 'Timesheets',
+    aliases: [],
+    holds: 'payroll-proof',
+    kind: 'timesheet',
+    required: true,
+    extensions: [...PROOF_FILES, 'csv'],
+    stored: true,
+  },
+  {
+    name: 'Payroll registers',
+    aliases: [],
+    holds: 'payroll-proof',
+    kind: 'payroll-register',
+    required: true,
+    extensions: [...PROOF_FILES, 'csv'],
+    stored: true,
+  },
+  {
+    // Optional: a month of staff pay only has none to give.
+    name: 'Pay stubs',
+    aliases: [],
+    holds: 'payroll-proof',
+    kind: 'paystub',
+    required: false,
+    extensions: PROOF_FILES,
+    stored: true,
+  },
+  {
+    // The bank's and the card's statements share one folder.
+    name: 'Bank & card statements',
+    aliases: ['Bank statements', 'Bank and card statements'],
+    holds: 'payroll-proof',
+    kind: 'bank-statement',
+    required: true,
+    extensions: PROOF_FILES,
+    stored: true,
+  },
+  {
+    // The books' export is the whole month, its expenses too; optional (GitHub issue #22, section 8).
+    name: 'QuickBooks transactions',
+    aliases: ['Payroll details', 'Books transactions'],
+    holds: 'payroll-proof',
+    kind: 'payroll-details',
+    required: false,
+    extensions: [...PROOF_FILES, 'csv'],
+    stored: true,
+  },
+  {
+    // Each program's names in the books and the payroll company: merged into the workspace's program names.
+    name: 'Program names',
+    aliases: [],
+    holds: 'program-names',
+    required: false,
+    extensions: ['csv', 'xlsx'],
+    stored: false,
+  },
+  {
+    // Each engagement's chart of accounts mapped to its funder's categories (owner's decision, 2026-11-09).
+    name: 'Account mapping',
+    aliases: ['Account mappings'],
+    holds: 'account-mapping',
+    required: false,
+    extensions: ['csv', 'xlsx'],
+    stored: false,
+  },
+  {
+    // The receipts and invoices of the books' bills, each matched to its bill (owner's decision, 2026-11-12).
+    name: 'Receipts',
+    aliases: ['Invoices', 'Receipts and invoices'],
+    holds: 'receipts',
+    required: false,
+    extensions: ['pdf', 'png', 'jpg', 'jpeg'],
+    stored: true,
+  },
+] as const satisfies readonly ZipFolder[]
+
+/** The folder that holds these files. */
+export const zipFolder = (holds: ZipFolderHolds, kind?: PayrollDocumentKind): ZipFolder =>
+  (ZIP_FOLDER_LIST as readonly ZipFolder[]).find(
+    (f) => f.holds === holds && (kind === undefined || f.kind === kind)
+  )!
+
+/** Every folder's name, in the zip's order. */
+export const ZIP_FOLDERS = ZIP_FOLDER_LIST.map((f) => f.name)
+
+type ProofFolder = Extract<(typeof ZIP_FOLDER_LIST)[number], { holds: 'payroll-proof' }>
+/** The payroll proof folders, as [name, document kind]. */
+export const PAYROLL_FOLDERS = ZIP_FOLDER_LIST.filter(
+  (f): f is ProofFolder => f.holds === 'payroll-proof'
+).map((f) => [f.name, f.kind] as const)
+export const PROGRAM_NAMES_FOLDER = zipFolder('program-names').name
+export const ACCOUNT_MAPPING_FOLDER = zipFolder('account-mapping').name
+export const RECEIPTS_FOLDER = zipFolder('receipts').name
+
+/** "A, B and C". */
+export const andList = (names: readonly string[]) =>
+  names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
 
 /** A line marked on a bank statement page: PDF points from the page's bottom-left corner. */
 export interface StatementMark {
