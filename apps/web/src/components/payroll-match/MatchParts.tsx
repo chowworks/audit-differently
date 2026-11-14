@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
-import { MAX_PAY_LINES, type PayrollMatchRunDto } from '@ad/types'
+import { MAX_PAY_LINES, type PayrollMatchProgress, type PayrollMatchRunDto } from '@ad/types'
 import { shortDate } from '@/lib/format'
-import { Button, ErrorNote, Notice } from '@/components/ui'
+import { Button, ErrorNote, Notice, inputClass } from '@/components/ui'
 import '@/components/match-pairs.css'
 import { WHY_RESULT, provedWords, type WhyBlock } from './why'
 
@@ -11,7 +11,26 @@ import { WHY_RESULT, provedWords, type WhyBlock } from './why'
  * here and both change.
  */
 
-/** "N of M payroll items fully proved", beside the card's title. */
+/** "Reading the files on the server: 3 of 8 done", with its bar, while the job reads the upload. */
+export function ReadingProgress({ progress }: { progress: PayrollMatchProgress }) {
+  const { read, failed, total } = progress
+  return (
+    <div className="grid gap-2">
+      <p className="text-sm font-semibold" role="status">
+        <span className="ad-hourglass" aria-hidden="true">
+          ⏳
+        </span>{' '}
+        Reading the files on the server: {read} of {total} done
+        {failed ? `, ${failed} could not be read` : ''}
+      </p>
+      <span className="ad-progress" aria-hidden="true">
+        <span style={{ width: `${total ? ((read + failed) / total) * 100 : 0}%` }} />
+      </span>
+    </div>
+  )
+}
+
+/** "N of M payroll items complete", beside the card's title. */
 export function ProvedCount({ proved, total }: { proved: number; total: number }) {
   return <span className="text-xs text-soft">{provedWords(proved, total)}</span>
 }
@@ -307,5 +326,94 @@ export function Resolve({ onClick, label = 'Resolve' }: { onClick: () => void; l
     <button type="button" className="mx-resolve" onClick={onClick}>
       🛠️ {label}
     </button>
+  )
+}
+
+/** The two files Set for selected fills in. */
+export type BulkFiles = { timesheet: string; register: string }
+
+/**
+ * Above the Remaining to match table on both match screens (owner's decision, 2026-11-14): a search, Select all (what
+ * the search found), a timesheet and a register, and Set for selected, which fills them in where a selected item can
+ * take that file.
+ */
+export function BulkBar({
+  search,
+  onSearch,
+  allShown,
+  found,
+  onSelectAll,
+  files,
+  bulk,
+  onBulk,
+  chosen,
+  onSet,
+}: {
+  search: string
+  onSearch: (q: string) => void
+  allShown: boolean
+  /** How many rows the search found, for "Select all N found". */
+  found: number
+  onSelectAll: (all: boolean) => void
+  files: {
+    timesheet: { id: string; fileName: string }[]
+    register: { id: string; fileName: string }[]
+  }
+  bulk: BulkFiles
+  onBulk: (b: BulkFiles) => void
+  chosen: number
+  onSet: () => void
+}) {
+  return (
+    <div className="ad-bulkbar">
+      <label className="ad-search">
+        <svg
+          className="ad-search-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden="true"
+        >
+          <circle cx="10.5" cy="10.5" r="6.5" />
+          <path d="M15.5 15.5 21 21" />
+        </svg>
+        <input
+          type="search"
+          placeholder="Search name, item or amount"
+          aria-label="Search the payroll items"
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+        />
+      </label>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={allShown} onChange={(e) => onSelectAll(e.target.checked)} />
+        {search.trim() ? `Select all ${found} found` : 'Select all'}
+      </label>
+      {(['timesheet', 'register'] as const).map((slot) => (
+        <select
+          key={slot}
+          className={inputClass}
+          aria-label={`${slot} for the selected items`}
+          value={bulk[slot]}
+          onChange={(e) => onBulk({ ...bulk, [slot]: e.target.value })}
+        >
+          <option value="">{slot === 'timesheet' ? 'Timesheet…' : 'Register…'}</option>
+          {files[slot].map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.fileName}
+            </option>
+          ))}
+        </select>
+      ))}
+      <Button
+        kind="navy"
+        size="sm"
+        disabled={!chosen || (!bulk.timesheet && !bulk.register)}
+        onClick={onSet}
+      >
+        Set for selected
+      </Button>
+    </div>
   )
 }

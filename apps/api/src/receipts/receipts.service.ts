@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import {
   BadRequestException,
   ConflictException,
@@ -121,6 +122,22 @@ export class ReceiptsService {
       period: r.period,
       kind,
     }
+    // A receipt the month has already (the same contents) is not kept twice, as on Month End Close: a zip sent again
+    // adds only what is new.
+    const have = await this.prisma.document.findMany({
+      where: {
+        ...tenantWhere(caller),
+        workspaceId: r.workspaceId!,
+        engagementId: r.engagementId,
+        period: r.period,
+        kind: { in: [...RECEIPT_KINDS] },
+      },
+      select: { sha256: true },
+    })
+    const known = new Set(have.map((d) => d.sha256))
+    const fresh: Uploaded[] = []
+    for (const f of files)
+      if (!known.has(createHash('sha256').update(f.buffer).digest('hex'))) fresh.push(f)
     const staged = []
     let matched = 0
     let filed = 0
@@ -144,12 +161,12 @@ export class ReceiptsService {
         failed: unread,
       })
     try {
-      for (const f of files) staged.push(await this.documents.stage(caller, f, body))
+      for (const f of fresh) staged.push(await this.documents.stage(caller, f, body))
       const readFrom = Date.now()
       const reads = await inBatches(staged, READ_AT_ONCE, (s, i) =>
         readReceipt(
           {
-            buffer: files[i]!.buffer,
+            buffer: fresh[i]!.buffer,
             contentType: s.data.contentType,
             sensitivity: s.data.sensitivity,
           },
@@ -174,7 +191,12 @@ export class ReceiptsService {
       throw e
     }
     await stat('done')
-    return { uploaded: staged.length, matched, report: await this.reports.fresh(caller, r.id) }
+    return {
+      uploaded: staged.length,
+      skipped: files.length - fresh.length,
+      matched,
+      report: await this.reports.fresh(caller, r.id),
+    }
   }
 
   /**

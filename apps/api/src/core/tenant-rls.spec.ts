@@ -2802,6 +2802,32 @@ suite('tenant isolation', () => {
       await db.exec(`DELETE FROM "Document" WHERE id IN ('D-WPAY', 'D-EPAY', 'D-W2PAY')`)
     })
 
+    it("lets a month's run read the month's workspace files by their own key, never stage one there (migration 20261114000100)", async () => {
+      const held = (id: string, key: string, doc: string | null) =>
+        `INSERT INTO "PayrollMatchFile" ("id","runId","documentId","kind","sensitivity","fileName","contentType","size","sha256","storageKey")
+         VALUES ('${id}','MR-1',${doc ? `'${doc}'` : 'NULL'},'payroll-register','financial','r.pdf','application/pdf',1,'h','${key}')`
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect(
+          (
+            await attempt(
+              `INSERT INTO "PayrollMatchRun" ("id","monthlyReportId","createdById") VALUES ('MR-1','R-W1','book-W1')`
+            )
+          ).rows
+        ).toBe(1)
+        expect(
+          (await attempt(held('MF-1', 'W1/workspace/2026-07/register.pdf', 'D-WPAY'))).rows
+        ).toBe(1)
+        // Staged there, named as another document, or under another key: still its month's folder only.
+        for (const [key, doc] of [
+          ['W1/workspace/2026-07/new.pdf', null],
+          ['W1/workspace/2026-07/register.pdf', 'D-EPAY'],
+          ['W1/workspace/2026-07/other.pdf', 'D-WPAY'],
+        ] as const)
+          expect((await attempt(held('MF-x', key, doc))).error).toMatch(/in its month's folder/)
+      })
+      await db.exec(`DELETE FROM "PayrollMatchRun" WHERE id = 'MR-1'`)
+    })
+
     it('lets an owner alone start a run for the whole workspace, which names its workspace and period', async () => {
       await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
         expect((await attempt(wsRun('WR-1', 'W1', 'owner-W1'))).rows).toBe(1)

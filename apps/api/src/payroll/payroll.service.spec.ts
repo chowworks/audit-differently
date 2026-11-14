@@ -7,7 +7,7 @@ import {
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Caller } from '../core/caller'
-import { member, stranger, W } from '../core/testing/callers'
+import { member, OTHER, stranger, W } from '../core/testing/callers'
 import { expectNoneOf, fakeLog } from '../core/testing/log'
 import { DocumentsService } from '../documents/documents.service'
 import { ReportsService } from '../reports/reports.service'
@@ -415,6 +415,32 @@ describe('PayrollService', () => {
     expect(out.notSearched).toBe(2)
     const one = await setup('draft', [doc('d-stmt')]).s.findLines(bookkeeper, 'expense', 'x-13')
     expect(one.notSearched).toBe(0)
+  })
+
+  it("marks a line on the month's Month End Close statement, never another engagement's", async () => {
+    const { s, expenseLinks, writes } = setup('draft', [
+      doc('d-ws', { engagementId: null, storageKey: `${W}/workspace/2026-09/d-ws.pdf` }),
+      doc('d-other', { engagementId: 'e-2', storageKey: `${W}/e-2/2026-09/d-other.pdf` }),
+      // Another workspace's Month End Close statement, of a person who is a member of both.
+      doc('d-elsewhere', {
+        workspaceId: OTHER,
+        engagementId: null,
+        storageKey: `${OTHER}/workspace/2026-09/d-elsewhere.pdf`,
+      }),
+    ])
+    const both = {
+      ...bookkeeper,
+      memberships: [...bookkeeper.memberships, ...member('bookkeeper', OTHER).memberships],
+      workspaceIds: [W, OTHER],
+    }
+    const found = await s.findLines(both, 'expense', 'x-13')
+    expect(found.statements.map((x) => x.document.id)).toEqual(['d-ws'])
+    await expect(
+      s.link(bookkeeper, 'expense', 'x-13', { documentId: 'd-other', mark: LINE })
+    ).rejects.toThrow('Mark the line on a bank statement of this engagement or of Month End Close')
+    for (const w of writes) expect(w).not.toHaveBeenCalled()
+    await s.link(bookkeeper, 'expense', 'x-13', { documentId: 'd-ws', mark: LINE })
+    expect(expenseLinks.map((l) => [l.documentId, l.purpose])).toEqual([['d-ws', 'payment']])
   })
 
   it('refuses to mark a line on a statement filed under another month, and changes nothing', async () => {

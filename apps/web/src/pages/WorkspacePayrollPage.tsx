@@ -46,6 +46,7 @@ import { NotFoundPage } from '@/pages/NotFoundPage'
 import { useRowEditing, type RowEditing } from '@/pages/report-layouts/row-editing'
 import { WorkspaceExpenses } from '@/pages/WorkspaceExpenses'
 import { MonthSummary } from '@/pages/MonthSummary'
+import { unmatchedPayments, WorkspaceUnmatchedPayments } from '@/pages/WorkspaceUnmatchedPayments'
 import { expenseActions } from '@/pages/workspace-expenses'
 import {
   MAPPING_MAX_BYTES,
@@ -78,10 +79,13 @@ import {
   type ShowSpot,
 } from '@/pages/WorkspacePayrollReview'
 import {
+  BulkBar,
+  type BulkFiles,
   LineCapNotes,
   MatchFooter,
   ProofFoot,
   ProvedCount,
+  ReadingProgress,
   RemainingSection,
   MatchedBy,
   UnsavedNote,
@@ -143,7 +147,13 @@ const many = (n: number, one: string, more = `${one}s`) =>
   `${n.toLocaleString('en-US')} ${n === 1 ? one : more}`
 /** Files go up to the run 20 at a time, the server's limit for one request. */
 /** The month end's steps (owner's decision, 2026-11-13). */
-const MONTH_END_STEPS = ['Upload', 'Payroll matching', 'Expense matching', 'Summary'] as const
+const MONTH_END_STEPS = [
+  'Upload',
+  'Payroll matching',
+  'Unmatched payments',
+  'Expense matching',
+  'Summary',
+] as const
 const BATCH = 20
 /** Receipts sent at once (the server's limit for one request). */
 const RECEIPTS_AT_ONCE = 20
@@ -250,9 +260,9 @@ export function WorkspacePayrollPage() {
    */
   const view = params.get('view')
   const focus = view === 'match'
-  const flow = view === 'expenses' || view === 'summary' ? view : null
+  const flow = view === 'payments' || view === 'expenses' || view === 'summary' ? view : null
   /** Opening one from the month adds a step to the browser's history; moving between them or closing replaces it. */
-  const show = (next: 'match' | 'expenses' | 'summary' | null) => {
+  const show = (next: 'match' | 'payments' | 'expenses' | 'summary' | null) => {
     if (!period || next === view) return
     setParams(next ? { period, view: next } : { period }, { replace: !!view })
   }
@@ -384,8 +394,32 @@ export function WorkspacePayrollPage() {
           >
             ← Back to {periodLabel(period)}
           </button>
-          {savedNote && flow === 'expenses' && <Notice tone="ok">{savedNote}</Notice>}
-          {flow === 'expenses' ? (
+          {savedNote && (flow === 'expenses' || flow === 'payments') && (
+            <Notice tone="ok" fade>
+              {savedNote}
+            </Notice>
+          )}
+          {flow === 'payments' ? (
+            <WorkspaceUnmatchedPayments
+              recon={shownRecon}
+              stepper={<Stepper steps={MONTH_END_STEPS} current="Unmatched payments" />}
+              onFound={(text) => {
+                setSavedNote(text)
+                setCardsVersion((n) => n + 1)
+                void recon.reload()
+              }}
+              onBack={() => {
+                setSavedNote(null)
+                show('match')
+                window.scrollTo({ top: 0 })
+              }}
+              onNext={() => {
+                setSavedNote(null)
+                show('expenses')
+                window.scrollTo({ top: 0 })
+              }}
+            />
+          ) : flow === 'expenses' ? (
             <WorkspaceExpenses
               workspaceId={w.id}
               period={period}
@@ -588,10 +622,11 @@ export function WorkspacePayrollPage() {
                   recon.setData(r)
                   setCardsVersion((n) => n + 1)
                   void files.reload()
-                  // Save goes on to the expenses step; from there, back to the month's summary.
+                  // Save goes on to Unmatched payments when a staff line has no bank line, else to the expenses
+                  // step; from there, back to the month's summary.
                   setMatchKey((n) => n + 1)
                   setSavedNote(`Saved the payroll for ${periodLabel(period)}.`)
-                  show('expenses')
+                  show(unmatchedPayments(r).length ? 'payments' : 'expenses')
                   window.scrollTo({ top: 0 })
                 }}
               />
@@ -677,6 +712,9 @@ function WorkspaceMatch({
   /** The upload can't go on as it is (half sent, gone, a file removed): the screen offers Start again. */
   const [stuck, setStuck] = useState(false)
   const [picks, setPicks] = useState<Picks>({})
+  const [search, setSearch] = useState('')
+  const [chosen, setChosen] = useState<Set<string>>(new Set())
+  const [bulk, setBulk] = useState<BulkFiles>({ timesheet: '', register: '' })
   /** Guesses the owner confirmed (`slotKey`): sent with Save, as the owner's own decisions. */
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set())
   const [reopening, setReopening] = useState(false)
@@ -794,6 +832,7 @@ function WorkspaceMatch({
   const opened = (r: WorkspacePayrollRunDto) => {
     setRun(r)
     setPicks({})
+    setChosen(new Set())
     setConfirmed(new Set())
     setStep('Match')
   }
@@ -1001,6 +1040,7 @@ function WorkspaceMatch({
     setProgress(null)
     setPollError(null)
     setPicks({})
+    setChosen(new Set())
     setConfirmed(new Set())
     setStep('Upload')
   }
@@ -1014,6 +1054,7 @@ function WorkspaceMatch({
     }
     setRun(null)
     setPicks({})
+    setChosen(new Set())
     setConfirmed(new Set())
     setSaveError(null)
     setStep('Upload')
@@ -1023,6 +1064,17 @@ function WorkspaceMatch({
   // What the plan attaches decides what is still open; the owner's own choices don't move a row off the table.
   const planned = run ? proofList(run, []) : []
   const open = items.filter((i) => missingAfterSave(i, planned).length > 0)
+  // Search and Set for selected, as on the bookkeeper's wizard (owner's decision, 2026-11-14).
+  const q = search.trim().toLowerCase()
+  const shownOpen = q
+    ? open.filter((i) =>
+        `${i.engagementName} ${i.title} ${subOf(i)} ${i.amount}`.toLowerCase().includes(q)
+      )
+    : open
+  const allShown = shownOpen.length > 0 && shownOpen.every((i) => chosen.has(keyOf(i)))
+  // A file is chosen here only for a participant's proof still to find: a staff line's comes from its tagged staff.
+  const choosable = (i: WorkspacePayrollItemDto, slot: PayrollSlot) =>
+    !isStaffLine(i) && !slotSource(i, slot, planned)
   const pick = (i: WorkspacePayrollItemDto, slot: PayrollSlot) =>
     picks[keyOf(i)]?.[slot] ?? (run ? autoPick(run, i, slot).pick : null) ?? ''
   const candidate = (
@@ -1062,6 +1114,7 @@ function WorkspaceMatch({
       setReopening(false)
       setRun(null)
       setPicks({})
+      setChosen(new Set())
       setConfirmed(new Set())
       // Save goes back to the month's summary, which shows what it did.
       onSaved(out)
@@ -1150,12 +1203,12 @@ function WorkspaceMatch({
             state === 'missing'
               ? undefined
               : value && noLine(i, slot, value)
-                ? '⚠️ No line found: link it from the reconciliation'
+                ? '⚠️ No line found: next step'
                 : state === 'guess'
                   ? '⚠️ ⚡ Best guess: check it'
                   : unread(value)
                     ? '✓ Chosen: no text found, check it by eye'
-                    : `✓ ${isAuto ? (isConfirmed ? 'Confirmed' : `⚡ Found${c?.mark ? `, page ${c.mark.page}` : ''}`) : 'Chosen'}`
+                    : `✓ ${isAuto ? (isConfirmed ? 'Confirmed' : `${c?.ai ? '✨ Found by AI' : '⚡ Found'}${c?.mark ? `, page ${c.mark.page}` : ''}`) : 'Chosen'}`
           }
           onShow={
             value && marks.length > 0
@@ -1321,7 +1374,15 @@ function WorkspaceMatch({
           run &&
           !waiting &&
           !pollError &&
-          !ai.reading && <ProvedCount proved={proved.length} total={proved.length + open.length} />
+          !ai.reading && (
+            <ProvedCount
+              // Complete as Payroll & Proof counts it: two files that disagree need a look first.
+              proved={
+                proved.filter((p) => !run.plan.twoProofs.some((t) => keyOf(t) === p.key)).length
+              }
+              total={proved.length + open.length}
+            />
+          )
         }
       >
         <Stepper steps={STEPS} current={step === 'Match' ? 'Payroll matching' : 'Upload'} />
@@ -1384,13 +1445,7 @@ function WorkspaceMatch({
 
         {step === 'Match' && run && waiting && (
           <div className="grid gap-4">
-            <p className="text-sm font-semibold" role="status">
-              <span className="ad-hourglass" aria-hidden="true">
-                ⏳
-              </span>{' '}
-              Reading the files on the server: {shown.read} of {shown.total} done
-              {shown.failed ? `, ${shown.failed} could not be read` : ''}
-            </p>
+            <ReadingProgress progress={shown} />
             <HandCard
               title="Reading your files"
               icon="⏳"
@@ -1426,12 +1481,49 @@ function WorkspaceMatch({
               <Empty>Every payroll item has its proof once you save.</Empty>
             ) : (
               <RemainingSection count={open.length}>
+                <BulkBar
+                  search={search}
+                  onSearch={setSearch}
+                  allShown={allShown}
+                  found={shownOpen.length}
+                  onSelectAll={(all) => {
+                    const next = new Set(chosen)
+                    for (const i of shownOpen)
+                      if (all) next.add(keyOf(i))
+                      else next.delete(keyOf(i))
+                    setChosen(next)
+                  }}
+                  files={{
+                    timesheet: run.files.filter((f) => f.kind === PAYROLL_SLOT_KIND.timesheet),
+                    register: run.files.filter((f) => f.kind === PAYROLL_SLOT_KIND.register),
+                  }}
+                  bulk={bulk}
+                  onBulk={setBulk}
+                  chosen={chosen.size}
+                  onSet={() => {
+                    const next = { ...picks }
+                    for (const i of open)
+                      if (chosen.has(keyOf(i)))
+                        next[keyOf(i)] = {
+                          ...next[keyOf(i)],
+                          ...(bulk.timesheet && choosable(i, 'timesheet')
+                            ? { timesheet: bulk.timesheet }
+                            : {}),
+                          ...(bulk.register && choosable(i, 'register')
+                            ? { register: bulk.register }
+                            : {}),
+                        }
+                    setPicks(next)
+                    setChosen(new Set())
+                  }}
+                />
                 <div className="ad-tablewrap">
                   <table className="ad-table">
                     <thead>
                       <tr>
+                        <th></th>
                         <th>Engagement</th>
-                        <th>Paid</th>
+                        <th>Vendor/Participant Paid</th>
                         <th>Date</th>
                         <th className="ad-num">Amount</th>
                         <th>Timesheet</th>
@@ -1440,8 +1532,28 @@ function WorkspaceMatch({
                       </tr>
                     </thead>
                     <tbody>
-                      {open.map((i) => (
+                      {shownOpen.length === 0 && (
+                        <tr>
+                          <td colSpan={8} className="text-soft">
+                            No payroll item matches &ldquo;{search}&rdquo;.
+                          </td>
+                        </tr>
+                      )}
+                      {shownOpen.map((i) => (
                         <tr key={keyOf(i)}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${i.title}`}
+                              checked={chosen.has(keyOf(i))}
+                              onChange={(e) => {
+                                const next = new Set(chosen)
+                                if (e.target.checked) next.add(keyOf(i))
+                                else next.delete(keyOf(i))
+                                setChosen(next)
+                              }}
+                            />
+                          </td>
                           <td>
                             <span className="font-semibold">{i.engagementName}</span>
                             <span className="ad-table-sub">

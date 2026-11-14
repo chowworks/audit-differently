@@ -47,9 +47,9 @@ export const sourceWords = (source?: 'ai' | 'details' | 'rules') =>
       ? " From the payroll company's payroll details."
       : ''
 
-/** "3 of 7 payroll items fully proved". */
+/** "3 of 7 payroll items complete": as Payroll & Proof's Complete counts them once saved. */
 export const provedWords = (proved: number, total: number) =>
-  `${proved} of ${total} payroll item${total === 1 ? '' : 's'} fully proved`
+  `${proved} of ${total} payroll item${total === 1 ? '' : 's'} complete`
 
 /**
  * Why one slot of an item was filled or left empty: already attached, chosen by hand (or cleared), Auto-Match's pick

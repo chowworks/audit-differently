@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { DEFAULT_HIGHLIGHTS, DEFAULT_PAYROLL_READING } from '@ad/types'
 import { MatchStatsService } from '../core/match-stats.service'
@@ -89,7 +90,41 @@ async function setup(opts: { replace?: boolean; status?: string } = {}) {
       ]),
     },
     document: { findMany: jest.fn().mockResolvedValue(earlier) },
-    monthlyReport: { findFirst: jest.fn().mockResolvedValue({ id: 'r-1', period: '2026-09' }) },
+    monthlyReport: {
+      findFirst: jest.fn().mockResolvedValue({ id: 'r-1', period: '2026-09' }),
+      // The month as the owner's match reads it (month-plan.ts): the same payment, with nothing linked yet.
+      findMany: jest.fn().mockResolvedValue([
+        {
+          id: 'r-1',
+          engagementId: 'e-1',
+          period: '2026-09',
+          status: 'draft',
+          engagement: { id: 'e-1', name: 'In-School Youth' },
+          expenses: [],
+          wexPayments: [
+            {
+              id: 'w-jordan',
+              grossAmount: 280,
+              payPeriodStart: new Date('2026-09-07T00:00:00Z'),
+              payPeriodEnd: new Date('2026-09-20T00:00:00Z'),
+              stubDocumentId: null,
+              stubTookOver: false,
+              participant: { id: 'p-1', displayName: 'Jordan Sample', participantId: 'P-1' },
+              documents: [],
+            },
+          ],
+        },
+      ]),
+    },
+    staffMember: { findMany: jest.fn().mockResolvedValue([]) },
+    participant: {
+      findMany: jest
+        .fn()
+        .mockResolvedValue([
+          { id: 'p-1', engagementId: 'e-1', displayName: 'Jordan Sample', participantId: 'P-1' },
+        ]),
+    },
+    workspace: { findFirst: jest.fn().mockResolvedValue({ programNames: null }) },
     matchRunStat: { createMany: jest.fn() },
   }
   const lines: string[] = []
@@ -249,7 +284,7 @@ describe('PayrollMatchService', () => {
       expect(s.tx.document.create).not.toHaveBeenCalled()
     })
 
-    it('refuses a bank statement with no line found for the payment', async () => {
+    it("refuses a staff line's proof that is not its own people's rows, as the owner's match does", async () => {
       const s = await setup()
       const run = await s.prisma.payrollMatchRun.findFirst()
       // The sample pay stub, as a bank statement: nothing on it is a $1,234.56 staff payroll of December.
@@ -267,7 +302,7 @@ describe('PayrollMatchService', () => {
         s.service.save(caller, 'run-1', {
           links: [{ target: 'expense', id: 'e-staff', slot: 'bank', fileId: 'f-stub' }],
         })
-      ).rejects.toThrow(/No line for this payment was found/)
+      ).rejects.toThrow(/is not the evidence of payment of expense RYS-18/)
       expect(s.tx.document.create).not.toHaveBeenCalled()
     })
 
@@ -354,10 +389,99 @@ describe('PayrollMatchService', () => {
       )
     })
 
+    it("reads the month's workspace files with the engagement's own, once each, and replacing removes only the engagement's", async () => {
+      const s = await setup({ replace: false })
+      const doc = (id: string, engagementId: string | null, sha256: string) => ({
+        id,
+        engagementId,
+        kind: 'timesheet',
+        sensitivity: 'financial',
+        fileName: `${id}.pdf`,
+        contentType: 'application/pdf',
+        size: 10,
+        sha256,
+        workspaceId: W,
+        period: '2026-09',
+        storageKey: `${W}/${engagementId ?? 'workspace'}/2026-09/${id}.pdf`,
+      })
+      // The owner's file, the bookkeeper's copy of it, and the engagement's own other file.
+      s.prisma.document.findMany.mockResolvedValueOnce([
+        doc('d-ws', null, 'same'),
+        doc('d-copy', 'e-1', 'same'),
+        doc('d-own', 'e-1', 'other'),
+      ])
+      Object.assign(s.tx, {
+        payrollMatchRun: { ...s.tx.payrollMatchRun, create: jest.fn().mockResolvedValue(s.run) },
+      })
+      const created: string[] = []
+      Object.assign(s.prisma, {
+        payrollMatchFile: {
+          create: jest.fn(async ({ data }) => void created.push(data.documentId)),
+        },
+      })
+      ;(s.service as unknown as { worker: unknown }).worker = { kick: jest.fn() }
+      ;(s.service as unknown as { sweep: unknown }).sweep = jest.fn()
+      await s.service.start(caller, 'r-1', false)
+      expect(s.prisma.document.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            // The run's own workspace, never every workspace the caller belongs to.
+            workspaceId: expect.any(String),
+            OR: [{ engagementId: 'e-1' }, { engagementId: null }],
+          }),
+        })
+      )
+      expect(created).toEqual(['d-ws', 'd-own'])
+
+      s.prisma.document.findMany.mockClear()
+      s.prisma.document.findMany.mockResolvedValueOnce([])
+      await s.service.start(caller, 'r-1', true)
+      expect(s.prisma.document.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ OR: [{ engagementId: null }] }),
+        })
+      )
+
+      const r = await setup({ replace: true })
+      await r.service.save(caller, 'run-1', { links: [link] })
+      expect(r.prisma.document.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ engagementId: 'e-1' }) })
+      )
+    })
+
     it('removes nothing when Save is refused', async () => {
       const s = await setup({ replace: true, status: 'waiting' })
       await expect(s.service.save(caller, 'run-1', { links: [link] })).rejects.toThrow()
       expect(s.documents.removeReplaced).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Adding files', () => {
+    it("skips a file already on the run (the same bytes), as the owner's match does", async () => {
+      const s = await setup()
+      const run = await s.prisma.payrollMatchRun.findFirst()
+      const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
+      const again = Buffer.from('%PDF-1.7 already here')
+      const fresh = Buffer.from('%PDF-1.7 new')
+      run.files[0].sha256 = sha(again)
+      const stage = jest.fn(async (_c: unknown, f: { originalname: string }) => ({
+        data: { fileName: f.originalname, kind: 'paystub', sensitivity: 'personal' },
+        commit: async (write: () => Promise<unknown>) => write(),
+      }))
+      const create = jest.fn()
+      ;(s.service as unknown as { documents: unknown }).documents = { stage }
+      ;(s.service as unknown as { worker: unknown }).worker = { kick: jest.fn() }
+      ;(s.prisma as unknown as { payrollMatchFile: unknown }).payrollMatchFile = { create }
+      const upload = (name: string, buffer: Buffer) =>
+        ({ originalname: name, buffer, mimetype: 'application/pdf', size: buffer.length }) as never
+      await s.service.add(
+        caller,
+        'run-1',
+        [upload('stub again.pdf', again), upload('stub new.pdf', fresh)],
+        ['paystub', 'paystub']
+      )
+      expect(stage.mock.calls.map((c) => c[1].originalname)).toEqual(['stub new.pdf'])
+      expect(create).toHaveBeenCalledTimes(1)
     })
   })
 
