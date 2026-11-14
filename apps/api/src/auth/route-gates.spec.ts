@@ -220,6 +220,7 @@ const GATED = [
   'POST /api/workspaces/:id/program-names',
   'PUT /api/workspaces/:id/program-names',
   'GET /api/workspaces/:id/payroll/:period/reconciliation',
+  'GET /api/workspaces/:id/payroll/:period/months',
   'POST /api/workspaces/:id/payroll/:period/match',
   'GET /api/workspaces/:id/payroll/:period/match',
   'POST /api/workspaces/:id/payroll/lines/:lineId/link',

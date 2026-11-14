@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CheckDto, ReportDetail } from '@ad/types'
-import { placeChecks, proofsShown, tablesOfLine } from './LayoutC'
+import { placeChecks, tablesOfLine } from './LayoutC'
+import { proofsShown } from './proof-rows'
 
 const check = (id: string, on: Partial<CheckDto>): CheckDto => ({
   id,

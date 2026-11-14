@@ -656,6 +656,10 @@
   font-size: 20px;
   font-weight: 800;
 }
+/* The Proof column keeps room for two chips a line, on the month page and the month end page alike. */
+.ad-table th.rl-c-proofcol {
+  min-width: 270px;
+}
 .rl-c-seechecks {
   margin-top: 4px;
   padding: 0;

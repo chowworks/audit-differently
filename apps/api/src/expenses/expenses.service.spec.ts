@@ -509,8 +509,11 @@ describe("ExpensesService: a receipt opened from the Expense matching step (owne
     return { s, prisma, log, storage }
   }
 
-  it("serves the month's receipt to an owner or an auditor, and logs the open", async () => {
-    for (const role of ['owner', 'auditor'] as const) {
+  it("serves the month's receipt to an owner, and logs the open", async () => {
+    await expect(
+      make(receipt).s.receiptFile(member('auditor'), W, '2026-09', 'd-receipt')
+    ).rejects.toThrow(NotFoundException)
+    for (const role of ['owner'] as const) {
       const { s, prisma, log } = make(receipt)
       const f = await s.receiptFile(member(role), W, '2026-09', 'd-receipt')
       expect(f).toMatchObject({ contentType: 'application/pdf', fileName: 'pixel.pdf' })

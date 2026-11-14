@@ -27,6 +27,7 @@ import {
   type WorkspaceExpensesDto,
   type BooksReceiptDto,
   type ProgramNamesDto,
+  type ReportDetail,
   engagementsWithoutProgram,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
@@ -42,6 +43,7 @@ import {
   usePayrollAi,
 } from '@/components/payroll-match/AiReadBox'
 import { NotFoundPage } from '@/pages/NotFoundPage'
+import { useRowEditing, type RowEditing } from '@/pages/report-layouts/row-editing'
 import { WorkspaceExpenses } from '@/pages/WorkspaceExpenses'
 import { MonthSummary } from '@/pages/MonthSummary'
 import { expenseActions } from '@/pages/workspace-expenses'
@@ -55,12 +57,15 @@ import {
 import { ACCOUNT_MAPPING_FOLDER, RECEIPTS_FOLDER } from '@/lib/zip-files'
 import {
   BudgetTracking,
+  ExpensesGrid,
   PayrollActions,
-  ResolveGrid,
+  PayrollGrid,
+  ReconcileTiles,
   colorsOf,
+  toneOfKind,
   useCards,
-  type ResolveKind,
 } from '@/pages/WorkspacePayrollSummary'
+import { expenseRows, payrollRows, toneCounts, type Tone } from '@/pages/workspace-reconcile'
 import {
   PayrollFilesCard,
   type MonthReceipts,
@@ -169,8 +174,9 @@ export function WorkspacePayrollPage() {
   const recon = useLoad<PayrollReconciliationDto>(
     period ? `/workspaces/${id}/payroll/${period}/reconciliation` : null
   )
-  // Owners and auditors only: to anyone else (a bookkeeper who types the address) the page is not there.
-  const reader = w?.myRole === 'owner' || w?.myRole === 'auditor'
+  // Owners only (owner's decision, 2026-11-14: it is their working page, auditors included don't see it): to anyone
+  // else, a bookkeeper or auditor who types the address, the page is not there.
+  const reader = w?.myRole === 'owner'
   const files = useLoad<WorkspacePayrollFilesDto>(
     period && reader ? `/workspaces/${id}/payroll/${period}/files` : null
   )
@@ -179,6 +185,11 @@ export function WorkspacePayrollPage() {
   const expenses = useLoad<WorkspaceExpensesDto>(
     period && reader ? `/workspaces/${id}/expenses/${period}` : null
   )
+  // Each engagement's month as its month page has it: Expenses & Proof and Payroll & Proof show its rows (owner's
+  // decision, 2026-11-14). Opened once (one read line); after a change on this page they are fetched again quietly.
+  const monthsPath = period && reader ? `/workspaces/${id}/payroll/${period}/months` : null
+  const months = useLoad<ReportDetail[]>(monthsPath)
+  const monthsSeen = useRef(false)
   const [receiptBusy, setReceiptBusy] = useState(false)
   const [receiptError, setReceiptError] = useState<string | null>(null)
   // The staff list's engagements give each engagement card its colour, as on the staffing page.
@@ -187,6 +198,50 @@ export function WorkspacePayrollPage() {
   const programNames = useLoad<ProgramNamesDto>(reader ? `/workspaces/${id}/program-names` : null)
   /** Changes on each save and each reconciliation change, so the engagement cards are read again. */
   const [cardsVersion, setCardsVersion] = useState(0)
+  // A change here (a save, a pay linked, an expense saved) changes the months' rows: fetched again, not logged again.
+  const refetchMonths = months.setData
+  useEffect(() => {
+    if (!monthsPath) return
+    if (!monthsSeen.current) {
+      monthsSeen.current = true
+      return
+    }
+    let gone = false
+    void api
+      .get<ReportDetail[]>(`${monthsPath}?again=1`)
+      .then((m) => !gone && refetchMonths(m))
+      .catch(() => {})
+    return () => {
+      gone = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardsVersion, recon.data, expenses.data])
+  // A row's edit, attach and remove, as on its month page (owner's decision, 2026-11-14). Its month comes back as it
+  // now stands; File Management, the receipts and the reconciliation are read again, since an attached proof is filed
+  // there (a payroll proof in the payroll folders, an invoice in Receipts).
+  const [rowNotice, setRowNotice] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null)
+  const rowChanged = (m: ReportDetail) => {
+    months.setData((months.data ?? []).map((x) => (x.id === m.id ? m : x)))
+    setCardsVersion((n) => n + 1)
+    void files.reload()
+    void expenses.reload()
+    void recon.reload()
+  }
+  const rowEditing = useRowEditing({
+    onChange: rowChanged,
+    onNotice: setRowNotice,
+    run: (fn, ok) => {
+      setRowNotice(null)
+      fn().then(
+        (m) => {
+          rowChanged(m)
+          setRowNotice({ tone: 'ok', text: ok })
+        },
+        (e: Error) => setRowNotice({ tone: 'danger', text: e.message })
+      )
+    },
+    atWorkspace: true,
+  })
   /**
    * What is open over the month, in the address (`view`), so the browser's Back closes it and stays on the month
    * instead of leaving for the month chosen before: the match on its own (opened from Actions, or a match started from
@@ -208,7 +263,7 @@ export function WorkspacePayrollPage() {
   const [matchKey, setMatchKey] = useState(0)
   /** What Save did, said once over the summary it returns to. */
   const [savedNote, setSavedNote] = useState<string | null>(null)
-  const [resolve, setResolve] = useState<ResolveKind | null>(null)
+  const [resolve, setResolve] = useState<Tone | null>(null)
   // Another month starts afresh: no note, filter or "saved just now" carried over from the last one.
   const [shownPeriod, setShownPeriod] = useState(period)
   if (shownPeriod !== period) {
@@ -413,7 +468,7 @@ export function WorkspacePayrollPage() {
                 }
                 onBudget={owner ? () => setCardsVersion((n) => n + 1) : undefined}
                 onShow={(k) => {
-                  setResolve(k)
+                  setResolve(toneOfKind(k))
                   document.getElementById('wpd-grid')?.scrollIntoView({ behavior: 'smooth' })
                 }}
                 expenses={
@@ -455,7 +510,6 @@ export function WorkspacePayrollPage() {
               <Reconciliation
                 key={`rd-${period}`}
                 workspaceId={w.id}
-                period={period}
                 data={shownRecon}
                 error={recon.loading ? null : recon.error}
                 onChange={(r) => {
@@ -466,6 +520,17 @@ export function WorkspacePayrollPage() {
                   filter: resolve,
                   onFilter: setResolve,
                   cards: d.cards,
+                  expenses: shownExpenses,
+                  months: months.data,
+                  edit: rowEditing.forMonth,
+                  rowNotice,
+                  onOpenExpenses: owner
+                    ? () => {
+                        setSavedNote(null)
+                        show('expenses')
+                        window.scrollTo({ top: 0 })
+                      }
+                    : undefined,
                   files: shownFiles,
                   colors: colorsOf(
                     (staffList.data?.engagements ?? []).map((e) => e.id),
@@ -473,6 +538,7 @@ export function WorkspacePayrollPage() {
                   ),
                 }}
               />
+              {rowEditing.modals}
             </div>
           )}
           {owner ? (
@@ -1590,24 +1656,35 @@ function WorkspaceMatch({
   )
 }
 
-/** The reconciliation: every pay found and where it landed, and the items still missing proof. */
+/**
+ * The reconciliation (owner's decision, 2026-11-14): three tiles, red, yellow and green, over Expenses & Proof and
+ * Payroll & Proof, laid out as the month page's, each grouped by engagement.
+ */
 function Reconciliation({
   workspaceId,
-  period,
   data,
   error,
   onChange,
   d,
 }: {
   workspaceId: string
-  period: string
   data: PayrollReconciliationDto | null
   error: string | null
   onChange: (r: PayrollReconciliationDto) => void
   /** Only what is not resolved, its tiles filtering one grid. */
   d: {
-    filter: ResolveKind | null
-    onFilter: (k: ResolveKind | null) => void
+    filter: Tone | null
+    onFilter: (t: Tone | null) => void
+    /** The month's expenses from the books (Expense matching's), for Expenses & Proof; null while loading. */
+    expenses: WorkspaceExpensesDto | null
+    /** Each engagement's month as its month page has it: the grids' rows; null while loading. */
+    months: ReportDetail[] | null
+    /** A month row's edit, attach and remove: the month page's own dialogs. */
+    edit: RowEditing['forMonth']
+    /** What a row's change did, or why it failed. */
+    rowNotice: { tone: 'ok' | 'danger'; text: string } | null
+    /** Opens Expense matching: owners only. */
+    onOpenExpenses?: () => void
     cards: EngagementPayrollCardDto[] | null
     files: WorkspacePayrollFilesDto | null
     colors: Map<string, string>
@@ -1735,8 +1812,31 @@ function Reconciliation({
         )
       }
     : undefined
-  const body = (
-    <div className="grid gap-4">
+  const pays = payrollRows(data, d.months ?? [])
+  const spent = expenseRows(d.expenses, d.months ?? [])
+  const reports = new Map(
+    (d.cards ?? []).map((c) => [c.engagementId, c.reportId] as [string, string])
+  )
+  return (
+    <div className="grid gap-5">
+      <ReconcileTiles counts={toneCounts(spent, pays)} filter={d.filter} onFilter={d.onFilter} />
+      {d.rowNotice?.tone === 'ok' && (
+        <Notice tone="ok" fade>
+          {d.rowNotice.text}
+        </Notice>
+      )}
+      {d.rowNotice?.tone === 'danger' && <ErrorNote message={d.rowNotice.text} />}
+      <ExpensesGrid
+        data={d.expenses}
+        months={d.months}
+        edit={d.edit}
+        rows={spent}
+        filter={d.filter}
+        onFilter={d.onFilter}
+        colors={d.colors}
+        reports={reports}
+        onOpen={d.onOpenExpenses}
+      />
       <LineCapNotes files={data.filesOverLineCap} />
       {!marking && <ErrorNote message={actionError} />}
       {notice && (
@@ -1744,20 +1844,18 @@ function Reconciliation({
           {notice}
         </Notice>
       )}
-      <ResolveGrid
+      <PayrollGrid
         workspaceId={workspaceId}
         data={data}
+        months={d.months ?? []}
+        edit={d.edit}
+        rows={pays}
         filter={d.filter}
         onFilter={d.onFilter}
-        cards={d.cards}
         colors={d.colors}
+        reports={reports}
         action={action}
       />
-    </div>
-  )
-  return (
-    <Card title={`Workspace Reconciliation: ${periodLabel(period)}`}>
-      {body}
       {marking && (
         <Modal
           title="Not grant-funded"
@@ -1819,6 +1917,6 @@ function Reconciliation({
           </form>
         </Modal>
       )}
-    </Card>
+    </div>
   )
 }

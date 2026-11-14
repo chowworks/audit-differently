@@ -33,6 +33,7 @@ export function AttachModal({
   title,
   workspaceId,
   engagementId,
+  filedAt,
   period,
   defaultKind,
   kinds,
@@ -45,6 +46,11 @@ export function AttachModal({
   title: string
   workspaceId: string
   engagementId: string
+  /**
+   * Where an upload of this kind is filed: its engagement's id, or null for the workspace (the month end page's payroll
+   * proof, in File Management's payroll folders). Absent: under `engagementId`.
+   */
+  filedAt?: (kind: DocumentKind) => string | null
   period: string | null
   defaultKind: DocumentKind
   /** The document types that make sense here; one means no choice to make. */
@@ -80,7 +86,8 @@ export function AttachModal({
       const form = new FormData()
       form.append('file', file)
       form.append('workspaceId', workspaceId)
-      form.append('engagementId', engagementId)
+      const at = filedAt ? filedAt(kind) : engagementId
+      if (at) form.append('engagementId', at)
       form.append('kind', kind)
       if (period) form.append('period', period)
       if (attachTo) {

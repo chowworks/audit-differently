@@ -112,7 +112,7 @@ export function saveRefusal(e: unknown): unknown {
  * The month's expenses from the books (owner's decision, 2026-11-09): read from the accounting export in the month's
  * saved payroll files, routed by class and account (`books-plan.ts`), saved as expense lines of each engagement's month,
  * each marked by its books key so saving again changes it, never adds a second. Separate from the payroll match: it
- * reads the same saved file and writes only lines of its own. Owners save; owners and auditors read.
+ * reads the same saved file and writes only lines of its own. Owners save and read; no one else.
  */
 @Injectable()
 export class ExpensesService {
@@ -135,8 +135,9 @@ export class ExpensesService {
     )
   }
 
+  /** Owners only, as the month end page that shows it (owner's decision, 2026-11-14); anyone else finds nothing. */
   private reader(caller: Caller, workspaceId: string) {
-    if (!workspaceRole(caller, workspaceId, ['owner', 'auditor'])) throw new NotFoundException()
+    if (!workspaceRole(caller, workspaceId, ['owner'])) throw new NotFoundException()
   }
 
   private period(given: unknown): string {
@@ -1096,7 +1097,7 @@ export class ExpensesService {
 
   /**
    * One of the month's receipts as uploaded, to view on the Expense matching step (owner's decision, 2026-11-13: each
-   * bill's receipt opens from its row, as payroll's proofs do). Owners and auditors. Logged.
+   * bill's receipt opens from its row, as payroll's proofs do). Owners only. Logged.
    */
   async receiptFile(
     caller: Caller,

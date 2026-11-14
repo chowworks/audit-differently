@@ -6,8 +6,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  ALLOCATION_TYPE_LABELS,
-  DOCUMENT_KIND_LABELS,
   DOCUMENT_PURPOSE_LABELS,
   PAYROLL_REPORT_LINES,
   isPayrollLine,
@@ -17,12 +15,27 @@ import {
   type LineRow,
   type ReportDetail,
   type TagTarget,
-  type WexPaymentDto,
 } from '@ad/types'
-import { money, payPeriodWords, shortDate } from '@/lib/format'
+import { money, shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty, Modal, severityTone } from '@/components/ui'
-import { DocumentLink } from '@/components/DocumentLink'
-import { TagChips, typesFor } from '@/components/Tags'
+import { typesFor } from '@/components/Tags'
+import {
+  addPayrollProof,
+  ExpenseHead,
+  ExpenseRow,
+  PayrollHead,
+  PayrollRow,
+  cautionOf,
+  PAYROLL_PURPOSES,
+  checksOfExpense,
+  checksOfPayment,
+  expensesOf,
+  missingOf,
+  payRowsOf,
+  requiredPurposes,
+  useOpenChecks,
+  type PayRow,
+} from './proof-rows'
 import { FIELD_WORDS, FilterBar, searchOf, type FieldChoices, type FilterToken } from './FilterBar'
 import {
   MonthHead,
@@ -53,19 +66,6 @@ const C_STAGES: { key: StageKey | 'started'; label: string }[] = [
 
 /** The working steps (record, proof, issues) and the ones that follow once they are done. */
 const WORKING: (StageKey | 'started')[] = ['started', 'expenses', 'proof', 'blockers']
-
-const PAYROLL_PURPOSES: DocumentPurpose[] = ['timesheet', 'register', 'payment']
-
-/** The proof each expense needs (the same rule as ReportPage's ledger). */
-function requiredPurposes(e: ExpenseDto): DocumentPurpose[] {
-  const base: DocumentPurpose[] = isPayrollLine(e)
-    ? ['timesheet', 'register', 'payment']
-    : ['invoice', 'payment']
-  return e.allocationType === 'direct' ? base : [...base, 'allocation']
-}
-
-const missingOf = (needed: DocumentPurpose[], docs: { purpose: DocumentPurpose }[]) =>
-  needed.filter((p) => !docs.some((d) => d.purpose === p))
 
 /** The words a search matches: amounts as typed, without $ and commas. */
 const plain = (s: string) => s.toLowerCase().replace(/[$,]/g, '')
@@ -149,15 +149,6 @@ export function placeChecks(r: ReportDetail) {
   return { onLine, loose, late }
 }
 
-const checksOfExpense = (r: ReportDetail, e: ExpenseDto) =>
-  r.checks.filter((k) => k.expenseId === e.id)
-const checksOfPayment = (r: ReportDetail, w: WexPaymentDto) =>
-  r.checks.filter(
-    (k) =>
-      k.wexPaymentId === w.id ||
-      (!k.expenseId && !k.wexPaymentId && k.participantId === w.participantId)
-  )
-
 const QUICK_WORDS: Record<Exclude<Quick, null>, string> = {
   blocker: 'with a blocking check',
   attention: 'that need attention',
@@ -181,8 +172,6 @@ function passesQuick(quick: Quick, checks: CheckDto[], otherIds: Set<string>) {
 }
 
 /** Needs-attention chips are caution yellow in this layout. */
-const cautionOf = (k: CheckDto) => (k.severity === 'attention' ? 'rl-c-chip-caution' : undefined)
-
 /** Row checks open by themselves when the grid is filtered to checks. */
 const quickOpensChecks = (quick: Quick) =>
   quick === 'blocker' || quick === 'attention' || quick === 'other'
@@ -762,61 +751,6 @@ function FilterNote({
   )
 }
 
-/** A row's checks, folded behind "see checks" unless the grid is filtered to them. */
-function RowChecks({ checks, open }: { checks: CheckDto[]; open: boolean }) {
-  return (
-    <ul className="rl-c-rowchecks" hidden={!open}>
-      {checks.map((k) => (
-        <li key={k.id}>
-          <Chip tone={severityTone[k.severity]} fill className={cautionOf(k)}>
-            {k.severity === 'blocker' ? 'blocking' : k.severity}
-          </Chip>
-          <span>{k.message}</span>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-function useOpenChecks() {
-  const [open, setOpen] = useState<Set<string>>(new Set())
-  const toggle = (id: string) =>
-    setOpen((o) => {
-      const n = new Set(o)
-      if (n.has(id)) n.delete(id)
-      else n.add(id)
-      return n
-    })
-  return [open, toggle] as const
-}
-
-function SeeChecks({
-  checks,
-  open,
-  onToggle,
-}: {
-  checks: CheckDto[]
-  open: boolean
-  onToggle: () => void
-}) {
-  if (!checks.length) return null
-  const worst = checks.some((k) => k.severity === 'blocker')
-    ? 'blocker'
-    : checks.some((k) => k.severity === 'attention')
-      ? 'attention'
-      : 'info'
-  return (
-    <button
-      type="button"
-      className={`rl-c-seechecks rl-c-seechecks-${worst}`}
-      aria-expanded={open}
-      onClick={onToggle}
-    >
-      {open ? 'hide' : 'see'} {plural(checks.length, 'check')}
-    </button>
-  )
-}
-
 const tagChoices = (r: ReportDetail, target: TagTarget): FieldChoices => ({
   field: 'tag',
   hint: 'a tag',
@@ -871,7 +805,7 @@ function ExpensesSection({
   openReceipts: () => void
 }) {
   const [openChecks, toggleChecks] = useOpenChecks()
-  const all = r.expenses.filter((e) => !isPayrollLine(e))
+  const all = expensesOf(r)
   const needed = new Set(all.flatMap(requiredPurposes))
   const fields: FieldChoices[] = [
     tagChoices(r, 'expense'),
@@ -1010,94 +944,22 @@ function ExpensesSection({
         <div className="ad-tablewrap">
           <table className="ad-table">
             <thead>
-              <tr>
-                <th>Item</th>
-                <th>Vendor</th>
-                <th>Budget line</th>
-                <th className="ad-num">Total</th>
-                <th className="ad-num">Charged</th>
-                <th>Proof</th>
-                {r.can.edit && <th></th>}
-              </tr>
+              <ExpenseHead actions={r.can.edit} />
             </thead>
             <tbody>
-              {rows.map((e) => {
-                const checks = checksOfExpense(r, e)
-                const shownChecks = quickOpensChecks(quick) || openChecks.has(e.id)
-                return (
-                  <tr
-                    key={e.id}
-                    id={`expense-${e.id}`}
-                    className={highlight === e.id ? 'ad-row-flash' : undefined}
-                    data-testid={`expense-${e.itemNumber}`}
-                  >
-                    <td className="whitespace-nowrap">
-                      <span className="ad-mono font-semibold">{e.itemNumber}</span>
-                      <span className="ad-table-sub">{e.date}</span>
-                    </td>
-                    <td>
-                      <span className="font-semibold">{e.vendor}</span>
-                      <span className="ad-table-sub">
-                        {e.memo}
-                        {e.account ? ` · ${e.account}` : ''}
-                      </span>
-                      <TagChips types={r.tagTypes} tags={e.tags} />
-                    </td>
-                    <td>
-                      {e.budgetLineName ?? <span className="text-danger">Needs a budget line</span>}
-                      {e.allocationType !== 'direct' && (
-                        <span className="ad-table-sub">
-                          {ALLOCATION_TYPE_LABELS[e.allocationType]}
-                          {e.allocationNote ? `: ${e.allocationNote}` : ''}
-                        </span>
-                      )}
-                    </td>
-                    <td className="ad-num">{money(e.totalCost)}</td>
-                    <td className="ad-num font-semibold">{money(e.allocatedAmount)}</td>
-                    <td>
-                      <ProofChips
-                        can={r.can.edit}
-                        needed={requiredPurposes(e)}
-                        docs={e.documents}
-                        testId={e.itemNumber}
-                        onAdd={(purpose) => addProof(e, purpose)}
-                        proofOf={e.fromBooks ? { target: 'expense', id: e.id } : undefined}
-                      />
-                      <SeeChecks
-                        checks={checks}
-                        open={shownChecks}
-                        onToggle={() => toggleChecks(e.id)}
-                      />
-                      <RowChecks checks={checks} open={shownChecks} />
-                    </td>
-                    {r.can.edit && (
-                      <td className="ad-num whitespace-nowrap">
-                        {/* A line from the books is changed in the books or on the month's expenses, never here
-                            (review fix, 2026-11-12); its proofs are still attached in the Proof column. */}
-                        {e.fromBooks ? (
-                          <span className="ad-table-sub" data-testid={`from-books-${e.itemNumber}`}>
-                            from the books
-                          </span>
-                        ) : (
-                          <>
-                            <Button kind="ghost" onClick={() => act.editExpense(e)}>
-                              edit
-                            </Button>
-                            <Button
-                              kind="ghost"
-                              className="text-danger"
-                              onClick={() => act.deleteExpense(e)}
-                              data-testid={`delete-${e.itemNumber}`}
-                            >
-                              remove
-                            </Button>
-                          </>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                )
-              })}
+              {rows.map((e) => (
+                <ExpenseRow
+                  key={e.id}
+                  r={r}
+                  e={e}
+                  checksOpen={quickOpensChecks(quick) || openChecks.has(e.id)}
+                  onToggleChecks={() => toggleChecks(e.id)}
+                  onAdd={(purpose) => addProof(e, purpose)}
+                  act={act}
+                  actions={r.can.edit}
+                  highlight={highlight === e.id}
+                />
+              ))}
             </tbody>
           </table>
         </div>
@@ -1105,115 +967,6 @@ function ExpensesSection({
     </Card>
   )
 }
-
-/** The proof a row needs: a green chip for each on file, a red "+" for each missing. */
-/**
- * The page an attached proof opens at: its highlight's. A split line's pay stub opens at its first page, the note of
- * the split the API puts before the stub.
- */
-function firstPage(d: ExpenseDto['documents'][number], noteFirst = false): number | undefined {
-  if (noteFirst && d.document.kind === 'paystub') return undefined
-  return d.mark?.page ?? d.marks?.[0]?.page
-}
-
-/**
- * The proof a chip shows for each needed purpose, and the rest. Evidence of payment is the pay stub whenever one is
- * attached, so every payroll line shows the same kind of proof; a bank debit attached as well is shown beside it.
- */
-export function proofsShown<D extends { purpose: DocumentPurpose; document: { kind: string } }>(
-  needed: DocumentPurpose[],
-  docs: D[]
-): { have: Map<DocumentPurpose, D>; extra: D[] } {
-  const have = new Map<DocumentPurpose, D>()
-  for (const purpose of needed) {
-    const of = docs.filter((d) => d.purpose === purpose)
-    const pick = (purpose === 'payment' && of.find((d) => d.document.kind === 'paystub')) || of[0]
-    if (pick) have.set(purpose, pick)
-  }
-  const shown = new Set(have.values())
-  return { have, extra: docs.filter((d) => !shown.has(d)) }
-}
-
-function ProofChips({
-  can,
-  needed,
-  docs,
-  testId,
-  onAdd,
-  proofOf,
-  files = true,
-  noteFirst = false,
-}: {
-  can: boolean
-  needed: DocumentPurpose[]
-  docs: ExpenseDto['documents']
-  testId: string
-  onAdd: (purpose: DocumentPurpose) => void
-  /** A payroll or books line: its proofs open as its own highlighted copies. */
-  proofOf?: { target: 'expense' | 'wex'; id: string }
-  /** False: "Bookkeepers see staff payroll" is off, so the proofs show as labels that open nothing. */
-  files?: boolean
-  /** A split staff line: its pay stub's copy opens with the note of the split. */
-  noteFirst?: boolean
-}) {
-  const { have, extra } = proofsShown(needed, docs)
-  return (
-    <div className="flex flex-wrap gap-1">
-      {needed.map((purpose) => {
-        const d = have.get(purpose)
-        return d ? (
-          <Chip key={purpose} tone="ok" fill title={files ? d.document.fileName : undefined}>
-            {files ? (
-              <DocumentLink doc={d.document} proofOf={proofOf} page={firstPage(d, noteFirst)}>
-                ✓ {DOCUMENT_PURPOSE_LABELS[purpose]}
-              </DocumentLink>
-            ) : (
-              <>✓ {DOCUMENT_PURPOSE_LABELS[purpose]}</>
-            )}
-          </Chip>
-        ) : can ? (
-          <button
-            key={purpose}
-            type="button"
-            className="ad-chip ad-chip-missing"
-            onClick={() => onAdd(purpose)}
-            data-testid={`attach-${testId}-${purpose}`}
-          >
-            + {DOCUMENT_PURPOSE_LABELS[purpose]}
-          </button>
-        ) : (
-          <Chip key={purpose} tone="danger" fill>
-            missing {DOCUMENT_PURPOSE_LABELS[purpose]}
-          </Chip>
-        )
-      })}
-      {extra.map((d) => {
-        // A second proof of a needed purpose (a staff line's bank debit beside its pay stub) is named by its kind.
-        const word = needed.includes(d.purpose)
-          ? DOCUMENT_KIND_LABELS[d.document.kind].replace(/^./, (c) => c.toUpperCase())
-          : DOCUMENT_PURPOSE_LABELS[d.purpose]
-        return (
-          <Chip key={d.document.id} tone="muted" title={files ? d.document.fileName : undefined}>
-            {files ? (
-              <DocumentLink
-                doc={d.document}
-                proofOf={needed.includes(d.purpose) ? proofOf : undefined}
-                page={firstPage(d, noteFirst)}
-              >
-                {word}
-              </DocumentLink>
-            ) : (
-              word
-            )}
-          </Chip>
-        )
-      })}
-    </div>
-  )
-}
-
-type PayRow =
-  { kind: 'expense'; id: string; e: ExpenseDto } | { kind: 'wex'; id: string; w: WexPaymentDto }
 
 function PayrollSection({
   r,
@@ -1239,13 +992,7 @@ function PayrollSection({
   openProof: () => void
 }) {
   const [openChecks, toggleChecks] = useOpenChecks()
-  const all: PayRow[] = [
-    ...r.expenses
-      // A books' payroll transaction the match covers is no longer the month's pay: it shows in the reconciliation only.
-      .filter((e) => isPayrollLine(e) && e.counts)
-      .map((e) => ({ kind: 'expense' as const, id: e.id, e })),
-    ...r.wexPayments.map((w) => ({ kind: 'wex' as const, id: w.id, w })),
-  ]
+  const all: PayRow[] = payRowsOf(r)
   const facts = (row: PayRow) =>
     row.kind === 'expense'
       ? {
@@ -1315,19 +1062,11 @@ function PayrollSection({
   }
   // "Bookkeepers see staff payroll" off: the same rows, but no proof opens its file (the screen only).
   const files = r.can.seeStaffPayroll !== false
-  const hasStatements = r.payrollDocuments.some((d) => d.kind === 'bank-statement')
   // Payroll items still missing any of their three proofs: the count on the matching button.
   const unproved = all.filter(
     (row) => missingOf(facts(row).needed, facts(row).docs).length > 0
   ).length
-  const addProof = (row: PayRow, purpose: DocumentPurpose) => {
-    // A staff line's evidence of payment is its bank line: found for this row alone, not the whole payroll match.
-    // Finding it opens the statement, so with the files hidden the proof is attached like the others.
-    if (purpose === 'payment' && row.kind === 'expense' && hasStatements && files)
-      return act.findBankLine(row.e)
-    if (row.kind === 'expense') act.attach(row.e, purpose)
-    else act.attachPayment(row.w, purpose)
-  }
+  const addProof = (row: PayRow, purpose: DocumentPurpose) => addPayrollProof(r, act, row, purpose)
 
   return (
     <Card
@@ -1394,100 +1133,21 @@ function PayrollSection({
         <div className="ad-tablewrap">
           <table className="ad-table">
             <thead>
-              <tr>
-                <th>Vendor/Participant Paid</th>
-                <th>Date</th>
-                <th className="ad-num">Amount</th>
-                <th>Proof</th>
-                {r.can.edit && <th></th>}
-              </tr>
+              <PayrollHead actions={r.can.edit} />
             </thead>
             <tbody>
-              {rows.map((row) => {
-                const f = facts(row)
-                const shownChecks = quickOpensChecks(quick) || openChecks.has(row.id)
-                return (
-                  <tr key={row.id} id={row.kind === 'expense' ? `expense-${row.id}` : undefined}>
-                    <td>
-                      {row.kind === 'expense' ? (
-                        <>
-                          <span className="ad-mono font-semibold">{row.e.itemNumber}</span>{' '}
-                          <span className="font-semibold">{row.e.vendor}</span>
-                          <span className="ad-table-sub">
-                            {row.e.budgetLineName ?? 'Needs a budget line'}
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="font-semibold">{row.w.participantName}</span>
-                          <span className="ad-table-sub ad-mono">{row.w.participantNumber}</span>
-                        </>
-                      )}
-                      <TagChips types={r.tagTypes} tags={f.tags} />
-                    </td>
-                    <td className="whitespace-nowrap">
-                      {row.kind === 'expense'
-                        ? shortDate(row.e.date)
-                        : payPeriodWords(row.w.payPeriodStart, row.w.payPeriodEnd)}
-                      {row.kind === 'wex' && row.w.hours != null && (
-                        <span className="ad-table-sub">{row.w.hours} hours</span>
-                      )}
-                    </td>
-                    <td className="ad-num font-semibold">
-                      {money(row.kind === 'expense' ? row.e.allocatedAmount : row.w.grossAmount)}
-                    </td>
-                    <td>
-                      <ProofChips
-                        can={r.can.edit}
-                        needed={f.needed}
-                        docs={f.docs}
-                        testId={row.kind === 'expense' ? row.e.itemNumber : row.w.participantNumber}
-                        onAdd={(purpose) => addProof(row, purpose)}
-                        proofOf={{ target: row.kind, id: row.id }}
-                        files={files}
-                        noteFirst={row.kind === 'expense' && !!row.e.payrollSplit}
-                      />
-                      <SeeChecks
-                        checks={f.checks}
-                        open={shownChecks}
-                        onToggle={() => toggleChecks(row.id)}
-                      />
-                      <RowChecks checks={f.checks} open={shownChecks} />
-                    </td>
-                    {r.can.edit && (
-                      <td className="ad-num whitespace-nowrap">
-                        {row.kind === 'expense' ? (
-                          <>
-                            <Button kind="ghost" onClick={() => act.editExpense(row.e)}>
-                              edit
-                            </Button>
-                            <Button
-                              kind="ghost"
-                              className="text-danger"
-                              onClick={() => act.deleteExpense(row.e)}
-                            >
-                              remove
-                            </Button>
-                          </>
-                        ) : (
-                          <>
-                            <Button kind="ghost" onClick={() => act.editPayment(row.w)}>
-                              edit
-                            </Button>
-                            <Button
-                              kind="ghost"
-                              className="text-danger"
-                              onClick={() => act.deletePayment(row.w)}
-                            >
-                              remove
-                            </Button>
-                          </>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                )
-              })}
+              {rows.map((row) => (
+                <PayrollRow
+                  key={row.id}
+                  r={r}
+                  row={row}
+                  checksOpen={quickOpensChecks(quick) || openChecks.has(row.id)}
+                  onToggleChecks={() => toggleChecks(row.id)}
+                  onAdd={(purpose) => addProof(row, purpose)}
+                  act={act}
+                  actions={r.can.edit}
+                />
+              ))}
             </tbody>
           </table>
         </div>

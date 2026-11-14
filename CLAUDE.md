@@ -76,13 +76,15 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   the staff lines from the payroll details file (`Expense.payrollKey`). Importing transactions confirms the payroll
   rows it found ("Payroll transactions" step): they are kept marked (`Expense.payrollKind`, migration
   `20261020000200`), count on the budget until the match covers that kind on the month, then are hidden and kept for
-  the reconciliation's "Expenses vs payroll files" (a difference means the books are off, not the report);
+  the reconciliation's runs that differ (a yellow row in the engagement's Payroll & Proof group; a difference means the
+  books are off, not the report);
   re-importing the file is how a row's choice is changed. Which tax types count is issue #29.
 - **Month End Close** (`/workspaces/:id/payroll`, renamed from Month End Payroll Processing 2026-11-13; layout owner's
   choice 2026-10-20): Actions first (each with Review below; expense to-dos from the books export lead, with Upload
-  receipts right there), Engagement Budget Tracking, then Workspace Reconciliation, whose tiles (Missing proof, To
-  check, Paid not grant-funded, Expenses differ, Staff w/o charges, Proof complete) filter its grid and the expenses
-  table, then File Management (one tree: the payroll folders and a Receipts folder, whose receipts an owner removes for
+  receipts right there), Engagement Budget Tracking, then the reconciliation laid out as the month page's (owner's decision
+  2026-11-14): three tiles, red (proof missing), yellow (an alert) and green (complete), over Expenses & Proof and
+  Payroll & Proof, each grouped by engagement with complete rows folded and what is on no engagement yet last, a tile
+  filtering both and each with its own search, then File Management (one tree: the payroll folders and a Receipts folder, whose receipts an owner removes for
   good; no file count or stat chips) with Re-match with same files and Re-match with new files (the match wizard with
   "Replace them" ticked, the only way to replace the set; owner's decisions, 2026-11-14); Save returns to this page. No
   separate expenses card: Expense matching opens from the Actions rows or the month-end steps.
@@ -187,7 +189,7 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   (`<workspaceId>/workspace/<period>/`) linked from each item it proves, and keeps every person-pay found in it
   (`PayrollPayLine`: register rows, bank payments, pay stubs; only the not-grant-funded reason ever changes). A chosen
   item's closed or submitted month is reopened first, after the owner confirms the list and gives one reason, inside the
-  save's own transaction (`ReportsService.reopenWith`/`sendBackWith`), so a failed save reopens nothing. The reconciliation (owners and auditors read it; one read line, counts only)
+  save's own transaction (`ReportsService.reopenWith`/`sendBackWith`), so a failed save reopens nothing. The reconciliation (owners alone read it, as the whole month end page: auditors don't see that working page, owner's decision 2026-11-14; one read line, counts only)
   shows each pay as matched, guessed, unassigned or not grant-funded, and each item with no proof; owners link a pay by
   hand or mark it not grant-funded. Each engagement's audit package files the shared original once plus its own
   highlighted copies. A workspace payroll file with saved pays keeps its kind, month, engagement and key

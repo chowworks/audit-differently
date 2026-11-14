@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common'
 import type { Prisma } from '@prisma/client'
-import { DOCUMENT_KIND_LABELS, type DocumentKind } from '@ad/types'
+import { DOCUMENT_KIND_LABELS, PAYROLL_DOCUMENT_KINDS, type DocumentKind } from '@ad/types'
 import type { AccessLogService, LogEntry } from '../core/access-log.service'
 import type { Caller } from '../core/caller'
 import type { PrismaService } from '../prisma/prisma.service'
@@ -35,6 +35,13 @@ export interface LinkTarget {
   words: (purpose: string) => string
   /** A participant's file names the checklist item the upload fills, not the kind of document. */
   namesItem?: boolean
+  /**
+   * The month end page (owner's decision, 2026-11-14): an owner's payroll proof is filed once for the workspace, in
+   * File Management's payroll folders, for this month (`<workspaceId>/workspace/<period>/`), as the workspace payroll
+   * match files it, and linked from the record. Set to the record's month for an owner; absent, an upload is filed
+   * under the record's engagement.
+   */
+  workspacePayroll?: { period: string }
   find: (tx: Prisma.TransactionClient, documentId: string) => Promise<{ purpose: string } | null>
   create: (tx: Prisma.TransactionClient, documentId: string) => Promise<unknown>
   move: (tx: Prisma.TransactionClient, documentId: string) => Promise<unknown>
@@ -55,7 +62,15 @@ export async function linkDocument(
 ): Promise<void> {
   const base = { workspaceId: t.workspaceId, resource: t.resource, subjectId: t.subjectId }
   if (typeof source !== 'string') {
-    if (source.data.workspaceId !== t.workspaceId || source.data.engagementId !== t.engagementId)
+    const atWorkspace =
+      !!t.workspacePayroll &&
+      source.data.engagementId === null &&
+      source.data.period === t.workspacePayroll.period &&
+      (PAYROLL_DOCUMENT_KINDS as readonly string[]).includes(source.data.kind)
+    if (
+      source.data.workspaceId !== t.workspaceId ||
+      (source.data.engagementId !== t.engagementId && !atWorkspace)
+    )
       throw new BadRequestException("The file must be filed under this record's engagement")
     const kind = source.data.kind
     const personal = source.data.sensitivity === 'personal' ? ' (personal)' : ''
