@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { NOT_OURS, programOf, type ProgramNames, type ProgramNamesDto } from '@ad/types'
+import {
+  NOT_OURS,
+  PROGRAM_NAMES_FOLDER,
+  programOf,
+  type ProgramNames,
+  type ProgramNamesDto,
+} from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { Button, Card, ErrorNote } from '@/components/ui'
 
@@ -87,9 +93,9 @@ export function ProgramNamesCard({
         The names each program goes by in your books and your payroll company&apos;s files (a class
         in the books, a project or job in payroll), so the payroll match reads a company-wide export
         as it is and counts each row on its own engagement. Add a mapping file whose rows each name
-        one program, or put it in the payroll zip&apos;s Program names folder; each file is merged
-        with the list and never stored. A program is an engagement&apos;s when one of its names is
-        the engagement&apos;s name, or when you link it.
+        one program, or put it in the payroll zip&apos;s {PROGRAM_NAMES_FOLDER} folder; each file is
+        merged with the list and never stored. A program is an engagement&apos;s when one of its
+        names is the engagement&apos;s name, or when you link it.
       </p>
       <ErrorNote message={error ?? loadError} />
       {programs.length === 0 ? (

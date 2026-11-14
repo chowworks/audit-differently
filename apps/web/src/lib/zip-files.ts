@@ -1,5 +1,14 @@
 import { unzip, unzipSync } from 'fflate'
-import { PAYROLL_FOLDERS, RECEIPTS_FOLDER } from '@ad/types'
+import {
+  ACCOUNT_MAPPING_FOLDER,
+  PAYROLL_FOLDERS,
+  PROGRAM_NAMES_FOLDER,
+  RECEIPTS_FOLDER,
+  ZIP_FOLDERS,
+  ZIP_FOLDER_LIST,
+  andList,
+  type ZipFolder,
+} from '@ad/types'
 
 /** What an upload accepts, by extension, and the type the browser gives each when it comes out of a zip. */
 export const UPLOAD_TYPES: Record<string, string> = {
@@ -88,36 +97,38 @@ export function filesFromZip(zip: File): Promise<{ files: ZippedFile[]; skipped:
   )
 }
 
-// The payroll zip's folders and its Receipts folder are in @ad/types: File Management's download writes the same zip.
-export { PAYROLL_FOLDERS, RECEIPTS_FOLDER }
-export type PayrollFolderKind = (typeof PAYROLL_FOLDERS)[number][1]
-/**
- * The folders a zip may leave out: the payroll company's per-person export (GitHub issue #22, section 8), and pay stubs
- * (a month of staff pay only has none to give).
- */
-export const OPTIONAL_FOLDERS = new Set<string>(['QuickBooks transactions', 'Pay stubs'])
-/** The folder of a program names file: the same program's names in the books and the payroll company, one row each. */
-export const PROGRAM_NAMES_FOLDER = 'Program names'
-/**
- * The folder of each engagement's account mapping (owner's decision, 2026-11-09): its chart of accounts mapped to the
- * categories its funder bills, one file per engagement. Not proof: it comes back apart, as program names do.
- */
-export const ACCOUNT_MAPPING_FOLDER = 'Account mapping'
-const ACCOUNT_MAPPING_NAMES = [ACCOUNT_MAPPING_FOLDER, 'Account mappings']
-const RECEIPTS_NAMES = [RECEIPTS_FOLDER, 'Invoices', 'Receipts and invoices']
-const RECEIPT_EXTS = new Set(['pdf', 'png', 'jpg', 'jpeg'])
-/**
- * Other names a folder goes by (owner's decision, 2026-11-09): the bank's and the card's statements share one folder,
- * and the books' export is the whole month, its expenses too. The old names still open a zip made before.
- */
-const FOLDER_ALIASES: Record<string, string[]> = {
-  'Bank & card statements': ['Bank statements', 'Bank and card statements'],
-  'QuickBooks transactions': ['Payroll details', 'Books transactions'],
+// The zip's folders are one list, ZIP_FOLDER_LIST in @ad/types: everything here is read from it.
+export {
+  ACCOUNT_MAPPING_FOLDER,
+  PAYROLL_FOLDERS,
+  PROGRAM_NAMES_FOLDER,
+  RECEIPTS_FOLDER,
+  ZIP_FOLDERS,
 }
-const isFolder = (name: string, given: string) =>
-  [name, ...(FOLDER_ALIASES[name] ?? [])].some((n) => same(n, given))
-/** The folders a CSV may be in: the payroll company's journals, job reports and exports, and program names. */
-const CSV_FOLDERS = new Set<string>(['Timesheets', 'Payroll registers', 'QuickBooks transactions'])
+export type PayrollFolderKind = (typeof PAYROLL_FOLDERS)[number][1]
+/** The folders a zip may leave out. */
+export const OPTIONAL_FOLDERS = new Set<string>(
+  ZIP_FOLDER_LIST.filter((f) => !f.required).map((f) => f.name)
+)
+const namesOf = (f: ZipFolder) => [f.name, ...f.aliases]
+const isFolder = (f: ZipFolder, given: string) => namesOf(f).some((n) => same(n, given))
+const folderOf = (given: string) =>
+  (ZIP_FOLDER_LIST as readonly ZipFolder[]).find((f) => isFolder(f, given))
+const types = (exts: readonly string[]) =>
+  andList([...new Set(exts.map((e) => (e === 'jpeg' ? 'jpg' : e).toUpperCase()))]).replace(
+    / and /,
+    ' or '
+  )
+/** Which folder takes which file type, in words, for a file in a folder that does not take it. */
+const whatGoesWhere = () => {
+  const csv = ZIP_FOLDERS.filter((n) => folderOf(n)!.extensions.includes('csv'))
+  const narrow = (ZIP_FOLDER_LIST as readonly ZipFolder[]).filter(
+    (f) => f.holds !== 'payroll-proof'
+  )
+  return `a CSV goes in ${andList(csv).replace(/ and ([^,]*)$/, ' or $1')}, ${narrow
+    .map((f) => `${f.name} takes ${types(f.extensions)}`)
+    .join(', ')}`
+}
 
 /**
  * A payroll zip checked against its required layout: the folders (QuickBooks transactions, Pay stubs, Program names, Account mapping and Receipts when the
@@ -137,12 +148,7 @@ export function sortPayrollZip(
   problems: string[]
 } {
   const problems: string[] = []
-  const folders = [
-    ...PAYROLL_FOLDERS.flatMap(([name]) => [name, ...(FOLDER_ALIASES[name] ?? [])]),
-    PROGRAM_NAMES_FOLDER,
-    ...ACCOUNT_MAPPING_NAMES,
-    ...RECEIPTS_NAMES,
-  ]
+  const folders = (ZIP_FOLDER_LIST as readonly ZipFolder[]).flatMap(namesOf)
   // A zip of the folder itself puts everything under one top folder: look inside it.
   const tops = new Set(paths.map((p) => p.path.split('/')[0]))
   const strip =
@@ -162,39 +168,32 @@ export function sortPayrollZip(
       outside.push(parts.join('/'))
       continue
     }
-    const csv = extOf(parts[1]!) === 'csv'
-    if (same(PROGRAM_NAMES_FOLDER, parts[0]!)) {
-      if (csv || extOf(parts[1]!) === 'xlsx') names.push(p.file)
-      else misplaced.push(parts.join('/'))
-      continue
-    }
-    if (ACCOUNT_MAPPING_NAMES.some((n) => same(n, parts[0]!))) {
-      if (csv || extOf(parts[1]!) === 'xlsx') mappings.push(p.file)
-      else misplaced.push(parts.join('/'))
-      continue
-    }
-    if (RECEIPTS_NAMES.some((n) => same(n, parts[0]!))) {
-      if (RECEIPT_EXTS.has(extOf(parts[1]!))) receipts.push(p.file)
-      else misplaced.push(parts.join('/'))
-      continue
-    }
-    const folder = PAYROLL_FOLDERS.find(([name]) => isFolder(name, parts[0]!))
+    const folder = folderOf(parts[0]!)
     if (!folder) {
       unknown.add(parts[0]!)
       continue
     }
-    if (csv && !CSV_FOLDERS.has(folder[0])) {
+    const ext = extOf(parts[1]!)
+    // A payroll proof file's type is checked again on upload; here only a CSV where it is not taken.
+    if (
+      folder.holds === 'payroll-proof'
+        ? ext === 'csv' && !folder.extensions.includes('csv')
+        : !folder.extensions.includes(ext)
+    ) {
       misplaced.push(parts.join('/'))
       continue
     }
-    files.push({ file: p.file, kind: folder[1], folder: folder[0] })
+    if (folder.holds === 'program-names') names.push(p.file)
+    else if (folder.holds === 'account-mapping') mappings.push(p.file)
+    else if (folder.holds === 'receipts') receipts.push(p.file)
+    else files.push({ file: p.file, kind: folder.kind as PayrollFolderKind, folder: folder.name })
   }
-  for (const [name] of PAYROLL_FOLDERS)
-    if (!OPTIONAL_FOLDERS.has(name) && !files.some((f) => f.folder === name))
-      problems.push(`The zip has no "${name}" folder, or it is empty.`)
+  for (const f of ZIP_FOLDER_LIST)
+    if (f.required && !files.some((x) => x.folder === f.name))
+      problems.push(`The zip has no "${f.name}" folder, or it is empty.`)
   if (unknown.size)
     problems.push(
-      `${[...unknown].map((u) => `"${u}"`).join(', ')} ${unknown.size === 1 ? 'is not one of the folders' : 'are not among the folders'}: use Timesheets, Payroll registers, Pay stubs, Bank & card statements, QuickBooks transactions, Program names, Account mapping and Receipts.`
+      `${[...unknown].map((u) => `"${u}"`).join(', ')} ${unknown.size === 1 ? 'is not one of the folders' : 'are not among the folders'}: use ${andList(ZIP_FOLDERS)}.`
     )
   if (outside.length)
     problems.push(
@@ -202,7 +201,7 @@ export function sortPayrollZip(
     )
   if (misplaced.length)
     problems.push(
-      `${misplaced.length === 1 ? '1 file is' : `${misplaced.length} files are`} in a folder that does not take its type: a CSV goes in Timesheets, Payroll registers, QuickBooks transactions, Program names or Account mapping, Program names and Account mapping take an XLSX or CSV, and Receipts a PDF, PNG or JPG (${misplaced.slice(0, 3).join(', ')}${misplaced.length > 3 ? ', …' : ''}).`
+      `${misplaced.length === 1 ? '1 file is' : `${misplaced.length} files are`} in a folder that does not take its type: ${whatGoesWhere()} (${misplaced.slice(0, 3).join(', ')}${misplaced.length > 3 ? ', …' : ''}).`
     )
   if (skipped.length)
     problems.push(

@@ -54,7 +54,7 @@ import {
   mb,
   oversizeExpenseFiles,
 } from '@/components/PayrollProof'
-import { ACCOUNT_MAPPING_FOLDER, RECEIPTS_FOLDER } from '@/lib/zip-files'
+import { ACCOUNT_MAPPING_FOLDER, RECEIPTS_FOLDER, ZIP_FOLDERS } from '@/lib/zip-files'
 import {
   BudgetTracking,
   ExpensesGrid,
@@ -280,7 +280,10 @@ export function WorkspacePayrollPage() {
   const shownRecon = recon.data?.period === period ? recon.data : null
   const shownFiles = files.data?.period === period ? files.data : null
   const shownExpenses = expenses.data?.period === period ? expenses.data : null
-  /** Receipts added from Actions or File Management: matched to the month's bills as the zip's are. */
+  /**
+   * Receipts added from Actions or File Management: filed, read and matched to the month's bills as the zip's are, then
+   * the wizard opens at Expense matching to check them (owner's decision, 2026-11-14: an added file always opens it).
+   */
   const addReceipts = async (list: File[]) => {
     if (!period || !list.length) return
     setReceiptError(null)
@@ -304,6 +307,8 @@ export function WorkspacePayrollPage() {
         )
       }
       setSavedNote(`Added ${fit.length === 1 ? fit[0]!.name : `${fit.length} receipts`}.`)
+      show('expenses')
+      window.scrollTo({ top: 0 })
     } catch (e) {
       setReceiptError((e as Error).message)
     } finally {
@@ -1223,7 +1228,7 @@ function WorkspaceMatch({
     >
       <ol className="ad-hand-steps">
         <li>
-          Upload the company&apos;s payroll zip for {periodLabel(period)}, in the sample&apos;s five
+          Upload the company&apos;s payroll zip for {periodLabel(period)}, in the sample&apos;s
           folders.
         </li>
         <li>Check what Auto-Match found for each engagement, and save.</li>
@@ -1234,10 +1239,7 @@ function WorkspaceMatch({
       </ol>
       <p className="ad-hand-address">
         <span className="ad-hand-address-label">The zip&apos;s layout</span>
-        <span>
-          Timesheets · Payroll registers · Pay stubs · Bank &amp; card statements · QuickBooks
-          transactions · Program names · Account mapping · Receipts (when you have them)
-        </span>
+        <span>{ZIP_FOLDERS.join(' · ')} (when you have them)</span>
         <a href="/samples/payroll-workspace-sample.zip" download>
           Download a sample (zip)
         </a>

@@ -1,3 +1,4 @@
+import { zipFolder } from '@ad/types'
 import * as ExcelJS from 'exceljs'
 import { unzipSync, zipSync } from 'fflate'
 import { layoutPdf, type PdfRow } from './pdf'
@@ -448,32 +449,36 @@ export async function sampleFiles(): Promise<{ folder: string; name: string; byt
   const out: { folder: string; name: string; bytes: Buffer }[] = []
   for (const run of RUNS) {
     out.push({
-      folder: 'Timesheets',
+      folder: zipFolder('payroll-proof', 'timesheet').name,
       name: `Time report ${dotted(run.start)} - ${dotted(run.end)}.pdf`,
       bytes: await timesheetPdf(run),
     })
     out.push({
-      folder: 'Payroll registers',
+      folder: zipFolder('payroll-proof', 'payroll-register').name,
       name: `Payroll register ${dotted(run.payDate)}.pdf`,
       bytes: await registerPdf(run),
     })
     for (const p of stubsOf(run))
       out.push({
-        folder: 'Pay stubs',
+        folder: zipFolder('payroll-proof', 'paystub').name,
         name: `Pay stub ${p.name} ${dotted(run.payDate)}.pdf`,
         bytes: await stubPdf(run, p),
       })
   }
   out.push({
-    folder: 'Bank & card statements',
+    folder: zipFolder('payroll-proof', 'bank-statement').name,
     name: 'Lakeside Community Bank statement 2026-09.pdf',
     bytes: await bankStatementPdf(),
   })
   out.push({
-    folder: 'QuickBooks transactions',
+    folder: zipFolder('payroll-proof', 'payroll-details').name,
     name: 'Payroll details 2026-09.xlsx',
     bytes: await payrollDetailsXlsx(),
   })
-  out.push({ folder: 'Program names', name: 'Program names.csv', bytes: programNamesCsv() })
+  out.push({
+    folder: zipFolder('program-names').name,
+    name: 'Program names.csv',
+    bytes: programNamesCsv(),
+  })
   return out
 }

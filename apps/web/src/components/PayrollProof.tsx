@@ -1,5 +1,7 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import {
+  ZIP_FOLDER_LIST,
+  andList,
   PAYROLL_PERSONAL_KINDS,
   DOCUMENT_KIND_LABELS,
   PAYROLL_DOCUMENT_KINDS,
@@ -1237,7 +1239,7 @@ export function UploadPanel({
         </p>
       )}
       <Field
-        label="One zip with the folders Timesheets, Payroll registers and Bank & card statements (and Pay stubs, QuickBooks transactions, Program names and Account mapping, when you have them), as in the sample above. Files as your payroll company and books export them: PDF, XLSX or CSV, and a zip of pay stubs as it comes."
+        label={`One zip with the folders ${andList(ZIP_FOLDER_LIST.filter((f) => f.required).map((f) => f.name))} (and ${andList(ZIP_FOLDER_LIST.filter((f) => !f.required).map((f) => f.name))}, when you have them), as in the sample above. Files as your payroll company and books export them: PDF, XLSX or CSV, and a zip of pay stubs as it comes.`}
         required
         hint={`Up to ${mb(ZIP_MAX_BYTES)} and ${maxFiles.toLocaleString('en-US')} files; each file up to ${mb(FILE_MAX_BYTES)}.`}
       >

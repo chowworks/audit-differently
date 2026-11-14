@@ -1,3 +1,4 @@
+import { zipFolder } from '@ad/types'
 import * as ExcelJS from 'exceljs'
 import { unzipSync, zipSync } from 'fflate'
 import { layoutPdf } from './pdf'
@@ -386,24 +387,28 @@ export async function expenseSampleFiles(): Promise<
 > {
   return [
     {
-      folder: 'Bank & card statements',
+      folder: zipFolder('payroll-proof', 'bank-statement').name,
       name: 'Lakeside Business Card statement 2026-09.pdf',
       bytes: await cardStatementPdf(),
     },
     {
-      folder: 'QuickBooks transactions',
+      folder: zipFolder('payroll-proof', 'payroll-details').name,
       name: 'Transaction List with Splits 2026-09.xlsx',
       bytes: await transactionListXlsx(),
     },
     ...(await Promise.all(
       MAPPINGS.map(async (m) => ({
-        folder: 'Account mapping',
+        folder: zipFolder('account-mapping').name,
         name: m.name,
         bytes: await accountMappingXlsx(m),
       }))
     )),
     ...(await Promise.all(
-      RECEIPTS.map(async (r) => ({ folder: 'Receipts', name: r.name, bytes: await receiptPdf(r) }))
+      RECEIPTS.map(async (r) => ({
+        folder: zipFolder('receipts').name,
+        name: r.name,
+        bytes: await receiptPdf(r),
+      }))
     )),
   ]
 }
