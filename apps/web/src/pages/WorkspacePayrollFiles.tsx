@@ -78,6 +78,57 @@ export interface MonthReceipts {
   busy: boolean
   /** Owners only: matched to the month's bills as the zip's are. */
   onAdd?: (files: File[]) => void
+  /** Owners only: deleted for good, after the owner confirms (owner's decision, 2026-11-14). Rejects with the reason. */
+  onRemove?: (r: BooksReceiptDto) => Promise<void>
+}
+
+/** Confirm a receipt's removal: permanent, and the bills it proves are left without it. */
+function RemoveReceipt({
+  receipt,
+  onRemove,
+  onClose,
+}: {
+  receipt: BooksReceiptDto
+  onRemove: (r: BooksReceiptDto) => Promise<void>
+  onClose: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const bills = receipt.transactionIds
+  const go = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await onRemove(receipt)
+      onClose()
+    } catch (e) {
+      setError((e as Error).message)
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal title="Remove this receipt?" onClose={onClose}>
+      <div className="grid gap-4">
+        <ErrorNote message={error} />
+        <p className="text-sm">
+          <strong>{receipt.fileName} is deleted for good. This can't be undone.</strong>
+        </p>
+        <p className="text-sm">
+          {bills.length
+            ? `It proves bill ${bills.join(', ')}. ${bills.length === 1 ? 'That bill' : 'Those bills'} will need another receipt.`
+            : 'It proves no bill, so nothing else changes.'}
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button kind="ghost" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button kind="navy" disabled={busy} onClick={() => void go()}>
+            {busy ? 'Removing…' : 'Remove receipt'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
 }
 
 /** Add files: one or more files into one folder of the month's set. */
@@ -202,6 +253,7 @@ export function PayrollFilesCard({
   const [shut, setShut] = useState<Set<string>>(new Set())
   const [viewing, setViewing] = useState<WorkspacePayrollFileDto | null>(null)
   const [viewingReceipt, setViewingReceipt] = useState<BooksReceiptDto | null>(null)
+  const [removingReceipt, setRemovingReceipt] = useState<BooksReceiptDto | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const api = useApi()
   const list = files?.files ?? []
@@ -471,6 +523,17 @@ export function PayrollFilesCard({
                         >
                           download
                         </button>
+                        {receipts.onRemove && (
+                          <button
+                            type="button"
+                            className="wpc-remove"
+                            disabled={receipts.busy}
+                            aria-label={`Remove ${r.fileName} from the month's receipts`}
+                            onClick={() => setRemovingReceipt(r)}
+                          >
+                            remove
+                          </button>
+                        )}
                       </li>
                     ))}
                 </ul>
@@ -479,6 +542,13 @@ export function PayrollFilesCard({
           </ul>
         )}
       </div>
+      {removingReceipt && receipts?.onRemove && (
+        <RemoveReceipt
+          receipt={removingReceipt}
+          onRemove={receipts.onRemove}
+          onClose={() => setRemovingReceipt(null)}
+        />
+      )}
       {viewingReceipt && receipts && (
         <Modal title={viewingReceipt.fileName} onClose={() => setViewingReceipt(null)} wide>
           <Suspense fallback={<p className="text-sm text-soft">Opening the receipt…</p>}>

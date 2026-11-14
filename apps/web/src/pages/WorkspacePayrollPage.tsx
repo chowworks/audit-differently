@@ -25,6 +25,7 @@ import {
   type WorkspacePayrollPeriodDto,
   type WorkspacePayrollRunDto,
   type WorkspaceExpensesDto,
+  type BooksReceiptDto,
   type ProgramNamesDto,
   engagementsWithoutProgram,
 } from '@ad/types'
@@ -250,6 +251,16 @@ export function WorkspacePayrollPage() {
       setReceiptBusy(false)
     }
   }
+  /** A receipt removed from File Management: deleted for good, by the owner's choice (2026-11-14). */
+  const removeReceipt = async (r: BooksReceiptDto) => {
+    if (!period) return
+    expenses.setData(
+      await api.del<WorkspaceExpensesDto>(
+        `/workspaces/${id}/expenses/${period}/receipts/${r.documentId}`
+      )
+    )
+    setSavedNote(`Removed ${r.fileName}.`)
+  }
   const monthReceipts: MonthReceipts | undefined =
     period && shownExpenses && shownExpenses.file
       ? {
@@ -258,6 +269,7 @@ export function WorkspacePayrollPage() {
           list: shownExpenses.receipts,
           busy: receiptBusy,
           onAdd: owner ? (list: File[]) => void addReceipts(list) : undefined,
+          onRemove: owner ? removeReceipt : undefined,
         }
       : undefined
   // The month has payroll files (or one was saved just now): the engagement cards show.

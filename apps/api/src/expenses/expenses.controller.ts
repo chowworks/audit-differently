@@ -99,6 +99,18 @@ export class ExpensesController {
     )
   }
 
+  /** Removes one of the month's receipts from File Management: owners only, a hard delete. Logged. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Delete('workspaces/:id/expenses/:period/receipts/:documentId')
+  async removeReceipt(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('period') period: string,
+    @Param('documentId') documentId: string
+  ): Promise<WorkspaceExpensesDto> {
+    return this.expenses.removeReceipt(await this.callers.load(userId), id, period, documentId)
+  }
+
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('workspaces/:id/expenses/:period/save')
   async save(
