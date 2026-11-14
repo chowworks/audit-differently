@@ -30,6 +30,7 @@ import { changesOf, dollars, howMany, monthName, type Fields } from '../core/cha
 import { DocumentsService, keyInWorkspace, type Uploaded } from '../documents/documents.service'
 import { describe } from '../documents/staged-file'
 import { readReceipt } from '../receipts/read-receipt'
+import { monthReceiptsWhere } from './month-receipts'
 import { isCardStatement } from '../payroll/card-statement'
 import { csvLines, sheetLines } from '../payroll/payroll-details'
 import { readStatement } from '../payroll/statement-lines'
@@ -547,21 +548,10 @@ export class ExpensesService {
     return out
   }
 
-  /**
-   * The receipts the books' bills are matched to (owner's decision, 2026-11-12): the month's financial receipts and
-   * invoices, the workspace's own (the zip's "Receipts" folder) and those filed to an engagement's month (emailed, or
-   * uploaded there), but not one dismissed or already the proof of a line that is not from the books.
-   */
+  /** The receipts the books' bills are matched to (`monthReceiptsWhere`). */
   private async receiptsOf(workspaceId: string, period: string) {
     const docs = await this.prisma.document.findMany({
-      where: {
-        workspaceId,
-        period,
-        sensitivity: 'financial',
-        kind: { in: [...RECEIPT_KINDS] },
-        receiptDismissed: false,
-        NOT: { expenses: { some: { purpose: 'invoice', expense: { booksKey: null } } } },
-      },
+      where: monthReceiptsWhere(workspaceId, period),
       orderBy: [{ fileName: 'asc' }, { id: 'asc' }],
     })
     return docs.filter((d) => keyInWorkspace(d))

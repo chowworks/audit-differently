@@ -1537,6 +1537,21 @@ export const PAYROLL_DOCUMENT_KINDS = [
 ] as const
 export type PayrollDocumentKind = (typeof PAYROLL_DOCUMENT_KINDS)[number]
 
+/** The payroll zip's folders, as the sample has them, and the document type each holds. */
+export const PAYROLL_FOLDERS = [
+  ['Timesheets', 'timesheet'],
+  ['Payroll registers', 'payroll-register'],
+  ['Pay stubs', 'paystub'],
+  ['Bank & card statements', 'bank-statement'],
+  ['QuickBooks transactions', 'payroll-details'],
+] as const satisfies readonly (readonly [string, PayrollDocumentKind])[]
+/**
+ * The payroll zip's folder of the receipts and invoices of the books' bills (owner's decision, 2026-11-12): PDFs or
+ * photos, each matched to the bill it proves on the expenses step. Not payroll proof: it comes back apart, as the
+ * mappings do.
+ */
+export const RECEIPTS_FOLDER = 'Receipts'
+
 /** A line marked on a bank statement page: PDF points from the page's bottom-left corner. */
 export interface StatementMark {
   /** From 1. */

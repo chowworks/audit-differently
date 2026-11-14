@@ -1178,5 +1178,37 @@ describe('WorkspacePayrollService', () => {
       await expect(s.service.setFile(bookkeeper, W, '2026-09', 'd-reg')).rejects.toThrow()
       await expect(s.service.setFile(auditor, W, '2026-09', 'd-reg')).rejects.toThrow(/Not Found/)
     })
+
+    it("downloads as the payroll zip's own folders, receipts in Receipts, to owners only, with one export line", async () => {
+      const s = await setup()
+      s.setDocs.push(
+        onFile('d-reg', { kind: 'payroll-register', fileName: 'register.pdf' }),
+        onFile('d-stub', { kind: 'paystub', sensitivity: 'personal', fileName: 'stub.pdf' }),
+        onFile('d-bank', { kind: 'bank-statement', fileName: 'register.pdf' })
+      )
+      s.prisma.document.findMany
+        .mockImplementationOnce(async () => s.setDocs)
+        .mockResolvedValueOnce([
+          onFile('d-r1', { kind: 'receipt', fileName: 'receipt.pdf' }),
+          onFile('d-r2', { kind: 'invoice', fileName: 'receipt.pdf' }),
+        ])
+      const zip = await s.service.filesZip(owner, W, '2026-09')
+      expect(zip.entries.map(([path]) => path)).toEqual([
+        'Payroll registers/register.pdf',
+        'Pay stubs/stub.pdf',
+        'Bank & card statements/register.pdf',
+        'Receipts/receipt.pdf',
+        'Receipts/receipt (2).pdf',
+      ])
+      await expect((zip.entries[0]![1] as () => Promise<Uint8Array>)()).resolves.toEqual(
+        new Uint8Array(s.bytes)
+      )
+      expect(s.lines.at(-1)).toMatchObject({
+        action: 'export',
+        description: expect.stringContaining('as a zip (5 files)'),
+      })
+      await expect(s.service.filesZip(bookkeeper, W, '2026-09')).rejects.toThrow()
+      await expect(s.service.filesZip(auditor, W, '2026-09')).rejects.toThrow(/Not Found/)
+    })
   })
 })
