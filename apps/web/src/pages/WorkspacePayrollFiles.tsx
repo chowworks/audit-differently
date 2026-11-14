@@ -8,7 +8,7 @@ import {
 } from '@ad/types'
 import { periodLabel, shortDate } from '@/lib/format'
 import { PAYROLL_FOLDERS, type PayrollFolderKind } from '@/lib/zip-files'
-import { FILE_MAX_BYTES, UploadPanel } from '@/components/PayrollProof'
+import { FILE_MAX_BYTES } from '@/components/PayrollProof'
 import { Button, Card, Empty, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
 import { useApi } from '@/hooks/useApi'
 
@@ -49,7 +49,10 @@ export function payrollFolders(
   return [...known, ...others]
 }
 
-/** What an owner can do to the month's set; each starts a change that is checked and then saved. */
+/**
+ * What an owner can do to the month's set here; each starts a change that is checked and then saved. Replacing the whole
+ * set is done only through the match (owner's decision, 2026-11-14: "Re-match with new files").
+ */
 export interface PayrollFilesActions {
   busy: string | null
   /** The server's refusal of the last change started here. */
@@ -57,12 +60,6 @@ export interface PayrollFilesActions {
   /** A change is open below (unsaved): the set is changed again only once it is saved or discarded. */
   changeOpen: boolean
   /** Each answers true once the change is started, so the panel closes. */
-  onReplace: (
-    zip: PayrollUpload,
-    names?: File[],
-    mappings?: File[],
-    receipts?: File[]
-  ) => Promise<boolean>
   onAdd: (files: PayrollUpload) => Promise<boolean>
   onRemove: (f: WorkspacePayrollFileDto) => Promise<boolean>
 }
@@ -223,8 +220,9 @@ function AddFiles({
 }
 
 /**
- * "<Month> payroll files": the month's one set of payroll files (owner's decision, 2026-10-18). Owners replace it all
- * with a zip, add files, or remove one; each is a change checked and saved below. Auditors read the list.
+ * "<Month> payroll files": the month's one set of payroll files (owner's decision, 2026-10-18), with the month's receipts
+ * as one more folder of the same list (owner's decision, 2026-11-14). Owners add files or remove one; each is a change
+ * checked and saved below. Auditors read the list.
  */
 export function PayrollFilesCard({
   period,
@@ -236,19 +234,19 @@ export function PayrollFilesCard({
   first,
   receipts,
 }: {
-  /** The month's receipts, as their own folder after the payroll files. */
+  /** The month's receipts, as one more folder after the payroll files. */
   receipts?: MonthReceipts
   period: string
   files: WorkspacePayrollFilesDto | null
   error: string | null
   /** Owners only. */
   actions?: PayrollFilesActions
-  /** The card's own heading, a line under it, and the action before Replace all. */
+  /** The card's own heading, a line under it, and the actions before Add files. */
   title?: string
   note?: ReactNode
   first?: ReactNode
 }) {
-  const [panel, setPanel] = useState<'replace' | 'add' | null>(null)
+  const [panel, setPanel] = useState<'add' | null>(null)
   const [folder, setFolder] = useState<PayrollFolderKind | undefined>()
   const [shut, setShut] = useState<Set<string>>(new Set())
   const [viewing, setViewing] = useState<WorkspacePayrollFileDto | null>(null)
@@ -292,9 +290,6 @@ export function PayrollFilesCard({
         !panel && (
           <span className="flex flex-wrap gap-2">
             {first}
-            <Button kind={first ? 'ghost' : 'navy'} size="sm" onClick={() => setPanel('replace')}>
-              Replace all
-            </Button>
             <Button kind={first ? 'ghost' : 'primary'} size="sm" onClick={() => addTo()}>
               + Add files
             </Button>
@@ -310,30 +305,6 @@ export function PayrollFilesCard({
             Save or discard the change below before changing the files again.
           </p>
         )}
-        {can && panel === 'replace' && (
-          <div className="grid gap-3">
-            <p className="text-sm">
-              <b>The zip becomes the month&apos;s payroll files.</b> Files not in it leave when you
-              save.
-            </p>
-            <UploadPanel
-              existing={0}
-              busy={actions.busy}
-              maxFiles={MAX_WORKSPACE_PAYROLL_FILES}
-              takesNames
-              kind="navy"
-              action="Upload zip and replace all"
-              onReady={(zip, _replace, names, mappings, receipts) =>
-                void actions.onReplace(zip, names, mappings, receipts).then(done)
-              }
-            />
-            <div className="ad-actions justify-start">
-              <Button kind="ghost" onClick={() => setPanel(null)} disabled={!!actions.busy}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
         {can && panel === 'add' && (
           <AddFiles
             count={list.length}
@@ -345,10 +316,10 @@ export function PayrollFilesCard({
         )}
         {!files && !error ? (
           <Empty>Loading the files…</Empty>
-        ) : list.length === 0 ? (
+        ) : list.length === 0 && !receipts ? (
           <Empty>No payroll files for {periodLabel(period)} yet.</Empty>
         ) : (
-          <ul className="wpc-files wpc-tree" aria-label={`${periodLabel(period)} payroll files`}>
+          <ul className="wpc-files wpc-tree" aria-label={`${periodLabel(period)} files`}>
             {payrollFolders(list).map((g) => {
               const open = !shut.has(g.kind)
               const known = PAYROLL_FOLDERS.some(([, k]) => k === g.kind)
@@ -436,109 +407,107 @@ export function PayrollFilesCard({
                 </li>
               )
             })}
-          </ul>
-        )}
-        {receipts && (
-          <ul className="wpc-files wpc-tree" aria-label={`${periodLabel(period)} receipts`}>
-            <li className="wpc-folder">
-              <div className="wpc-folder-row">
-                <button
-                  type="button"
-                  className="wpc-folder-name"
-                  aria-expanded={!shut.has('receipts')}
-                  disabled={!receipts.list.length}
-                  onClick={() =>
-                    setShut((was) => {
-                      const next = new Set(was)
-                      if (next.has('receipts')) next.delete('receipts')
-                      else next.add('receipts')
-                      return next
-                    })
-                  }
-                >
-                  <span className="wpc-caret" aria-hidden>
-                    {receipts.list.length ? (shut.has('receipts') ? '▸' : '▾') : ''}
-                  </span>
-                  <span className="wpc-folder-icon" aria-hidden />
-                  Receipts
-                  <span className="wpc-count">
-                    {receipts.list.length
-                      ? `${receipts.list.length.toLocaleString('en-US')} ${receipts.list.length === 1 ? 'file' : 'files'}`
-                      : 'empty'}
-                  </span>
-                </button>
-                {receipts.onAdd && (
-                  <label
-                    className={`wpc-add wpc-add-file ${receipts.busy ? 'is-busy' : ''}`}
-                    aria-label="Add receipts"
-                  >
-                    <input
-                      type="file"
-                      multiple
-                      accept=".pdf,.png,.jpg,.jpeg"
-                      disabled={receipts.busy}
-                      onChange={(ev) => {
-                        receipts.onAdd!([...(ev.target.files ?? [])])
-                        ev.target.value = ''
-                      }}
-                    />
-                    {receipts.busy ? 'Reading…' : '+ Add'}
-                  </label>
-                )}
-              </div>
-              {!shut.has('receipts') && receipts.list.length > 0 && (
-                <ul className="wpc-leaves">
-                  {[...receipts.list]
-                    .sort((a, b) =>
-                      a.fileName.localeCompare(b.fileName, 'en', {
-                        numeric: true,
-                        sensitivity: 'base',
+            {receipts && (
+              <li className="wpc-folder">
+                <div className="wpc-folder-row">
+                  <button
+                    type="button"
+                    className="wpc-folder-name"
+                    aria-expanded={!shut.has('receipts')}
+                    disabled={!receipts.list.length}
+                    onClick={() =>
+                      setShut((was) => {
+                        const next = new Set(was)
+                        if (next.has('receipts')) next.delete('receipts')
+                        else next.add('receipts')
+                        return next
                       })
-                    )
-                    .map((r) => (
-                      <li key={r.documentId} className="wpc-leaf">
-                        <span className="wpc-leaf-name" title={r.fileName}>
-                          {r.fileName}
-                        </span>
-                        <span className="wpc-leaf-date">
-                          {r.transactionIds.length
-                            ? `Proves bill ${r.transactionIds.join(', ')}`
-                            : 'Matched to no bill'}
-                        </span>
-                        {/\.pdf$/i.test(r.fileName) && (
+                    }
+                  >
+                    <span className="wpc-caret" aria-hidden>
+                      {receipts.list.length ? (shut.has('receipts') ? '▸' : '▾') : ''}
+                    </span>
+                    <span className="wpc-folder-icon" aria-hidden />
+                    Receipts
+                    <span className="wpc-count">
+                      {receipts.list.length
+                        ? `${receipts.list.length.toLocaleString('en-US')} ${receipts.list.length === 1 ? 'file' : 'files'}`
+                        : 'empty'}
+                    </span>
+                  </button>
+                  {receipts.onAdd && (
+                    <label
+                      className={`wpc-add wpc-add-file ${receipts.busy ? 'is-busy' : ''}`}
+                      aria-label="Add receipts"
+                    >
+                      <input
+                        type="file"
+                        multiple
+                        accept=".pdf,.png,.jpg,.jpeg"
+                        disabled={receipts.busy}
+                        onChange={(ev) => {
+                          receipts.onAdd!([...(ev.target.files ?? [])])
+                          ev.target.value = ''
+                        }}
+                      />
+                      {receipts.busy ? 'Reading…' : '+ Add'}
+                    </label>
+                  )}
+                </div>
+                {!shut.has('receipts') && receipts.list.length > 0 && (
+                  <ul className="wpc-leaves">
+                    {[...receipts.list]
+                      .sort((a, b) =>
+                        a.fileName.localeCompare(b.fileName, 'en', {
+                          numeric: true,
+                          sensitivity: 'base',
+                        })
+                      )
+                      .map((r) => (
+                        <li key={r.documentId} className="wpc-leaf">
+                          <span className="wpc-leaf-name" title={r.fileName}>
+                            {r.fileName}
+                          </span>
+                          <span className="wpc-leaf-date">
+                            {r.transactionIds.length
+                              ? `Proves bill ${r.transactionIds.join(', ')}`
+                              : 'Matched to no bill'}
+                          </span>
+                          {/\.pdf$/i.test(r.fileName) && (
+                            <button
+                              type="button"
+                              className="wpc-open"
+                              aria-label={`View ${r.fileName}`}
+                              onClick={() => setViewingReceipt(r)}
+                            >
+                              view
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="wpc-open"
-                            aria-label={`View ${r.fileName}`}
-                            onClick={() => setViewingReceipt(r)}
+                            aria-label={`Download ${r.fileName}`}
+                            onClick={() => void download(r, receiptUrl(r))}
                           >
-                            view
+                            download
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          className="wpc-open"
-                          aria-label={`Download ${r.fileName}`}
-                          onClick={() => void download(r, receiptUrl(r))}
-                        >
-                          download
-                        </button>
-                        {receipts.onRemove && (
-                          <button
-                            type="button"
-                            className="wpc-remove"
-                            disabled={receipts.busy}
-                            aria-label={`Remove ${r.fileName} from the month's receipts`}
-                            onClick={() => setRemovingReceipt(r)}
-                          >
-                            remove
-                          </button>
-                        )}
-                      </li>
-                    ))}
-                </ul>
-              )}
-            </li>
+                          {receipts.onRemove && (
+                            <button
+                              type="button"
+                              className="wpc-remove"
+                              disabled={receipts.busy}
+                              aria-label={`Remove ${r.fileName} from the month's receipts`}
+                              onClick={() => setRemovingReceipt(r)}
+                            >
+                              remove
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </li>
+            )}
           </ul>
         )}
       </div>

@@ -55,7 +55,6 @@ import {
 import { ACCOUNT_MAPPING_FOLDER, RECEIPTS_FOLDER } from '@/lib/zip-files'
 import {
   BudgetTracking,
-  FileStats,
   PayrollActions,
   ResolveGrid,
   colorsOf,
@@ -188,8 +187,20 @@ export function WorkspacePayrollPage() {
   const programNames = useLoad<ProgramNamesDto>(reader ? `/workspaces/${id}/program-names` : null)
   /** Changes on each save and each reconciliation change, so the engagement cards are read again. */
   const [cardsVersion, setCardsVersion] = useState(0)
-  /** The match on its own: opened from Actions, or a match started from the files card. */
-  const [focus, setFocus] = useState(false)
+  /**
+   * What is open over the month, in the address (`view`), so the browser's Back closes it and stays on the month
+   * instead of leaving for the month chosen before: the match on its own (opened from Actions, or a match started from
+   * the files card), or the steps after payroll (owner's decision, 2026-11-13): Expense matching, opened by payroll's
+   * Save or from the month's page, then Summary, opened by the expenses' Save.
+   */
+  const view = params.get('view')
+  const focus = view === 'match'
+  const flow = view === 'expenses' || view === 'summary' ? view : null
+  /** Opening one from the month adds a step to the browser's history; moving between them or closing replaces it. */
+  const show = (next: 'match' | 'expenses' | 'summary' | null) => {
+    if (!period || next === view) return
+    setParams(next ? { period, view: next } : { period }, { replace: !!view })
+  }
   // A card's Match again: the match below starts it.
   const [again, setAgain] = useState(0)
   const [matchStep, setMatchStep] = useState<'Upload' | 'Match'>('Upload')
@@ -198,11 +209,6 @@ export function WorkspacePayrollPage() {
   /** What Save did, said once over the summary it returns to. */
   const [savedNote, setSavedNote] = useState<string | null>(null)
   const [resolve, setResolve] = useState<ResolveKind | null>(null)
-  /**
-   * The steps after payroll (owner's decision, 2026-11-13): Expense matching, opened by payroll's Save or from the month's
-   * page, then Summary, opened by the expenses' Save.
-   */
-  const [flow, setFlow] = useState<'expenses' | 'summary' | null>(null)
   // Another month starts afresh: no note, filter or "saved just now" carried over from the last one.
   const [shownPeriod, setShownPeriod] = useState(period)
   if (shownPeriod !== period) {
@@ -210,8 +216,6 @@ export function WorkspacePayrollPage() {
     setCardsVersion(0)
     setSavedNote(null)
     setResolve(null)
-    setFocus(false)
-    setFlow(null)
   }
   const d = useCards(id, period ?? '', period ? cardsVersion : 0, !!period)
   if (wStatus === 404 || status === 404 || (w && !reader)) return <NotFoundPage />
@@ -314,7 +318,7 @@ export function WorkspacePayrollPage() {
             type="button"
             className="wpd-back"
             onClick={() => {
-              setFlow(null)
+              show(null)
               window.scrollTo({ top: 0 })
             }}
           >
@@ -331,12 +335,12 @@ export function WorkspacePayrollPage() {
                 ) : undefined
               }
               onDone={() => {
-                setFlow(null)
+                show(null)
                 setSavedNote(null)
                 window.scrollTo({ top: 0 })
               }}
               onSaved={(_, note) => {
-                setFlow('summary')
+                show('summary')
                 setSavedNote(note)
                 setCardsVersion((n) => n + 1)
                 void recon.reload()
@@ -352,16 +356,12 @@ export function WorkspacePayrollPage() {
               cards={d.cards}
               files={shownFiles ? shownFiles.files.length : null}
               onFix={(step) => {
-                if (step === 'expenses') setFlow('expenses')
-                else {
-                  setFlow(null)
-                  setFocus(true)
-                }
+                show(step === 'expenses' ? 'expenses' : 'match')
                 setSavedNote(null)
                 window.scrollTo({ top: 0 })
               }}
               onDone={() => {
-                setFlow(null)
+                show(null)
                 window.scrollTo({ top: 0 })
               }}
             />
@@ -406,7 +406,7 @@ export function WorkspacePayrollPage() {
                 onMatch={
                   owner
                     ? () => {
-                        setFocus(true)
+                        show('match')
                         window.scrollTo({ top: 0 })
                       }
                     : undefined
@@ -422,7 +422,7 @@ export function WorkspacePayrollPage() {
                         rows: expenseActions(shownExpenses),
                         onOpen: () => {
                           setSavedNote(null)
-                          setFlow('expenses')
+                          show('expenses')
                           window.scrollTo({ top: 0 })
                         },
                         onUpload: owner ? (list) => void addReceipts(list) : undefined,
@@ -483,7 +483,7 @@ export function WorkspacePayrollPage() {
                   type="button"
                   className="wpd-back"
                   onClick={() => {
-                    setFocus(false)
+                    show(null)
                     setMatchKey((n) => n + 1)
                   }}
                 >
@@ -495,15 +495,16 @@ export function WorkspacePayrollPage() {
                 compact={saved && !focus}
                 alone={focus}
                 again={again}
-                fileStats={<FileStats files={shownFiles} data={shownRecon} />}
                 receipts={monthReceipts}
                 onOpen={() => {
-                  setFocus(true)
+                  show('match')
                   window.scrollTo({ top: 0 })
                 }}
                 onStep={(st) => {
+                  // Called on every render: only a step that changed opens the match, so the browser's Back closes it.
+                  if (st === matchStep) return
                   setMatchStep(st)
-                  if (st !== 'Upload') setFocus(true)
+                  if (st !== 'Upload') show('match')
                 }}
                 workspaceId={w.id}
                 period={period}
@@ -517,10 +518,9 @@ export function WorkspacePayrollPage() {
                   setCardsVersion((n) => n + 1)
                   void files.reload()
                   // Save goes on to the expenses step; from there, back to the month's summary.
-                  setFocus(false)
                   setMatchKey((n) => n + 1)
                   setSavedNote(`Saved the payroll for ${periodLabel(period)}.`)
-                  setFlow('expenses')
+                  show('expenses')
                   window.scrollTo({ top: 0 })
                 }}
               />
@@ -540,7 +540,8 @@ export function WorkspacePayrollPage() {
 }
 
 /**
- * The month's payroll files and the change to them: Replace all, Add files, Remove a file or Match again, each a run
+ * The month's payroll files and the change to them: Re-match with new files, Add files, Remove a file or Re-match with
+ * same files, each a run
  * that is read, checked and saved. Owners only.
  */
 function WorkspaceMatch({
@@ -555,7 +556,6 @@ function WorkspaceMatch({
   compact = false,
   onStep,
   onOpen,
-  fileStats,
   alone = false,
   again = 0,
   receipts,
@@ -578,10 +578,8 @@ function WorkspaceMatch({
   compact?: boolean
   /** The page shows the match on its own while it runs. */
   onStep?: (step: 'Upload' | 'Match') => void
-  /** Match again on the files card opens the match on its own. */
+  /** Re-match with new files on the files card opens the match on its own. */
   onOpen?: () => void
-  /** What the files hold, one short line on the File Management card. */
-  fileStats?: React.ReactNode
   /** The match open on its own, with nothing else on the page (no files card above it). */
   alone?: boolean
 }) {
@@ -591,6 +589,8 @@ function WorkspaceMatch({
   useEffect(() => onStep?.(step), [step, onStep])
   /** "Read the files with AI", ticked on the Upload step: unticked each time the page opens (#22). */
   const [withAi, setWithAi] = useState(false)
+  /** "Re-match with new files" opened the match: its upload starts with "Replace them" ticked. */
+  const [replaceFirst, setReplaceFirst] = useState(false)
   const payrollAi = usePayrollAi()
   const [run, setRun] = useState<WorkspacePayrollRunDto | null>(null)
   const [progress, setProgress] = useState<PayrollMatchProgress | null>(null)
@@ -901,7 +901,7 @@ function WorkspaceMatch({
   const againAction = hasFiles && (
     <div className="ad-actions justify-start">
       <Button kind="navy" disabled={!!busy} onClick={() => void matchAgain()}>
-        {busy === 'Matching again…' ? busy : 'Match again'}
+        {busy === 'Matching again…' ? busy : 'Re-match with same files'}
       </Button>
       <span className="text-sm text-soft">
         Matches the month&apos;s files again, after a participant or a staff tag was added.
@@ -1179,8 +1179,8 @@ function WorkspaceMatch({
     </HandCard>
   )
 
-  // The files, last on the page, with Match again first: after a list changes, matching the
-  // same files again is the fix, not changing them. Match again opens the match on its own, where its AI choice is.
+  // The files, last on the page, with the two re-matches first (owner's decision, 2026-11-14): after a list changes,
+  // matching the same files again is the fix; new files replace the set only through the match, never on their own.
   if (compact && step === 'Upload' && hasFiles && !run)
     return (
       <PayrollFilesCard
@@ -1188,30 +1188,41 @@ function WorkspaceMatch({
         files={files}
         error={filesError}
         receipts={receipts}
-        title={`File Management (${files!.files.length} saved)`}
+        title="File Management"
         note={
           <>
             <ErrorNote message={runError} />
             {expenseWarning && <Notice tone="warn">{expenseWarning}</Notice>}
-            {fileStats}
             <p className="text-sm">
-              <b>Added a participant or tagged staff since?</b> Match again: it reads these same
-              files with the lists as they are now. Replace or add files only when one is wrong or
-              missing.
+              <b>Added a participant or tagged staff since?</b> Re-match with same files: it reads
+              these files with the lists as they are now. Re-match with new files only when the
+              month&apos;s zip changed.
             </p>
+            {aiBox}
           </>
         }
         first={
-          <Button kind="navy" size="sm" disabled={!!busy} onClick={onOpen}>
-            Match again
-          </Button>
+          <>
+            <Button kind="navy" size="sm" disabled={!!busy} onClick={() => void matchAgain()}>
+              {busy === 'Matching again…' ? busy : 'Re-match with same files'}
+            </Button>
+            <Button
+              kind="navy"
+              size="sm"
+              disabled={!!busy}
+              onClick={() => {
+                setReplaceFirst(true)
+                onOpen?.()
+              }}
+            >
+              Re-match with new files
+            </Button>
+          </>
         }
         actions={{
           busy,
           error: fileError,
           changeOpen: !!run,
-          onReplace: (zip, names, mappings, receipts) =>
-            upload('replace', zip, 'files', names, mappings, receipts),
           onAdd: (added) => upload('add', added, 'files'),
           onRemove: removeFile,
         }}
@@ -1230,8 +1241,6 @@ function WorkspaceMatch({
             busy,
             error: fileError,
             changeOpen: !!run,
-            onReplace: (zip, names, mappings, receipts) =>
-              upload('replace', zip, 'files', names, mappings, receipts),
             onAdd: (added) => upload('add', added, 'files'),
             onRemove: removeFile,
           }}
@@ -1289,6 +1298,7 @@ function WorkspaceMatch({
               // files with, or Skip to match the saved files again.
               <UploadPanel
                 existing={files!.files.length}
+                replaceFirst={replaceFirst}
                 busy={busy}
                 maxFiles={MAX_WORKSPACE_PAYROLL_FILES}
                 takesNames
