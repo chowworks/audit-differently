@@ -282,17 +282,41 @@ export function PayrollFilesCard({
   }
   const can = !!actions && !!files?.can.change && !actions.changeOpen
   const done = (ok: boolean) => ok && setPanel(null)
+  /** Every file here as one zip, in the payroll zip's own folders, to match again as it is. */
+  const [zipping, setZipping] = useState(false)
+  const anyFile = list.length > 0 || (receipts?.list.length ?? 0) > 0
+  const downloadZip = async () => {
+    setFileError(null)
+    setZipping(true)
+    try {
+      await api.download(
+        `/workspaces/${files!.workspaceId}/payroll/${period}/files.zip`,
+        `${period} files.zip`
+      )
+    } catch (e) {
+      setFileError(`The zip could not be downloaded: ${(e as Error).message}`)
+    } finally {
+      setZipping(false)
+    }
+  }
   return (
     <Card
       title={title ?? `${periodLabel(period)} payroll files`}
       aside={
-        can &&
-        !panel && (
+        !panel &&
+        (can || (!!files && anyFile)) && (
           <span className="flex flex-wrap gap-2">
-            {first}
-            <Button kind={first ? 'ghost' : 'primary'} size="sm" onClick={() => addTo()}>
-              + Add files
-            </Button>
+            {can && first}
+            {!!files && anyFile && (
+              <Button kind="ghost" size="sm" disabled={zipping} onClick={() => void downloadZip()}>
+                {zipping ? 'Downloading…' : 'Download zip'}
+              </Button>
+            )}
+            {can && (
+              <Button kind={first ? 'ghost' : 'primary'} size="sm" onClick={() => addTo()}>
+                + Add files
+              </Button>
+            )}
           </span>
         )
       }

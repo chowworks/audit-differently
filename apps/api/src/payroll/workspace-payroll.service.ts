@@ -16,6 +16,8 @@ import {
   MAX_WORKSPACE_PAYROLL_FILES,
   PAY_LINE_FLAGS,
   PAYROLL_DOCUMENT_KINDS,
+  PAYROLL_FOLDERS,
+  RECEIPTS_FOLDER,
   PAYROLL_SLOT_KIND,
   STAFF_REPORT_LINES,
   WEX_REPORT_LINES,
@@ -76,6 +78,8 @@ import { dueDate } from '../checks/rules'
 import { refuseLocked, ReportsService, WEX_FIELDS } from '../reports/reports.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
 import { highlightsFor } from './highlights'
+import type { ZipSource } from '../engagements/zip-stream'
+import { monthReceiptsWhere } from '../expenses/month-receipts'
 import { HighlightSettingsService } from './highlight-settings.service'
 import {
   computeBudgetLines,
@@ -374,6 +378,61 @@ export class WorkspacePayrollService {
       description: `Opened ${describe(doc)} from the workspace's payroll files`,
     })
     return { bytes: new Uint8Array(bytes), contentType: doc.contentType, fileName: doc.fileName }
+  }
+
+  /**
+   * File Management as one zip, in the payroll zip's own layout (owner's decision, 2026-11-14): the month's set in
+   * its folders (Timesheets, Payroll registers, Pay stubs, Bank & card statements, QuickBooks transactions) and its
+   * receipts in Receipts, each file as it was uploaded, so it can be matched again as it is. Owners only, like the
+   * page; one export line. A name used twice in a folder gets " (2)".
+   */
+  async filesZip(
+    caller: Caller,
+    workspaceId: string,
+    period: unknown
+  ): Promise<{ name: string; entries: [string, ZipSource][] }> {
+    this.reader(caller, workspaceId)
+    const p = this.period(period)
+    const [set, receipts, workspace] = await Promise.all([
+      this.setOf(workspaceId, p),
+      this.prisma.document.findMany({
+        where: monthReceiptsWhere(workspaceId, p),
+        orderBy: [{ fileName: 'asc' }, { id: 'asc' }],
+      }),
+      this.prisma.workspace.findFirst({ where: { id: workspaceId }, select: { name: true } }),
+    ])
+    const readable = set.filter(
+      (d) =>
+        d.sensitivity !== 'personal' ||
+        workspaceRole(caller, workspaceId, [...personalRolesFor(d.kind)] as Role[])
+    )
+    const taken = new Set<string>()
+    const pathOf = (folder: string, fileName: string) => {
+      const dot = fileName.lastIndexOf('.')
+      const [stem, ext] = dot > 0 ? [fileName.slice(0, dot), fileName.slice(dot)] : [fileName, '']
+      let path = `${folder}/${fileName}`
+      for (let n = 2; taken.has(path.toLowerCase()); n++) path = `${folder}/${stem} (${n})${ext}`
+      taken.add(path.toLowerCase())
+      return path
+    }
+    const entry = (folder: string, d: Document): [string, ZipSource] => [
+      pathOf(folder, d.fileName.replace(/[\\/]/g, '-')),
+      async () => new Uint8Array(await this.storage.read(d.storageKey)),
+    ]
+    const entries = [
+      ...PAYROLL_FOLDERS.flatMap(([folder, kind]) =>
+        readable.filter((d) => d.kind === kind).map((d) => entry(folder, d))
+      ),
+      ...receipts.filter((d) => keyInWorkspace(d)).map((d) => entry(RECEIPTS_FOLDER, d)),
+    ]
+    await this.log.log(caller, {
+      workspaceId,
+      resource: 'export',
+      action: 'export',
+      description: `Downloaded File Management for ${monthName(p)} as a zip (${howMany(entries.length, 'file')})`,
+    })
+    const title = (workspace?.name ?? 'Workspace').replace(/[^\w .&-]/g, '').trim()
+    return { name: `${title} ${p} files.zip`, entries }
   }
 
   /**

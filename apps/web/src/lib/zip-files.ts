@@ -1,4 +1,5 @@
 import { unzip, unzipSync } from 'fflate'
+import { PAYROLL_FOLDERS, RECEIPTS_FOLDER } from '@ad/types'
 
 /** What an upload accepts, by extension, and the type the browser gives each when it comes out of a zip. */
 export const UPLOAD_TYPES: Record<string, string> = {
@@ -87,14 +88,8 @@ export function filesFromZip(zip: File): Promise<{ files: ZippedFile[]; skipped:
   )
 }
 
-/** The payroll zip's folders, as the sample has them, and the document type each holds. */
-export const PAYROLL_FOLDERS = [
-  ['Timesheets', 'timesheet'],
-  ['Payroll registers', 'payroll-register'],
-  ['Pay stubs', 'paystub'],
-  ['Bank & card statements', 'bank-statement'],
-  ['QuickBooks transactions', 'payroll-details'],
-] as const
+// The payroll zip's folders and its Receipts folder are in @ad/types: File Management's download writes the same zip.
+export { PAYROLL_FOLDERS, RECEIPTS_FOLDER }
 export type PayrollFolderKind = (typeof PAYROLL_FOLDERS)[number][1]
 /**
  * The folders a zip may leave out: the payroll company's per-person export (GitHub issue #22, section 8), and pay stubs
@@ -109,11 +104,6 @@ export const PROGRAM_NAMES_FOLDER = 'Program names'
  */
 export const ACCOUNT_MAPPING_FOLDER = 'Account mapping'
 const ACCOUNT_MAPPING_NAMES = [ACCOUNT_MAPPING_FOLDER, 'Account mappings']
-/**
- * The folder of the receipts and invoices of the books' bills (owner's decision, 2026-11-12): PDFs or photos, each
- * matched to the bill it proves on the expenses step. Not payroll proof: it comes back apart, as the mappings do.
- */
-export const RECEIPTS_FOLDER = 'Receipts'
 const RECEIPTS_NAMES = [RECEIPTS_FOLDER, 'Invoices', 'Receipts and invoices']
 const RECEIPT_EXTS = new Set(['pdf', 'png', 'jpg', 'jpeg'])
 /**
