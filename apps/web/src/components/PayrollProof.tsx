@@ -16,6 +16,7 @@ import {
   type PayrollMatchProgress,
   type PayrollMatchRunDto,
   type PayrollSlot,
+  type ReceiptUploadResult,
   type ReportDetail,
   type StatementMark,
 } from '@ad/types'
@@ -36,6 +37,7 @@ import './match-pairs.css'
 import { money, payPeriodWords, periodLabel, shortDate } from '@/lib/format'
 import { DocumentLink } from '@/components/DocumentLink'
 import {
+  BulkBar,
   MatchFooter,
   ProofFoot,
   ProvedCount,
@@ -256,6 +258,7 @@ export function PayrollProof({
     }
     setRun(null)
     setPicks({})
+    setConfirmed(new Set())
     setProgress(null)
     setPollError(null)
     setStep('Upload')
@@ -276,7 +279,8 @@ export function PayrollProof({
   const workspaceFiles = r.payrollDocuments.length - ownFiles
   const items: PayrollItem[] = [
     ...r.expenses
-      .filter((e) => isPayrollLine(e))
+      // A books' payroll transaction the match covers shows in the reconciliation only, as on the owner's match.
+      .filter((e) => isPayrollLine(e) && e.counts)
       .map((e) => ({
         target: 'expense' as const,
         kind: 'staff' as const,
@@ -318,6 +322,9 @@ export function PayrollProof({
     0
   )
   const [picks, setPicks] = useState<Record<string, Partial<Record<PayrollSlot, string>>>>({})
+  /** Best guesses the person confirmed (owner's decision, 2026-11-14, as on the owner's match): only these are saved. */
+  const [confirmed, setConfirmed] = useState<Set<string>>(new Set())
+  const slotId = (item: PayrollItem, slot: PayrollSlot) => `${keyOf(item)}-${slot}`
   const pick = (item: PayrollItem, slot: PayrollSlot) =>
     picks[keyOf(item)]?.[slot] ?? (has(item, slot) ? '' : (matchOf(item, slot)?.pick ?? ''))
   const setPick = (item: PayrollItem, slot: PayrollSlot, v: string) =>
@@ -328,6 +335,11 @@ export function PayrollProof({
     fileId: string
   ): PayrollCandidate | undefined =>
     matchOf(item, slot)?.candidates.find((c) => c.fileId === fileId)
+  // Auto-Match's own pick that is a guess, not chosen by hand and not confirmed: not saved.
+  const unsure = (item: PayrollItem, slot: PayrollSlot, fileId: string) =>
+    !picks[keyOf(item)]?.[slot] &&
+    !candidate(item, slot, fileId)?.sure &&
+    !confirmed.has(slotId(item, slot))
   // The files a slot may take: a staff line only what its own people's rows prove, as on the owner's match (the
   // server offers nothing else); a participant's pay any file of the kind.
   const offered = (item: PayrollItem, slot: PayrollSlot) => {
@@ -353,6 +365,8 @@ export function PayrollProof({
     })
   }
   const [search, setSearch] = useState('')
+  // What the zip's Receipts folder did: added and matched, and any left out.
+  const [receiptsLeft, setReceiptsLeft] = useState<string | null>(null)
   const [chosen, setChosen] = useState<Set<string>>(new Set())
   const [bulk, setBulk] = useState<{ timesheet: string; register: string }>({
     timesheet: '',
@@ -379,7 +393,7 @@ export function PayrollProof({
       if (!v || noLine(i, slot, v)) return false
       const auto = !picks[keyOf(i)]?.[slot]
       const m = matchOf(i, slot)
-      return !auto || (!!candidate(i, slot, v)?.sure && !m?.twoProofs)
+      return !auto || (!unsure(i, slot, v) && !m?.twoProofs)
     })
   ).length
   const q = search.trim().toLowerCase()
@@ -390,7 +404,12 @@ export function PayrollProof({
   const toSave = items.flatMap((item) =>
     slotsOf(item)
       .filter(
-        (slot) => !has(item, slot) && pick(item, slot) && !noLine(item, slot, pick(item, slot))
+        (slot) =>
+          !has(item, slot) &&
+          pick(item, slot) &&
+          !noLine(item, slot, pick(item, slot)) &&
+          // A best guess is saved only once confirmed, as on the owner's match.
+          !unsure(item, slot, pick(item, slot))
       )
       .map((slot) => {
         return { target: item.target, id: item.id, slot, fileId: pick(item, slot) }
@@ -407,6 +426,15 @@ export function PayrollProof({
         )
       })
       .map((slot) => ({ key: `${keyOf(item)}-${slot}`, title: item.title, slot }))
+  )
+  const guesses = items.reduce(
+    (n, item) =>
+      n +
+      slotsOf(item).filter((slot) => {
+        const v = pick(item, slot)
+        return !has(item, slot) && !!v && !noLine(item, slot, v) && unsure(item, slot, v)
+      }).length,
+    0
   )
   const saveWords = run && (
     <section aria-label="What Save will do">
@@ -429,6 +457,14 @@ export function PayrollProof({
           </b>
           , each with its line highlighted.
         </li>
+        {guesses > 0 && (
+          <li>
+            <b>
+              {guesses} best {guesses === 1 ? 'guess' : 'guesses'} not saved
+            </b>{' '}
+            until you press Confirm or choose the file.
+          </li>
+        )}
         {twoFiles.length > 0 && (
           <li>
             <b>⚠️ Two different files as one proof</b> (both are kept):
@@ -447,13 +483,19 @@ export function PayrollProof({
   )
 
   /** Start a run (with the zip's files, or none to match what is already on file) and send the files, 20 at a time. */
-  const startRun = async (zip: { file: File; kind: PayrollFolderKind }[], replace: boolean) => {
+  const startRun = async (
+    zip: { file: File; kind: PayrollFolderKind }[],
+    replace: boolean,
+    receipts: File[] = []
+  ) => {
     setRunError(null)
     setPollError(null)
     setDiscardError(null)
     setProgress(null)
+    setReceiptsLeft(null)
     setReading('Starting…')
     try {
+      if (receipts.length) await addReceipts(receipts)
       let current = await api.post<PayrollMatchRunDto>(`/reports/${r.id}/payroll-match`, {
         replace,
       })
@@ -469,12 +511,64 @@ export function PayrollProof({
       }
       setRun(current)
       setPicks({})
+      setConfirmed(new Set())
       setStep('Payroll matching')
     } catch (e) {
       setRunError((e as Error).message)
     } finally {
       setReading(null)
     }
+  }
+
+  /**
+   * The zip's Receipts folder (owner's decision, 2026-11-14: a bookkeeper adds their engagement's receipts): filed on
+   * this month and matched to its expenses at once, as Match receipts does, before the payroll files go up. They never
+   * stop the payroll files: a receipt that is too large or refused is left out, by name, in a warning.
+   */
+  const addReceipts = async (list: File[]) => {
+    const left: string[] = [...(oversizeExpenseFiles([], list) ?? [])]
+    const fit = list.filter((f) => f.size <= RECEIPT_MAX_BYTES)
+    const url = `/reports/${r.id}/receipts`
+    let added = 0
+    let matched = 0
+    let skipped = 0
+    let report: ReportDetail | null = null
+    const send = async (batch: File[]) => {
+      const form = new FormData()
+      for (const f of batch) form.append('files', f)
+      const out = await api.upload<ReceiptUploadResult>(url, form)
+      added += out.uploaded
+      matched += out.matched
+      skipped += out.skipped
+      report = out.report
+    }
+    for (let at = 0; at < fit.length; at += BATCH) {
+      const batch = fit.slice(at, at + BATCH)
+      setReading(`Reading receipts ${at + 1}–${at + batch.length} of ${fit.length}…`)
+      try {
+        await send(batch)
+      } catch {
+        // One refused receipt refuses its batch: each sent on its own, so only the one at fault is left out.
+        for (const f of batch)
+          try {
+            await send([f])
+          } catch (e) {
+            left.push(`${RECEIPTS_FOLDER}/${f.name} (${(e as Error).message})`)
+          }
+      }
+    }
+    if (report) onChange(report)
+    setReceiptsLeft(
+      [
+        added &&
+          `Added ${added} ${added === 1 ? 'receipt' : 'receipts'} to this month's expenses, ${matched} matched.`,
+        skipped &&
+          `${skipped} ${skipped === 1 ? 'receipt was' : 'receipts were'} already on this month, not added again.`,
+        left.length && `Left out, the payroll files went up all the same: ${left.join('; ')}.`,
+      ]
+        .filter(Boolean)
+        .join(' ') || null
+    )
   }
 
   /** Save, all at once on the server: the staged files are filed, every match is linked with its line, and (for a run
@@ -503,6 +597,7 @@ export function PayrollProof({
       )
       setRun(null)
       setPicks({})
+      setConfirmed(new Set())
       setProgress(null)
       setChosen(new Set())
       return true
@@ -601,7 +696,7 @@ export function PayrollProof({
       ? 'missing'
       : noLine(item, slot, value)
         ? 'noline'
-        : (auto && !c?.sure) || (auto && matchOf(item, slot)?.twoProofs)
+        : (auto && unsure(item, slot, value)) || (auto && matchOf(item, slot)?.twoProofs)
           ? 'guess'
           : 'ok'
     return (
@@ -639,10 +734,20 @@ export function PayrollProof({
                     ? '⚠️ ⚡ Best guess: check it'
                     : files.find((d) => d.id === value)?.status === 'failed'
                       ? '✓ Chosen: no text found, check it by eye'
-                      : `✓ ${auto ? `${c?.ai ? '✨ Found by AI' : '⚡ Found'}${c?.mark ? `, page ${c.mark.page}` : ''}` : 'Chosen'}`
+                      : `✓ ${auto ? (confirmed.has(slotId(item, slot)) ? 'Confirmed' : `${c?.ai ? '✨ Found by AI' : '⚡ Found'}${c?.mark ? `, page ${c.mark.page}` : ''}`) : 'Chosen'}`
           }
           onShow={value && (c?.marks.length || c?.mark) ? () => show(item, slot, value) : undefined}
-        />
+        >
+          {state === 'guess' && auto && unsure(item, slot, value) && (
+            <button
+              type="button"
+              className="ad-match-show"
+              onClick={() => setConfirmed((x) => new Set(x).add(slotId(item, slot)))}
+            >
+              Confirm
+            </button>
+          )}
+        </ProofFoot>
       </>
     )
   }
@@ -757,7 +862,10 @@ export function PayrollProof({
                 existing={ownFiles}
                 workspaceFiles={workspaceFiles}
                 busy={reading}
-                onReady={(zip, replace) => void startRun(zip, replace)}
+                takesReceipts
+                onReady={(zip, replace, _names, _mappings, receipts) =>
+                  void startRun(zip, replace, receipts)
+                }
                 onSkip={r.payrollDocuments.length ? () => void startRun([], false) : undefined}
               />
             </>
@@ -775,6 +883,9 @@ export function PayrollProof({
       {step === 'Payroll matching' && !waiting && !pollError && !atAi && run && (
         <>
           {ai.error && <AiReadingNote progress={null} error={ai.error} />}
+          {receiptsLeft && (
+            <Notice tone={receiptsLeft.includes('Left out') ? 'warn' : 'ok'}>{receiptsLeft}</Notice>
+          )}
           <LineCapNotes files={run.files.filter((f) => f.overLineCap)} />
           {aiOnFile > 0 && (
             <p className="text-sm">
@@ -798,87 +909,46 @@ export function PayrollProof({
           ) : (
             <RemainingSection count={openItems.length}>
               {r.can.edit && (
-                <div className="ad-bulkbar">
-                  <label className="ad-search">
-                    <svg
-                      className="ad-search-icon"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      aria-hidden="true"
-                    >
-                      <circle cx="10.5" cy="10.5" r="6.5" />
-                      <path d="M15.5 15.5 21 21" />
-                    </svg>
-                    <input
-                      type="search"
-                      placeholder="Search name, item or amount"
-                      aria-label="Search the payroll items"
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                    />
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={allShown}
-                      onChange={(e) => {
-                        const next = new Set(chosen)
-                        for (const i of shown)
-                          if (e.target.checked) next.add(keyOf(i))
-                          else next.delete(keyOf(i))
-                        setChosen(next)
-                      }}
-                    />
-                    {q ? `Select all ${shown.length} found` : 'Select all'}
-                  </label>
-                  {(['timesheet', 'register'] as const).map((slot) => (
-                    <select
-                      key={slot}
-                      className={inputClass}
-                      aria-label={`${slot} for the selected items`}
-                      value={bulk[slot]}
-                      onChange={(e) => setBulk({ ...bulk, [slot]: e.target.value })}
-                    >
-                      <option value="">{slot === 'timesheet' ? 'Timesheet…' : 'Register…'}</option>
-                      {files
-                        .filter((d) => d.kind === PAYROLL_SLOT_KIND[slot])
-                        .map((d) => (
-                          <option key={d.id} value={d.id}>
-                            {d.fileName}
-                          </option>
-                        ))}
-                    </select>
-                  ))}
-                  <Button
-                    kind="navy"
-                    size="sm"
-                    disabled={!chosen.size || (!bulk.timesheet && !bulk.register)}
-                    onClick={() => {
-                      const next = { ...picks }
-                      for (const i of items)
-                        if (chosen.has(keyOf(i)))
-                          next[keyOf(i)] = {
-                            ...next[keyOf(i)],
-                            ...(bulk.timesheet &&
-                            !has(i, 'timesheet') &&
-                            offered(i, 'timesheet').some((d) => d.id === bulk.timesheet)
-                              ? { timesheet: bulk.timesheet }
-                              : {}),
-                            ...(bulk.register &&
-                            !has(i, 'register') &&
-                            offered(i, 'register').some((d) => d.id === bulk.register)
-                              ? { register: bulk.register }
-                              : {}),
-                          }
-                      setPicks(next)
-                      setChosen(new Set())
-                    }}
-                  >
-                    Set for selected
-                  </Button>
-                </div>
+                <BulkBar
+                  search={search}
+                  onSearch={setSearch}
+                  allShown={allShown}
+                  found={shown.length}
+                  onSelectAll={(all) => {
+                    const next = new Set(chosen)
+                    for (const i of shown)
+                      if (all) next.add(keyOf(i))
+                      else next.delete(keyOf(i))
+                    setChosen(next)
+                  }}
+                  files={{
+                    timesheet: files.filter((d) => d.kind === PAYROLL_SLOT_KIND.timesheet),
+                    register: files.filter((d) => d.kind === PAYROLL_SLOT_KIND.register),
+                  }}
+                  bulk={bulk}
+                  onBulk={setBulk}
+                  chosen={chosen.size}
+                  onSet={() => {
+                    const next = { ...picks }
+                    for (const i of items)
+                      if (chosen.has(keyOf(i)))
+                        next[keyOf(i)] = {
+                          ...next[keyOf(i)],
+                          ...(bulk.timesheet &&
+                          !has(i, 'timesheet') &&
+                          offered(i, 'timesheet').some((d) => d.id === bulk.timesheet)
+                            ? { timesheet: bulk.timesheet }
+                            : {}),
+                          ...(bulk.register &&
+                          !has(i, 'register') &&
+                          offered(i, 'register').some((d) => d.id === bulk.register)
+                            ? { register: bulk.register }
+                            : {}),
+                        }
+                    setPicks(next)
+                    setChosen(new Set())
+                  }}
+                />
               )}
               <div className="ad-tablewrap">
                 <table className="ad-table">
@@ -1207,7 +1277,10 @@ export function UploadPanel({
   action = 'Upload zip and match',
   kind = 'primary',
   takesNames = false,
+  takesReceipts = takesNames,
 }: {
+  /** Whether this screen files a Receipts folder (both match screens; a bookkeeper's on their own month). */
+  takesReceipts?: boolean
   /**
    * Whether this screen reads a Program names folder (the owner's workspace match); elsewhere the zip's names files are
    * said to be read there, and are not sent.
@@ -1253,7 +1326,10 @@ export function UploadPanel({
   const [tooBig, setTooBig] = useState<string | null>(null)
   const [replace, setReplace] = useState(replaceFirst)
   // The folders this screen reads: the workspace's own (program names, account mappings, receipts) only an owner's does.
-  const read = ZIP_FOLDER_LIST.filter((f) => takesNames || f.holds === 'payroll-proof')
+  const read = ZIP_FOLDER_LIST.filter(
+    (f) =>
+      takesNames || f.holds === 'payroll-proof' || (takesReceipts && f.name === RECEIPTS_FOLDER)
+  )
   const choose = async (zip: File | undefined) => {
     setFiles([])
     setNames([])
@@ -1365,7 +1441,7 @@ export function UploadPanel({
                 <span className="ad-tile-note">{mappings.length === 1 ? 'file' : 'files'}</span>
               </div>
             )}
-            {receipts.length > 0 && takesNames && (
+            {receipts.length > 0 && takesReceipts && (
               <div className="ad-tile ad-tile-ok">
                 <span className="ad-tile-label">{RECEIPTS_FOLDER}</span>
                 <span className="ad-tile-value">{receipts.length}</span>
@@ -1373,9 +1449,12 @@ export function UploadPanel({
               </div>
             )}
           </div>
-          {takesNames &&
+          {(takesNames || takesReceipts) &&
             (() => {
-              const big = oversizeExpenseFiles(mappings, receipts)
+              const big = oversizeExpenseFiles(
+                takesNames ? mappings : [],
+                takesReceipts ? receipts : []
+              )
               return big ? (
                 <Notice tone="warn">
                   Too large to read, left out (the payroll files still go up): {big.join(', ')}.
@@ -1389,7 +1468,7 @@ export function UploadPanel({
                 [
                   [PROGRAM_NAMES_FOLDER, names.length],
                   [ACCOUNT_MAPPING_FOLDER, mappings.length],
-                  [RECEIPTS_FOLDER, receipts.length],
+                  [RECEIPTS_FOLDER, takesReceipts ? 0 : receipts.length],
                 ] as const
               ).filter(([, n]) => n > 0)
               if (!left.length) return null
@@ -1439,7 +1518,7 @@ export function UploadPanel({
               replace,
               takesNames ? names : [],
               takesNames ? mappings : [],
-              takesNames ? receipts : []
+              takesReceipts ? receipts : []
             )
           }
           disabled={!files.length || problems.length > 0 || !!tooBig || !!busy}

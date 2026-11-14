@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import type { Prisma } from '@prisma/client'
 import {
@@ -181,6 +182,8 @@ export class PayrollMatchService {
             ? [{ engagementId: null }]
             : [{ engagementId: r.engagementId }, { engagementId: null }],
           ...tenantWhere(caller),
+          // The run's own workspace: a member of two workspaces sees both workspaces' files.
+          workspaceId: run.workspaceId!,
         },
         orderBy: { uploadedAt: 'asc' },
         take: MAX_RUN_FILES,
@@ -270,8 +273,16 @@ export class PayrollMatchService {
       throw new BadRequestException(
         'Say for each file whether it is a timesheet, a payroll register, a pay stub or a bank statement'
       )
+    // A file already on the run (the same bytes, the month's Month End Close copy included) is skipped, as the
+    // owner's match skips a file sent again.
+    const have = new Set(run.files.map((f) => f.sha256))
     const staged = []
-    for (const [i, f] of files.entries())
+    for (const [i, f] of files.entries()) {
+      const sha = Buffer.isBuffer(f?.buffer)
+        ? createHash('sha256').update(f.buffer).digest('hex')
+        : ''
+      if (sha && have.has(sha)) continue
+      have.add(sha)
       staged.push(
         await this.documents.stage(caller, f, {
           workspaceId: r.workspaceId!,
@@ -280,6 +291,7 @@ export class PayrollMatchService {
           kind: list[i] as PayrollDocumentKind,
         })
       )
+    }
     for (const s of staged)
       await s.commit(() =>
         this.prisma.payrollMatchFile.create({

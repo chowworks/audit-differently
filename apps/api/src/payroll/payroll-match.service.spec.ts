@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { DEFAULT_HIGHLIGHTS, DEFAULT_PAYROLL_READING } from '@ad/types'
 import { MatchStatsService } from '../core/match-stats.service'
@@ -424,6 +425,8 @@ describe('PayrollMatchService', () => {
       expect(s.prisma.document.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
+            // The run's own workspace, never every workspace the caller belongs to.
+            workspaceId: expect.any(String),
             OR: [{ engagementId: 'e-1' }, { engagementId: null }],
           }),
         })
@@ -450,6 +453,35 @@ describe('PayrollMatchService', () => {
       const s = await setup({ replace: true, status: 'waiting' })
       await expect(s.service.save(caller, 'run-1', { links: [link] })).rejects.toThrow()
       expect(s.documents.removeReplaced).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Adding files', () => {
+    it("skips a file already on the run (the same bytes), as the owner's match does", async () => {
+      const s = await setup()
+      const run = await s.prisma.payrollMatchRun.findFirst()
+      const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
+      const again = Buffer.from('%PDF-1.7 already here')
+      const fresh = Buffer.from('%PDF-1.7 new')
+      run.files[0].sha256 = sha(again)
+      const stage = jest.fn(async (_c: unknown, f: { originalname: string }) => ({
+        data: { fileName: f.originalname, kind: 'paystub', sensitivity: 'personal' },
+        commit: async (write: () => Promise<unknown>) => write(),
+      }))
+      const create = jest.fn()
+      ;(s.service as unknown as { documents: unknown }).documents = { stage }
+      ;(s.service as unknown as { worker: unknown }).worker = { kick: jest.fn() }
+      ;(s.prisma as unknown as { payrollMatchFile: unknown }).payrollMatchFile = { create }
+      const upload = (name: string, buffer: Buffer) =>
+        ({ originalname: name, buffer, mimetype: 'application/pdf', size: buffer.length }) as never
+      await s.service.add(
+        caller,
+        'run-1',
+        [upload('stub again.pdf', again), upload('stub new.pdf', fresh)],
+        ['paystub', 'paystub']
+      )
+      expect(stage.mock.calls.map((c) => c[1].originalname)).toEqual(['stub new.pdf'])
+      expect(create).toHaveBeenCalledTimes(1)
     })
   })
 

@@ -469,7 +469,12 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
   2026-11-14): the wizard's slots are worked out by the owner's rules for its one month (`month-plan.ts`: `planMatch`,
   so a staff line takes only its tagged people's rows, then Auto-Match's sure pick), it reads the month's workspace
   files beside the engagement's own (replacing removes only the engagement's), both count an item complete as Payroll &
-  Proof does, and both flag two files that disagree.
+  Proof does, both skip a file already on the upload (same sha256), both file a zip's Receipts folder (the wizard on its
+  own month, `POST /reports/:id/receipts`; owner's decision, 2026-11-14), both flag two files that disagree, and both save a best guess only once it is confirmed (Confirm beside
+  it, or the file chosen by hand; owner's decision, 2026-11-14), and both put a search and Set for selected above
+  Remaining to match (`BulkBar`). Both end with Unmatched payments (owner's decision, 2026-11-14):
+  each staff line with no bank line, found on the statement or drawn by hand (`FindLineModal`, the month's workspace
+  statements included); the owner's steps are Upload / Payroll matching / Unmatched payments / Expense matching / Summary.
 
 Keep the words short: one bold line that says the point, then steps as a list, never a paragraph that wraps three
 times. Look at it in the browser at the width it will be used before showing it to the owner.

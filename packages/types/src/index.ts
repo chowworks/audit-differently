@@ -1345,6 +1345,8 @@ export interface ReceiptInput {
 /** What a bulk upload of receipts did, and the month as it now stands. */
 export interface ReceiptUploadResult {
   uploaded: number
+  /** Already on the month (the same contents): not kept twice. */
+  skipped: number
   matched: number
   report: ReportDetail
 }

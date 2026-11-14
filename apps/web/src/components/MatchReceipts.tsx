@@ -310,7 +310,7 @@ export function MatchReceipts({
             setUploading(false)
             onChange(result.report)
             onNotice(
-              `Uploaded ${result.uploaded} receipt${result.uploaded === 1 ? '' : 's'}; ${result.matched} matched automatically.`
+              `Uploaded ${result.uploaded} receipt${result.uploaded === 1 ? '' : 's'}; ${result.matched} matched automatically.${result.skipped ? ` ${result.skipped} already on this month, not added again.` : ''}`
             )
           }}
         />

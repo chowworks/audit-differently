@@ -311,6 +311,15 @@ describe('ReceiptsService', () => {
     expect(out.report.matching.suggestions).toEqual([])
   })
 
+  it('skips a receipt the month already has (the same contents), so a zip sent again adds only what is new', async () => {
+    const { s, stored, storage } = setup()
+    await s.upload(bookkeeper, 'r-sep', RECEIPTS.slice(0, 2))
+    const out = await s.upload(bookkeeper, 'r-sep', RECEIPTS)
+    expect(out).toMatchObject({ uploaded: 1, skipped: 2 })
+    expect(stored).toHaveLength(3)
+    expect(storage.upload).toHaveBeenCalledTimes(3)
+  })
+
   it('counts the upload for Matching statistics: counts and sizes only, never a name or an amount', async () => {
     const { s, stats } = setup()
     await s.upload(bookkeeper, 'r-sep', RECEIPTS)
@@ -350,7 +359,18 @@ describe('ReceiptsService', () => {
         Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
         Buffer.alloc(64),
       ])
-      const photo = { originalname: 'photo.png', mimetype: 'image/png', size: 72, buffer: bytes }
+      // Each upload its own photo: a receipt the month already has is not kept twice.
+      const photos = [1, 2, 3].map((n) => ({
+        originalname: 'photo.png',
+        mimetype: 'image/png',
+        size: 73,
+        buffer: Buffer.concat([bytes, Buffer.from([n])]),
+      }))
+      const [photo, photo2, photo3] = photos as [
+        (typeof photos)[0],
+        (typeof photos)[0],
+        (typeof photos)[0],
+      ]
       mockCreate.mockReset()
       mockCreate.mockResolvedValue({
         stop_reason: 'end_turn',
@@ -367,11 +387,11 @@ describe('ReceiptsService', () => {
       expect(mockCreate).not.toHaveBeenCalled()
       expect(stored[0]).toMatchObject({ receiptReadBy: null, receiptAmount: null })
       // Ticked: the model reads it, and the line says so.
-      await s.upload(bookkeeper, 'r-sep', [photo], 'receipt', true)
+      await s.upload(bookkeeper, 'r-sep', [photo2], 'receipt', true)
       expect(mockCreate).toHaveBeenCalledTimes(1)
       expect(stored[1]).toMatchObject({ receiptReadBy: 'ai', receiptAmount: '320.00' })
       // The next upload asks again: unticked, the model is not called, whatever was said before.
-      await s.upload(bookkeeper, 'r-sep', [photo])
+      await s.upload(bookkeeper, 'r-sep', [photo3])
       expect(mockCreate).toHaveBeenCalledTimes(1)
       expect(log.entries.map((e) => e.description).filter((d) => d.startsWith('Uploaded'))).toEqual(
         [

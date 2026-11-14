@@ -358,12 +358,15 @@ export class PayrollService {
     id: string
   ): Promise<PayrollLineSearch & { notSearched: number }> {
     const { r, amount, subject } = await this.item(caller, target, id)
+    // The engagement's own statements and the month's workspace ones (Month End Close), as the match reads them.
     const where = {
-      engagementId: r.engagementId,
+      OR: [{ engagementId: r.engagementId }, { engagementId: null }],
       period: r.period,
       kind: 'bank-statement',
       sensitivity: 'financial',
       ...tenantWhere(caller),
+      // This month's workspace only: a member of two workspaces sees both workspaces' statements.
+      workspaceId: r.workspaceId!,
     }
     const docs = await this.prisma.document.findMany({
       where,
@@ -422,9 +425,11 @@ export class PayrollService {
     if (
       doc.kind !== 'bank-statement' ||
       doc.sensitivity !== 'financial' ||
-      doc.engagementId !== r.engagementId
+      (doc.engagementId !== r.engagementId && doc.engagementId !== null)
     )
-      throw new BadRequestException('Mark the line on a bank statement of this engagement')
+      throw new BadRequestException(
+        'Mark the line on a bank statement of this engagement or of Month End Close'
+      )
     if (doc.period !== r.period)
       throw new BadRequestException(
         `This statement is filed under ${doc.period ? monthName(doc.period) : 'no month'}. Mark the line on a statement of ${monthName(r.period)}`
