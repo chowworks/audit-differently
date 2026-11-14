@@ -89,9 +89,39 @@ const STAFF_ROWS: Row[] = [
   },
 ]
 
+/** The books' expenses (owner's decision, 2026-11-13): what the auditor checks for each cost billed, its bills one by one. */
+const EXPENSE_ROWS: Row[] = [
+  {
+    asks: 'Was the cost real?',
+    evidence: 'Receipt',
+    detail: "The vendor's bill",
+    shows: ['The vendor and the amount', 'The bill date'],
+    match: 'Same amount as the bill in the books',
+    example: "PayFlow's invoice shows $55.20 for September's workers' comp, dated Sep 12.",
+  },
+  {
+    asks: "What is the grant's share?",
+    evidence: 'Allocation',
+    detail: "The books' split",
+    shows: ['The whole cost, in dollars per program', "This program's row"],
+    match: 'Same dollars as the line billed',
+    example:
+      "The books share $515.60 of workers' comp across the programs: $22.15 to the Youth Coding Program.",
+  },
+  {
+    asks: 'Was it paid?',
+    evidence: 'Bank or card line',
+    detail: 'From the bank or card statement',
+    shows: ["The bill's amount", 'Dated near the bill'],
+    match: 'Same amount as the receipt',
+    example: 'The bank paid PayFlow $55.20 on Sep 14.',
+  },
+]
+
 const WHO = {
   participants: { rows: PARTICIPANT_ROWS, title: 'Participants', per: 'each participant payment' },
   staff: { rows: STAFF_ROWS, title: 'Staff', per: 'each staff member charged to the grant' },
+  expenses: { rows: EXPENSE_ROWS, title: 'Expenses', per: 'each expense billed to the grant' },
 }
 
 /** The link at the right of a section's heading, and its popup. */

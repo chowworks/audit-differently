@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { BooksLineDto } from '@ad/types'
 import {
+  byBudgetLine,
   engagementGroups,
+  expenseSummary,
+  lineProof,
+  nothingNew,
+  otherMonthLines,
+  provedCount,
   notOnEngagements,
   paidWords,
   paymentWords,
@@ -228,6 +234,172 @@ describe("the month's expenses from the books, on screen", () => {
         line: { page: 2, text: `09/08   ACH ${'X'.repeat(90)}` },
       })
     ).toBe(`Bank.pdf, page 2: 09/08 ACH ${'X'.repeat(69)}…`)
+  })
+})
+
+describe("the Expense matching step and the Summary (owner's decisions, 2026-11-13)", () => {
+  const bill = (id: string, receipt: boolean, paid: boolean, dropped = false) => ({
+    transactionId: id,
+    date: '2026-09-08',
+    vendor: 'PayPeople',
+    amount: 10,
+    receipt: receipt ? { documentId: `r-${id}`, fileName: `${id}.pdf`, by: 'auto' as const } : null,
+    paidFrom: 'bank' as const,
+    payment: paid
+      ? {
+          documentId: 'st',
+          fileName: 'bank.pdf',
+          card: false,
+          line: { page: 1, x: 0, y: 0, width: 1, height: 1, text: '09/09 PAYPEOPLE 10.00' },
+          by: 'auto' as const,
+        }
+      : null,
+    paymentChoices: [],
+    dropped,
+  })
+  const shared = {
+    allocation: {
+      total: 40,
+      percent: 25,
+      how: 'entry' as const,
+      entryId: '9005',
+      sourceIds: ['1', '2'],
+    },
+    split: {
+      how: 'entry' as const,
+      transactionId: '9005',
+      date: '2026-09-30',
+      account: '63301 Payroll Fees',
+      total: 40,
+      rows: [
+        { className: 'Youth Coding Program', amount: 10, mine: true },
+        { className: 'Adult Bootcamp', amount: 30, mine: false },
+      ],
+      less: [],
+      billed: 10,
+      at: [],
+    },
+  }
+
+  it('proves a line only when every kept bill has its receipt and payment, and a shared cost its split', () => {
+    expect(lineProof(line({ bills: [bill('1', true, true)] })).proved).toBe(true)
+    // Some receipts are not enough: 1 of 2 is not proved.
+    const partial = lineProof(line({ bills: [bill('1', true, true), bill('2', false, true)] }))
+    expect(partial).toMatchObject({ receipts: { have: 1, of: 2 }, proved: false })
+    expect(lineProof(line({ bills: [bill('1', true, false)] })).proved).toBe(false)
+    // A dropped bill is out of the count.
+    expect(
+      lineProof(line({ bills: [bill('1', true, true), bill('2', false, false, true)] })).proved
+    ).toBe(true)
+    // Every bill dropped proves nothing.
+    expect(lineProof(line({ bills: [bill('1', false, false, true)] })).proved).toBe(false)
+    expect(lineProof(line({ ...shared, bills: [bill('1', true, true)] }))).toMatchObject({
+      allocation: 'on-file',
+      proved: true,
+    })
+    expect(
+      lineProof(line({ ...shared, split: null, bills: [bill('1', true, true)] }))
+    ).toMatchObject({ allocation: 'missing', proved: false })
+    expect(lineProof(line({ bills: [bill('1', true, true)] })).allocation).toBe('none')
+  })
+
+  it('counts the billed lines fully proved, and only those', () => {
+    expect(
+      provedCount([
+        line({ key: 'a', bills: [bill('1', true, true)] }),
+        line({ key: 'b', bills: [bill('2', false, true)] }),
+        line({ key: 'c', status: 'not-ours', engagementId: null, bills: [bill('3', true, true)] }),
+      ])
+    ).toEqual({ proved: 1, total: 2 })
+  })
+
+  it('finds billed lines dated in another month than the one open, so the screen says so before Save', () => {
+    const other = otherMonthLines(
+      [
+        line({ key: 'a', date: '2026-09-30' }),
+        line({ key: 'b', date: '2026-09-02' }),
+        line({ key: 'c', date: '2026-10-01' }),
+        line({ key: 'd', date: '2026-09-15', status: 'not-ours', engagementId: null }),
+      ],
+      '2026-10'
+    )
+    expect(other.lines.map((l) => l.key)).toEqual(['b', 'a'])
+    expect(other.months).toEqual(['2026-09'])
+    expect(otherMonthLines([line({ date: '2026-10-01' })], '2026-10').lines).toEqual([])
+  })
+
+  it('groups lines by budget line with their totals', () => {
+    expect(
+      byBudgetLine([
+        line({ key: 'a', amount: 10 }),
+        line({ key: 'b', amount: 5, budgetLineName: 'Fringe Benefits' }),
+        line({ key: 'c', amount: 2.5 }),
+      ]).map((g) => [g.name, g.lines.length, g.total])
+    ).toEqual([
+      ['Indirect Costs', 2, 12.5],
+      ['Fringe Benefits', 1, 5],
+    ])
+  })
+
+  it('says there is nothing new when every billed line is saved as it is and nothing is to be removed', () => {
+    const saved = [line({ key: 'a', saved: 'same' }), line({ key: 'b', saved: 'same' })]
+    expect(nothingNew({ lines: saved, toRemove: [] })).toBe(true)
+    expect(nothingNew({ lines: [...saved, line({ key: 'c' })], toRemove: [] })).toBe(false)
+    expect(
+      nothingNew({
+        lines: saved,
+        toRemove: [{ id: 'x', itemNumber: 'E-1', vendor: 'Old', amount: 1 }],
+      })
+    ).toBe(false)
+    // A month with nothing billed has nothing saved either: not "nothing new".
+    expect(nothingNew({ lines: [], toRemove: [] })).toBe(false)
+  })
+
+  it('adds up what the Summary shows: lines read, billed, bills with receipts and payments, and what is missing', () => {
+    const s = expenseSummary({
+      lines: [
+        line({
+          key: 'a',
+          vendor: 'Maple Properties',
+          amount: 100,
+          bills: [bill('1', false, true)],
+        }),
+        line({
+          key: 'b',
+          vendor: 'PayPeople',
+          amount: 10,
+          ...shared,
+          bills: [bill('2', true, true), bill('3', true, false), bill('4', false, false, true)],
+        }),
+        line({ key: 'c', status: 'not-ours', engagementId: null, amount: 7 }),
+      ],
+      receipts: [
+        {
+          documentId: 'r-x',
+          fileName: 'x.pdf',
+          amount: 5,
+          date: null,
+          vendor: null,
+          transactionIds: [],
+        },
+      ],
+    })
+    expect(s).toMatchObject({
+      linesRead: 3,
+      billed: 2,
+      total: 110,
+      bills: 3,
+      withReceipt: 2,
+      paid: 2,
+      notes: 1,
+      proved: 0,
+      unmatchedReceipts: 1,
+      missingReceipts: ['Maple Properties'],
+      unpaid: 1,
+    })
+    expect(s.engagements).toEqual([
+      { id: 'e-ycp', name: 'Youth Coding Pathway', total: 110, lines: 2, proofShare: 1 / 3 },
+    ])
   })
 })
 

@@ -1095,6 +1095,39 @@ export class ExpensesService {
   }
 
   /**
+   * One of the month's receipts as uploaded, to view on the Expense matching step (owner's decision, 2026-11-13: each
+   * bill's receipt opens from its row, as payroll's proofs do). Owners and auditors. Logged.
+   */
+  async receiptFile(
+    caller: Caller,
+    workspaceId: string,
+    period: unknown,
+    documentId: string
+  ): Promise<{ bytes: Uint8Array; contentType: string; fileName: string }> {
+    this.reader(caller, workspaceId)
+    const p = this.period(period)
+    const doc = await this.prisma.document.findFirst({
+      where: {
+        id: documentId,
+        workspaceId,
+        period: p,
+        sensitivity: 'financial',
+        kind: { in: [...RECEIPT_KINDS] },
+      },
+    })
+    if (!doc || !keyInWorkspace(doc)) throw new NotFoundException()
+    const bytes = await this.storage.read(doc.storageKey)
+    await this.log.log(caller, {
+      workspaceId,
+      resource: 'document',
+      subjectId: doc.id,
+      action: 'read',
+      description: `Opened the receipt ${doc.fileName} from the books' expenses for ${monthName(p)}`,
+    })
+    return { bytes: new Uint8Array(bytes), contentType: doc.contentType, fileName: doc.fileName }
+  }
+
+  /**
    * An owner's word on one bill's payment: the line of the month's statements that paid it (one of the bill's
    * choices), or null to match it again. A dropped bill has none.
    */
