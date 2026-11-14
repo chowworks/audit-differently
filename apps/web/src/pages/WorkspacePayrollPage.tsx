@@ -187,8 +187,20 @@ export function WorkspacePayrollPage() {
   const programNames = useLoad<ProgramNamesDto>(reader ? `/workspaces/${id}/program-names` : null)
   /** Changes on each save and each reconciliation change, so the engagement cards are read again. */
   const [cardsVersion, setCardsVersion] = useState(0)
-  /** The match on its own: opened from Actions, or a match started from the files card. */
-  const [focus, setFocus] = useState(false)
+  /**
+   * What is open over the month, in the address (`view`), so the browser's Back closes it and stays on the month
+   * instead of leaving for the month chosen before: the match on its own (opened from Actions, or a match started from
+   * the files card), or the steps after payroll (owner's decision, 2026-11-13): Expense matching, opened by payroll's
+   * Save or from the month's page, then Summary, opened by the expenses' Save.
+   */
+  const view = params.get('view')
+  const focus = view === 'match'
+  const flow = view === 'expenses' || view === 'summary' ? view : null
+  /** Opening one from the month adds a step to the browser's history; moving between them or closing replaces it. */
+  const show = (next: 'match' | 'expenses' | 'summary' | null) => {
+    if (!period || next === view) return
+    setParams(next ? { period, view: next } : { period }, { replace: !!view })
+  }
   // A card's Match again: the match below starts it.
   const [again, setAgain] = useState(0)
   const [matchStep, setMatchStep] = useState<'Upload' | 'Match'>('Upload')
@@ -197,11 +209,6 @@ export function WorkspacePayrollPage() {
   /** What Save did, said once over the summary it returns to. */
   const [savedNote, setSavedNote] = useState<string | null>(null)
   const [resolve, setResolve] = useState<ResolveKind | null>(null)
-  /**
-   * The steps after payroll (owner's decision, 2026-11-13): Expense matching, opened by payroll's Save or from the month's
-   * page, then Summary, opened by the expenses' Save.
-   */
-  const [flow, setFlow] = useState<'expenses' | 'summary' | null>(null)
   // Another month starts afresh: no note, filter or "saved just now" carried over from the last one.
   const [shownPeriod, setShownPeriod] = useState(period)
   if (shownPeriod !== period) {
@@ -209,8 +216,6 @@ export function WorkspacePayrollPage() {
     setCardsVersion(0)
     setSavedNote(null)
     setResolve(null)
-    setFocus(false)
-    setFlow(null)
   }
   const d = useCards(id, period ?? '', period ? cardsVersion : 0, !!period)
   if (wStatus === 404 || status === 404 || (w && !reader)) return <NotFoundPage />
@@ -313,7 +318,7 @@ export function WorkspacePayrollPage() {
             type="button"
             className="wpd-back"
             onClick={() => {
-              setFlow(null)
+              show(null)
               window.scrollTo({ top: 0 })
             }}
           >
@@ -330,12 +335,12 @@ export function WorkspacePayrollPage() {
                 ) : undefined
               }
               onDone={() => {
-                setFlow(null)
+                show(null)
                 setSavedNote(null)
                 window.scrollTo({ top: 0 })
               }}
               onSaved={(_, note) => {
-                setFlow('summary')
+                show('summary')
                 setSavedNote(note)
                 setCardsVersion((n) => n + 1)
                 void recon.reload()
@@ -351,16 +356,12 @@ export function WorkspacePayrollPage() {
               cards={d.cards}
               files={shownFiles ? shownFiles.files.length : null}
               onFix={(step) => {
-                if (step === 'expenses') setFlow('expenses')
-                else {
-                  setFlow(null)
-                  setFocus(true)
-                }
+                show(step === 'expenses' ? 'expenses' : 'match')
                 setSavedNote(null)
                 window.scrollTo({ top: 0 })
               }}
               onDone={() => {
-                setFlow(null)
+                show(null)
                 window.scrollTo({ top: 0 })
               }}
             />
@@ -405,7 +406,7 @@ export function WorkspacePayrollPage() {
                 onMatch={
                   owner
                     ? () => {
-                        setFocus(true)
+                        show('match')
                         window.scrollTo({ top: 0 })
                       }
                     : undefined
@@ -421,7 +422,7 @@ export function WorkspacePayrollPage() {
                         rows: expenseActions(shownExpenses),
                         onOpen: () => {
                           setSavedNote(null)
-                          setFlow('expenses')
+                          show('expenses')
                           window.scrollTo({ top: 0 })
                         },
                         onUpload: owner ? (list) => void addReceipts(list) : undefined,
@@ -482,7 +483,7 @@ export function WorkspacePayrollPage() {
                   type="button"
                   className="wpd-back"
                   onClick={() => {
-                    setFocus(false)
+                    show(null)
                     setMatchKey((n) => n + 1)
                   }}
                 >
@@ -496,12 +497,14 @@ export function WorkspacePayrollPage() {
                 again={again}
                 receipts={monthReceipts}
                 onOpen={() => {
-                  setFocus(true)
+                  show('match')
                   window.scrollTo({ top: 0 })
                 }}
                 onStep={(st) => {
+                  // Called on every render: only a step that changed opens the match, so the browser's Back closes it.
+                  if (st === matchStep) return
                   setMatchStep(st)
-                  if (st !== 'Upload') setFocus(true)
+                  if (st !== 'Upload') show('match')
                 }}
                 workspaceId={w.id}
                 period={period}
@@ -515,10 +518,9 @@ export function WorkspacePayrollPage() {
                   setCardsVersion((n) => n + 1)
                   void files.reload()
                   // Save goes on to the expenses step; from there, back to the month's summary.
-                  setFocus(false)
                   setMatchKey((n) => n + 1)
                   setSavedNote(`Saved the payroll for ${periodLabel(period)}.`)
-                  setFlow('expenses')
+                  show('expenses')
                   window.scrollTo({ top: 0 })
                 }}
               />
