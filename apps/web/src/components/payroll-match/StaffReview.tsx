@@ -153,7 +153,8 @@ export function OnNoList({
   return (
     <section className="sr-nolist">
       <h3>
-        {people.length} {people.length === 1 ? 'person' : 'people'} in your files on no list
+        Are these participants? ({people.length} {people.length === 1 ? 'person' : 'people'} named
+        in your files but not staff on any configured program)
       </h3>
       <ul>
         {people.map((p, n) => (
