@@ -295,6 +295,8 @@ export function PayrollProof({
     setProgress(null)
     setPollError(null)
     setStep('Upload')
+    // Cancel leaves the wizard (owner's ask, 2026-11-15), not just its first step.
+    onDone?.()
   }
 
   // With a run that replaces them, the month's earlier payroll files are left out of the grid until Save removes them.

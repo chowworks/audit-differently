@@ -740,6 +740,11 @@ export function WorkspacePayrollPage() {
                 alone={focus}
                 again={again}
                 resumeReview={reviewBack}
+                onCancel={() => {
+                  show(null)
+                  setMatchKey((n) => n + 1)
+                  window.scrollTo({ top: 0 })
+                }}
                 receipts={monthReceipts}
                 onOpen={() => {
                   show('match')
@@ -808,7 +813,10 @@ function WorkspaceMatch({
   again = 0,
   receipts,
   resumeReview = false,
+  onCancel,
 }: {
+  /** Cancel dropped the upload: the page closes the wizard. */
+  onCancel?: () => void
   /** Opened by the stepper's Back from Find missing bank lines: match the saved files again, at participant pay. */
   resumeReview?: boolean
   /** The month's receipts, a folder of File Management. */
@@ -1225,6 +1233,8 @@ function WorkspaceMatch({
     setConfirmed(new Set())
     setSaveError(null)
     setStep('Upload')
+    // Cancel leaves the wizard (owner's ask, 2026-11-15), not just its first step.
+    onCancel?.()
   }
 
   const items = run?.items ?? []
