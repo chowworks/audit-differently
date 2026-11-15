@@ -11,21 +11,14 @@ import type {
 import {
   alreadyComplete,
   filesWords,
-  itemBlocks,
-  participantTally,
   missingAfterSave,
-  nobodyBlock,
-  participantBlocks,
   paymentWords,
   paymentsWords,
-  paysNowhere,
   proofList,
   proofWords,
   provedRows,
-  staffBlocks,
   staffMissingWhy,
   staffRows,
-  staffTally,
   staffWords,
 } from './workspace-payroll-plan'
 
@@ -214,130 +207,6 @@ describe('step 2 of the workspace payroll page, in words', () => {
     ])
   })
 
-  it('explains each staff member, participant and open item, and what lands on nobody', () => {
-    const r = run({
-      staff: [
-        {
-          ...staff('Morgan Lee', [ISY], 2400),
-          bank: [],
-          bankGuess: ['f-bank'],
-          found: {
-            ...staff('Morgan Lee', [ISY], 2400).found,
-            bank: [],
-            bankGuess: [{ fileId: 'f-bank', mark: null }],
-          },
-        },
-        {
-          ...staff('Sam Ortiz', [AIT], 2000),
-          timesheet: [],
-          found: { ...staff('Sam Ortiz', [AIT], 2000).found, timesheet: [] },
-        },
-      ],
-      stubs: [
-        stub('Jordan Sample', 'create', null, 280),
-        { ...stub('Nobody', 'none', null, 1), participant: null, flags: ['no-participant'] },
-      ],
-      proof: [],
-    })
-    r.pays = [
-      {
-        id: 'r:1',
-        kind: 'payroll-register',
-        fileId: 'f-reg',
-        fileName: 'f-reg.pdf',
-        state: 'matched',
-        flags: [],
-        staff: { id: 's-Morgan Lee', name: 'Morgan Lee' },
-        mark: { page: 1, text: 'Morgan Lee 2,400.00' },
-      },
-      {
-        id: 'b:7',
-        kind: 'bank-statement',
-        fileId: 'f-bank',
-        fileName: 'f-bank.pdf',
-        state: 'unassigned',
-        flags: ['not-on-a-list'],
-        staff: null,
-        mark: { page: 2, text: 'EFTPS payroll tax 1,234.00' },
-      },
-    ] as PayLineDto[]
-    const [morgan, sam] = staffBlocks(r)
-    expect(morgan!.rows.map((x) => [x.label, x.tone, x.file, x.text])).toEqual([
-      ['Timesheet', 'ok', 'f-ts.pdf', 'Morgan Lee is on it.'],
-      ['Payroll register', 'ok', 'f-reg.pdf', 'Morgan Lee and $2,400.00 on page 1.'],
-      [
-        'Bank line',
-        'guessed',
-        'f-bank.pdf',
-        "Morgan Lee's pay by its amount, not the name: confirm it in the reconciliation after Save.",
-      ],
-    ])
-    expect(sam!.rows[0]).toEqual({
-      label: 'Timesheet',
-      tone: 'missing',
-      text: 'Nothing of Sam Ortiz.',
-    })
-    const [jordan] = participantBlocks(r, [], () => undefined)
-    expect(jordan!.title).toBe('Jordan Sample')
-    expect(jordan!.rows.map((x) => [x.label, x.tone, x.text])).toEqual([
-      ['Timesheet', 'missing', 'Nothing of Jordan Sample.'],
-      ['Payroll register', 'missing', 'Nothing of Jordan Sample.'],
-      ['Pay stub', 'ok', 'Payment to make $280.00.'],
-    ])
-    // Adult IT's staff line: nobody tagged to it was found, in the words of the staff list.
-    const ait = itemBlocks(
-      r,
-      [{ ...items[3]!, amount: 2000, start: '2026-09-25', end: '2026-09-25' }],
-      [],
-      () => undefined
-    )
-    expect(ait[0]!.sub).toMatch(/^Adult IT Training · .+ · \$2,000\.00$/)
-    expect(ait[0]!.rows[1]!.text).toBe(
-      'Nobody tagged to this engagement was found in the payroll register.'
-    )
-    expect(nobodyBlock(r, [])!.rows.map((x) => [x.label, x.file, x.text])).toEqual([
-      [
-        'Bank statement',
-        'f-bank.pdf',
-        '“EFTPS payroll tax 1,234.00” on page 2: Names nobody on the staff or participant lists.',
-      ],
-      ['Pay stub', 'Pay stub Nobody.pdf', 'Pay stub names someone on no participant list.'],
-    ])
-  })
-
-  it("shows a register naming nobody once as company totals, and a named register's unlisted rows as they are", () => {
-    const r = run({ stubs: [] }) as unknown as WorkspacePayrollRunDto
-    r.files = [
-      ...r.files,
-      { id: 'f-totals', kind: 'payroll-register', fileName: 'Company totals.pdf' },
-    ] as WorkspacePayrollRunDto['files']
-    r.totalsOnly = ['f-totals']
-    r.pays = [
-      {
-        id: 'r:4',
-        kind: 'payroll-register',
-        fileId: 'f-reg',
-        fileName: 'f-reg.pdf',
-        state: 'unassigned',
-        flags: ['not-on-a-list'],
-        staff: null,
-        mark: { page: 1, text: 'Taylor Brooks 400.00' },
-      },
-    ] as unknown as WorkspacePayrollRunDto['pays']
-    expect(nobodyBlock(r, [])!.rows.map((x) => [x.label, x.file, x.text])).toEqual([
-      [
-        'Payroll register',
-        'Company totals.pdf',
-        'Company totals only: the register names no one on your lists. It still proves its run.',
-      ],
-      [
-        'Payroll register',
-        'f-reg.pdf',
-        '“Taylor Brooks 400.00” on page 1: Names nobody on the staff or participant lists.',
-      ],
-    ])
-  })
-
   it('lists staff found or tagged, never someone on the list alone', () => {
     expect(staffRows(run()).map((s) => s.name)).toEqual(['Morgan Lee', 'Priya Shah', 'Sam Ortiz'])
     expect(staffWords(run())).toBe(
@@ -383,7 +252,6 @@ describe('step 2 of the workspace payroll page, in words', () => {
     expect(
       filesWords(r, [{ target: 'wex', id: 'Riley', slot: 'stub', fileId: 'f-extra' }]).line
     ).toBe('7 files: 7 matched to your engagements, 0 matched to nothing')
-    expect(paysNowhere(run()).map((p) => p.id)).toEqual(['b:7', 'r:9'])
   })
 
   it('lists the proof attached by item, the owner’s own choices included', () => {
@@ -426,98 +294,6 @@ describe('step 2 of the workspace payroll page, in words', () => {
     expect(staffMissingWhy(guessed, ait, 'bank')).toBe(
       'Sam Ortiz: bank line guessed by amount, confirm it in the reconciliation after Save'
     )
-  })
-
-  it('counts staff and participants auto-matched, on no engagement (the people on no list too), and to review', () => {
-    const r = run({
-      unlisted: [
-        { name: 'Taylor Brooks', register: [{ fileId: 'f-reg', mark: null }], timesheet: [] },
-      ],
-    })
-    expect(staffTally(r)).toEqual({ matched: 3, off: 1, toReview: 0 })
-    const p = run({
-      stubs: [
-        { ...stub('Jordan Sample', 'create', null, 280), wexPaymentId: null },
-        { ...stub('Casey Demo', 'update', 300, 280), wexPaymentId: 'w-casey' },
-        { ...stub('Alex Rivera', 'none', null, 168), participant: null, flags: ['no-participant'] },
-      ],
-      twoProofs: [
-        {
-          target: 'wex',
-          id: 'w-casey',
-          title: "Casey Demo's work-experience pay",
-          engagementName: ISY.name,
-          reportId: 'r-e-isy',
-          slot: 'stub',
-          message: "Casey Demo's pay has two different pay stubs: check which is right",
-        },
-      ],
-    })
-    expect(participantTally(p)).toEqual({ matched: 1, off: 1, toReview: 1 })
-  })
-
-  it("says a staff member's bank line is the pay run's one debit", () => {
-    const r = run()
-    r.pays = []
-    const [morgan] = staffBlocks(r)
-    expect(morgan!.rows[2]).toEqual({
-      label: 'Bank line',
-      tone: 'ok',
-      file: 'f-bank.pdf',
-      text: "The payroll run's one debit, which paid everyone on the register.",
-    })
-  })
-
-  it('says each run that paid a staff member: one Auto-Match row per run, and their pay per run and in all', () => {
-    const mark = (page: number) => ({ page, x: 0, y: 0, width: 1, height: 1, text: '' })
-    const morgan = {
-      ...staff('Morgan Lee', [ISY, AIT], 2400),
-      payByRun: [
-        { payDate: '2026-09-11', amount: 1200 },
-        { payDate: '2026-09-25', amount: 1200 },
-      ],
-      found: {
-        timesheet: [
-          { fileId: 'f-ts', mark: null, payDate: '2026-09-11' },
-          { fileId: 'f-ts2', mark: null, payDate: '2026-09-25' },
-        ],
-        register: [
-          { fileId: 'f-reg', mark: mark(1), payDate: '2026-09-11' },
-          { fileId: 'f-reg2', mark: mark(1), payDate: '2026-09-25' },
-        ],
-        bank: [
-          { fileId: 'f-bank', mark: mark(1), run: true, payDate: '2026-09-11' },
-          { fileId: 'f-bank', mark: mark(1), run: true, payDate: '2026-09-25' },
-        ],
-        bankGuess: [],
-      },
-    }
-    const r = run({ staff: [morgan] })
-    r.files = [
-      ...r.files,
-      { id: 'f-ts2', kind: 'timesheet', fileName: 'f-ts2.pdf' },
-      { id: 'f-reg2', kind: 'payroll-register', fileName: 'f-reg2.pdf' },
-    ] as typeof r.files
-    const [block] = staffBlocks(r)
-    expect(block!.sub).toBe(
-      'In-School Youth Coding Pathway, Adult IT Training · Sep 11 Payroll Run $1,200.00, Sep 25 Payroll Run $1,200.00, $2,400.00 in all'
-    )
-    expect(block!.rows.map((x) => [x.label, x.file, x.text])).toEqual([
-      ['Timesheet, Sep 11 Payroll Run', 'f-ts.pdf', 'Morgan Lee is on it.'],
-      ['Timesheet, Sep 25 Payroll Run', 'f-ts2.pdf', 'Morgan Lee is on it.'],
-      ['Payroll register, Sep 11 Payroll Run', 'f-reg.pdf', 'Morgan Lee and $1,200.00 on page 1.'],
-      ['Payroll register, Sep 25 Payroll Run', 'f-reg2.pdf', 'Morgan Lee and $1,200.00 on page 1.'],
-      [
-        'Bank line, Sep 11 Payroll Run',
-        'f-bank.pdf',
-        "The payroll run's one debit on page 1, which paid everyone on the register.",
-      ],
-      [
-        'Bank line, Sep 25 Payroll Run',
-        'f-bank.pdf',
-        "The payroll run's one debit on page 1, which paid everyone on the register.",
-      ],
-    ])
   })
 
   it('counts payments and participants apart: one payment per pay run', () => {

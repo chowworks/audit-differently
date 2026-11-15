@@ -1,27 +1,18 @@
 import {
   DOCUMENT_KIND_LABELS,
-  PAY_LINE_FLAG_LABELS,
   PAYROLL_SLOT_KIND,
   STAFF_REPORT_LINES,
   type PayrollMatchSaveInput,
   type PayrollSlot,
   type PlanFileDto,
   type PlanProofDto,
-  type ProofSpotDto,
   type StaffFoundDto,
   type StubPayDto,
   type WorkspacePayrollItemDto,
   type WorkspacePayrollRunDto,
 } from '@ad/types'
 import { money, payPeriodWords, shortDate } from '@/lib/format'
-import {
-  SLOT_LABEL,
-  slotWhy,
-  sourceWords,
-  type WhyBlock,
-  type WhyRow,
-} from '@/components/payroll-match/why'
-import { autoPick, keyOf, lacksLine, slotKey, slotsOf, type Picks } from '@/pages/workspace-payroll'
+import { keyOf, slotsOf } from '@/pages/workspace-payroll'
 
 /**
  * Step 2 of the workspace payroll page, in words (GitHub issue #22; owner's decisions, 2026-10-19): who was found, what
@@ -138,14 +129,6 @@ export function paymentWords(x: StubPayDto): string {
   return 'no payment: look at the flag'
 }
 
-/** Under a payment's amount on the Participants grid: what Save does with it, in a few words. */
-export function paymentNote(x: StubPayDto): string {
-  if (x.action === 'create' && x.grossAmount !== null) return 'New payment'
-  if (corrected(x)) return `Was ${money(x.previousAmount!)}`
-  if (x.action === 'update' || x.action === 'same') return 'Already recorded'
-  return 'No payment: look at the flag'
-}
-
 const corrected = (x: StubPayDto) =>
   x.action === 'update' && x.previousAmount !== null && x.previousAmount !== x.grossAmount
 
@@ -249,79 +232,12 @@ export function proofWords(run: Run, proof: PlanProofDto[]): string {
   return `Proof attached: ${count(files, 'file')} to ${count(proof.length, 'payroll item')}${notes.length ? ` (${notes.join(', ')})` : ''}${removed}`
 }
 
-/** "Sep 11 Payroll Run": a payroll run by its pay date. */
-export const runLabel = (payDate: string) =>
-  `${new Date(`${payDate}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} Payroll Run`
-
-/** A staff member fully found: on an engagement, with their timesheet, register row and bank line (not a guess). */
-export const staffMatched = (s: StaffFoundDto) =>
-  s.engagements.length > 0 && s.timesheet.length > 0 && s.register.length > 0 && s.bank.length > 0
-
-/** Staff: how many Auto-Match matched, how many are on no engagement (the people on no list too), the rest to review. */
-export function staffTally(run: Run): { matched: number; off: number; toReview: number } {
-  const rows = staffRows(run)
-  const matched = rows.filter(staffMatched).length
-  const off = rows.filter((s) => !s.engagements.length).length + run.plan.unlisted.length
-  return { matched, off, toReview: rows.length + run.plan.unlisted.length - matched - off }
-}
-
-/** A pay stub whose payment Save makes or keeps with nothing to check. */
-export const stubMatched = (run: Run, x: StubPayDto) =>
-  !!x.participant &&
-  x.action !== 'none' &&
-  x.flags.length === 0 &&
-  !run.plan.twoProofs.some((t) => t.target === 'wex' && t.id === x.wexPaymentId)
-
-/** One person's pay stubs of the month, one per payroll run, in pay-date order: the participant, or the name printed. */
-export interface ParticipantRow {
-  key: string
-  stubs: StubPayDto[]
-}
-
-/** The pay stubs by person, as the staff are: one row each, the stubs of every payroll run that paid them. */
-export function participantRows(run: Run): ParticipantRow[] {
-  const rows = new Map<string, StubPayDto[]>()
-  // A staff member's own pay stub is proof on their payroll lines, not a participant's payment.
-  for (const x of run.plan.stubs.filter((y) => !y.staff)) {
-    const key = x.participant
-      ? `p-${x.participant.id}`
-      : x.named
-        ? `n-${x.named.toLowerCase()}`
-        : `f-${x.fileId}`
-    rows.set(key, [...(rows.get(key) ?? []), x])
-  }
-  return [...rows].map(([key, stubs]) => ({
-    key,
-    stubs: [...stubs].sort((a, b) => (a.payDate ?? '').localeCompare(b.payDate ?? '')),
-  }))
-}
-
-/** Participants: how many people are matched (every stub of theirs), and how many the owner must look at. */
-export function participantTally(run: Run): { matched: number; off: number; toReview: number } {
-  const rows = participantRows(run)
-  const matched = rows.filter((r) => r.stubs.every((x) => stubMatched(run, x))).length
-  // A pay stub naming someone on no engagement's participant list.
-  const off = rows.filter((r) => !r.stubs[0]!.participant).length
-  return { matched, off, toReview: rows.length - matched - off }
-}
-
 /** "Auto-matched 3 staff found in the files: Morgan Lee, Priya Shah, Sam Ortiz". */
 export function staffWords(run: Run): string {
   const found = staffRows(run).filter(foundInFiles)
   if (!found.length) return 'Nobody on your staff list was found in the files'
   return `Auto-matched ${count(found.length, 'staff', 'staff')} found in the files: ${found.map((s) => s.name).join(', ')}`
 }
-
-/**
- * The pays that land on no engagement: register and bank lines naming nobody on either list, and those of staff on no
- * engagement. A participant's bank line is left out: their pay stub is their proof of payment.
- */
-export const paysNowhere = (run: Run) =>
-  run.pays.filter(
-    (p) =>
-      p.state === 'unassigned' &&
-      (p.flags.includes('not-on-a-list') || p.flags.includes('staff-untagged'))
-  )
 
 /** A stable key for an item in a proof list. */
 export const proofKey = (p: PlanProofDto) =>
@@ -336,285 +252,3 @@ export const kindWord = (k: string) => {
 /** The "Date" column: a staff line's date, a participant's pay period. */
 export const paidWords = (i: Pick<WorkspacePayrollItemDto, 'kind' | 'start' | 'end'>) =>
   i.kind === 'participant' ? payPeriodWords(i.start, i.end) : shortDate(i.start)
-
-// ── "How Auto-Match decided" ────────────────────────────────────────────────
-// The bookkeeper's panel (`WhyPanel`), with the owner's blocks: one per staff member, one per participant, one per
-// payroll item still to match that neither covers, and the lines and files that land on no engagement. Each row uses
-// Auto-Match's own words where it gave them (`match-proof.ts`).
-
-const NO_FILE = 'No file of this kind in the zip.'
-const nothingOf = (name: string) => `Nothing of ${name}.`
-const flagWords = (flags: (keyof typeof PAY_LINE_FLAG_LABELS)[]) =>
-  flags.map((f) => PAY_LINE_FLAG_LABELS[f]).join('. ')
-const capital = (t: string) => t.charAt(0).toUpperCase() + t.slice(1)
-/** A register that names no one: the run's company totals, the register proof of everyone the run paid. */
-const registerTotalWords = (page?: number) =>
-  `The payroll run's company totals${page ? ` on page ${page}` : ''}: the register names no one.`
-/** A pay run's one debit, the bank line of everyone it paid. */
-const runWords = (page?: number) =>
-  `The payroll run's one debit${page ? ` on page ${page}` : ''}, which paid everyone on the register.`
-
-/** One block per person on the staff list found in the files or tagged to an engagement. */
-export function staffBlocks(run: Run): WhyBlock[] {
-  const nameOf = (id: string) => run.files.find((f) => f.id === id)?.fileName ?? id
-  const anyOf = (kind: string) => run.files.some((f) => f.kind === kind)
-  return staffRows(run).map((s) => {
-    const missing = (label: string, kind: string): WhyRow => ({
-      label,
-      tone: 'missing',
-      text: anyOf(kind) ? nothingOf(s.name) : NO_FILE,
-    })
-    // One row per run that paid them, each proof in its run's words.
-    const perRun = (
-      slot: 'timesheet' | 'register' | 'bank',
-      spots: ProofSpotDto[],
-      text: (spot: ProofSpotDto) => string
-    ): WhyRow[] =>
-      spots.map((spot) => ({
-        label: spot.payDate ? `${SLOT_LABEL[slot]}, ${runLabel(spot.payDate)}` : SLOT_LABEL[slot],
-        tone: 'ok',
-        file: nameOf(spot.fileId),
-        text: text(spot) + sourceWords(spot.source),
-      }))
-    const payOn = (payDate?: string | null) =>
-      s.payByRun.find((r) => r.payDate === (payDate ?? null))?.amount ??
-      (s.payByRun.length === 1 ? s.payByRun[0]!.amount : null)
-    const timesheet = perRun('timesheet', s.found.timesheet, (spot) =>
-      spot.amount != null
-        ? `${s.name} and ${money(spot.amount)}${spot.mark ? ` on page ${spot.mark.page}` : ''}.`
-        : `${s.name} is on it.`
-    )
-    const register = perRun('register', s.found.register, (spot) => {
-      if (spot.run) return registerTotalWords(spot.mark?.page)
-      const pay = spot.amount ?? payOn(spot.payDate)
-      // A spreadsheet (payroll details) is placed by its row, not a page.
-      const sheet = run.files.find((f) => f.id === spot.fileId)?.kind === 'payroll-details'
-      const page = spot.mark
-        ? sheet
-          ? ` on row ${spot.mark.y}`
-          : ` on page ${spot.mark.page}`
-        : ''
-      return pay !== null
-        ? `${s.name} and ${money(pay)}${page}.`
-        : `${s.name}${page || ' is on it'}.`
-    })
-    const bank = perRun('bank', s.found.bank, (spot) =>
-      spot.run
-        ? runWords(spot.mark?.page)
-        : `${s.name}${spot.mark ? ` on page ${spot.mark.page}` : ' is on it'}.`
-    )
-    const rows: WhyRow[] = [
-      ...(timesheet.length ? timesheet : [missing(SLOT_LABEL.timesheet, 'timesheet')]),
-      ...(register.length ? register : [missing(SLOT_LABEL.register, 'payroll-register')]),
-      ...(bank.length
-        ? bank
-        : s.found.bankGuess.length
-          ? s.found.bankGuess.map((g): WhyRow => ({
-              label: SLOT_LABEL.bank,
-              tone: 'guessed',
-              file: nameOf(g.fileId),
-              text: `${s.name}'s pay by its amount, not the name: confirm it in the reconciliation after Save.`,
-            }))
-          : [missing(SLOT_LABEL.bank, 'bank-statement')]),
-    ]
-    const on = s.engagements.length
-      ? s.engagements.map((e) => e.name).join(', ')
-      : PAY_LINE_FLAG_LABELS['staff-untagged']
-    const pay =
-      s.pay === null
-        ? ''
-        : s.payByRun.length > 1
-          ? ` · ${s.payByRun.map((r) => `${r.payDate ? runLabel(r.payDate) : 'a run'} ${money(r.amount)}`).join(', ')}, ${money(s.pay)} in all`
-          : ` · ${money(s.pay)}`
-    return { key: `staff-${s.staffId}`, title: s.name, sub: `${on}${pay}`, rows }
-  })
-}
-
-/** The owner's choice for an item's slot: a file chosen by hand, a guess confirmed, or nothing (Auto-Match's pick). */
-export const ownChoice = (
-  run: Run,
-  picks: Picks,
-  confirmed: Set<string>,
-  i: WorkspacePayrollItemDto,
-  slot: PayrollSlot
-) =>
-  picks[keyOf(i)]?.[slot] ??
-  (confirmed.has(slotKey(i, slot)) ? (autoPick(run, i, slot).pick ?? undefined) : undefined)
-
-/** One proof row of an engagement's payroll item: on file, attached by Save, or Auto-Match's pick and its reason. */
-export function itemRow(
-  run: Run,
-  i: WorkspacePayrollItemDto,
-  slot: PayrollSlot,
-  planned: PlanProofDto[],
-  chosen: string | undefined
-): WhyRow {
-  const label = SLOT_LABEL[slot]
-  const match = run.slots.find((m) => m.target === i.target && m.id === i.id && m.slot === slot)
-  const from = slotSource(i, slot, planned)
-  if (from?.on === 'file') return { label, tone: 'ok', text: 'Already attached.' }
-  if (from) {
-    const f = planned
-      .find((p) => p.target === i.target && p.id === i.id)
-      ?.files.find((x) => x.slot === slot)
-    const why = f && match?.candidates.find((c) => c.fileId === f.fileId)?.why
-    const people = from.people.length
-      ? `${from.people.join(', ')} ${from.people.length === 1 ? 'is' : 'are'} on it.`
-      : undefined
-    return { label, tone: 'ok', file: f?.fileName, text: why || people || 'Found.' }
-  }
-  // A staff line's proof comes from the staff tagged to its engagement, never a file chosen on the table.
-  if (isStaffLine(i)) return { label, tone: 'missing', text: `${staffMissingWhy(run, i, slot)}.` }
-  return {
-    label,
-    ...slotWhy({
-      attached: null,
-      chosen,
-      match,
-      fileName: (id) => run.files.find((f) => f.id === id)?.fileName,
-      noLine: (id) => lacksLine(run, i, slot, id),
-      noLineText: 'No line for this payment was found on it: link it from the reconciliation.',
-    }),
-  }
-}
-
-/** One block per participant a pay stub names: their timesheet, register and pay stub. */
-export function participantBlocks(
-  run: Run,
-  planned: PlanProofDto[],
-  choice: (i: WorkspacePayrollItemDto, slot: PayrollSlot) => string | undefined
-): WhyBlock[] {
-  return run.plan.stubs.flatMap((x) => {
-    const who = x.participant
-    if (!who) return []
-    const item = x.wexPaymentId
-      ? run.items.find((i) => i.target === 'wex' && i.id === x.wexPaymentId)
-      : undefined
-    const made = planned.find((p) => p.target === 'wex' && !p.id && p.stubFileId === x.fileId)
-    const row = (slot: 'timesheet' | 'register'): WhyRow => {
-      if (slot === 'register' && x.register?.run && !item)
-        return {
-          label: SLOT_LABEL.register,
-          tone: 'ok',
-          file: run.files.find((f) => f.id === x.register!.fileId)?.fileName,
-          text: registerTotalWords(x.register.mark?.page),
-        }
-      if (item) return itemRow(run, item, slot, planned, choice(item, slot))
-      const f = made?.files.find((y) => y.slot === slot)
-      if (f)
-        return {
-          label: SLOT_LABEL[slot],
-          tone: 'ok',
-          file: f.fileName,
-          text: `${who.name} is on it.`,
-        }
-      return {
-        label: SLOT_LABEL[slot],
-        tone: 'missing',
-        text: run.files.some((y) => y.kind === PAYROLL_SLOT_KIND[slot])
-          ? nothingOf(who.name)
-          : NO_FILE,
-      }
-    }
-    const period =
-      x.payPeriodStart && x.payPeriodEnd
-        ? `, for ${payPeriodWords(x.payPeriodStart, x.payPeriodEnd)}`
-        : ''
-    const stub: WhyRow = x.flags.length
-      ? {
-          label: SLOT_LABEL.stub,
-          tone: 'guessed',
-          file: x.fileName,
-          text: `${flagWords(x.flags)}.`,
-        }
-      : {
-          label: SLOT_LABEL.stub,
-          tone: 'ok',
-          file: x.fileName,
-          text: `${capital(paymentWords(x))}${period}.${sourceWords(x.source)}`,
-        }
-    const bank: WhyRow[] = x.bank
-      ? [
-          {
-            label: SLOT_LABEL.bank,
-            tone: 'ok',
-            file: run.files.find((f) => f.id === x.bank!.fileId)?.fileName,
-            text: runWords(x.bank.mark?.page),
-          },
-        ]
-      : []
-    return [
-      {
-        key: `stub-${x.fileId}`,
-        title: who.name,
-        sub: `${who.participantId} · ${who.engagementName}`,
-        rows: [row('timesheet'), row('register'), stub, ...bank],
-      },
-    ]
-  })
-}
-
-/** The items still to match that no participant block covers: staff lines, and payments no pay stub names. */
-export function itemBlocks(
-  run: Run,
-  open: WorkspacePayrollItemDto[],
-  planned: PlanProofDto[],
-  choice: (i: WorkspacePayrollItemDto, slot: PayrollSlot) => string | undefined
-): WhyBlock[] {
-  const stubbed = new Set(
-    run.plan.stubs.filter((x) => x.participant && x.wexPaymentId).map((x) => x.wexPaymentId)
-  )
-  return open
-    .filter((i) => !(i.target === 'wex' && stubbed.has(i.id)))
-    .map((i) => ({
-      key: keyOf(i),
-      title: i.title,
-      sub: `${i.engagementName} · ${paidWords(i)} · ${money(i.amount)}`,
-      rows: slotsOf(i).map((slot) => itemRow(run, i, slot, planned, choice(i, slot))),
-    }))
-}
-
-/** The last block: lines naming nobody (the payroll tax debit), pay stubs naming nobody, files matched to nothing. */
-export function nobodyBlock(run: Run, chosen: Links): WhyBlock | null {
-  // A register naming nobody on the lists is the run's company totals: it shows once (owner's decisions, 2026-10-19
-  // and 2026-10-20). A register that names people shows each row on no list as it is.
-  const nowhere = paysNowhere(run)
-  const rows: WhyRow[] = [
-    ...(run.totalsOnly ?? []).map((id): WhyRow => ({
-      label: kindWord('payroll-register'),
-      tone: 'missing',
-      file: run.files.find((f) => f.id === id)?.fileName,
-      text: 'Company totals only: the register names no one on your lists. It still proves its run.',
-    })),
-    ...nowhere.map((p): WhyRow => ({
-      label: kindWord(p.kind),
-      tone: 'missing',
-      file: p.fileName,
-      text: `${p.mark ? `“${p.mark.text}” on page ${p.mark.page}` : 'The whole file (scanned)'}: ${
-        p.flags.length ? flagWords(p.flags) : 'On no engagement'
-      }.`,
-    })),
-    ...run.plan.stubs
-      .filter((x) => !x.participant && !x.staff)
-      .map((x): WhyRow => ({
-        label: SLOT_LABEL.stub,
-        tone: 'missing',
-        file: x.fileName,
-        text: `${x.named ? `${x.named}: ` : ''}${x.flags.length ? flagWords(x.flags) : PAY_LINE_FLAG_LABELS['no-participant']}.`,
-      })),
-    ...nowhereFiles(run, chosen).map((f): WhyRow => ({
-      label: kindWord(f.kind),
-      tone: 'missing',
-      file: f.fileName,
-      text: 'A file matched to no engagement.',
-    })),
-  ]
-  return rows.length
-    ? {
-        key: 'nobody',
-        title: 'Not matched to anyone',
-        sub: 'Lines and files that land on no engagement',
-        rows,
-      }
-    : null
-}
