@@ -443,6 +443,39 @@ describe("ExpensesService: the month's page", () => {
     expect(read.files.map((f) => f.id)).toEqual(['d-csv'])
     expect(read.unread).toEqual(['broken.xlsx'])
   })
+
+  it('counts a receipt filed on the workspace and on an engagement once, keeping the copy an owner chose', async () => {
+    const doc = (id: string, sha256: string, engagementId: string | null) => ({
+      id,
+      sha256,
+      engagementId,
+      workspaceId: W,
+      storageKey: `${W}/${engagementId ?? 'workspace'}/2026-09/${id}.pdf`,
+    })
+    const docs = [
+      doc('a-eng', 'sha-a', 'e-1'),
+      doc('a-ws', 'sha-a', null),
+      doc('b-eng', 'sha-b', 'e-1'),
+      doc('b-ws', 'sha-b', null),
+      doc('c-eng', 'sha-c', 'e-1'),
+    ]
+    const prisma = {
+      document: { findMany: jest.fn().mockResolvedValue(docs) },
+      booksBill: { findMany: jest.fn().mockResolvedValue([{ documentId: 'b-eng' }]) },
+    }
+    const s = new ExpensesService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never
+    )
+    const kept = await (
+      s as unknown as { receiptsOf: (w: string, p: string) => Promise<{ id: string }[]> }
+    ).receiptsOf(W, '2026-09')
+    expect(kept.map((d) => d.id)).toEqual(['a-ws', 'b-eng', 'c-eng'])
+  })
 })
 
 describe("ExpensesService: an owner's word on a bill", () => {

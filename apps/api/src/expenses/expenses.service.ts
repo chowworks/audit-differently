@@ -548,13 +548,32 @@ export class ExpensesService {
     return out
   }
 
-  /** The receipts the books' bills are matched to (`monthReceiptsWhere`). */
+  /**
+   * The receipts the books' bills are matched to (`monthReceiptsWhere`), each file once: the same receipt filed on the
+   * workspace's month and on an engagement's month (both match screens file a zip's Receipts folder) is one receipt,
+   * or every bill it fits would have two and wait for an owner. The copy an owner chose stays, else the workspace's.
+   */
   private async receiptsOf(workspaceId: string, period: string) {
-    const docs = await this.prisma.document.findMany({
-      where: monthReceiptsWhere(workspaceId, period),
-      orderBy: [{ fileName: 'asc' }, { id: 'asc' }],
-    })
-    return docs.filter((d) => keyInWorkspace(d))
+    const [docs, chosen] = await Promise.all([
+      this.prisma.document.findMany({
+        where: monthReceiptsWhere(workspaceId, period),
+        orderBy: [{ fileName: 'asc' }, { id: 'asc' }],
+      }),
+      this.prisma.booksBill.findMany({
+        where: { workspaceId, period, documentId: { not: null } },
+        select: { documentId: true },
+      }),
+    ])
+    const picked = new Set(chosen.map((c) => c.documentId))
+    const rank = (d: { id: string; engagementId: string | null }) =>
+      picked.has(d.id) ? 0 : d.engagementId === null ? 1 : 2
+    const keep = new Map<string, (typeof docs)[number]>()
+    for (const d of docs.filter((x) => keyInWorkspace(x))) {
+      const o = keep.get(d.sha256)
+      if (!o || rank(d) < rank(o)) keep.set(d.sha256, d)
+    }
+    const ids = new Set([...keep.values()].map((d) => d.id))
+    return docs.filter((d) => ids.has(d.id))
   }
 
   /**
