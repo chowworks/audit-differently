@@ -1,3 +1,4 @@
+import { StaffReview } from '@/components/payroll-match/StaffReview'
 import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react'
 import type {
   AccountMappingDto,
@@ -11,17 +12,14 @@ import type {
   WorkspaceExpensesDto,
   WorkspaceExpensesSavedDto,
 } from '@ad/types'
-import { ACCOUNT_MAPPING_FOLDER, RECEIPTS_FOLDER, zipFolder } from '@ad/types'
+import { ACCOUNT_MAPPING_FOLDER, zipFolder } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty, ErrorNote, Modal, Notice } from '@/components/ui'
-import { FoundProof, MatchPanel, RemainingSection } from '@/components/payroll-match/MatchParts'
-import { VerificationModelLink } from '@/components/payroll-match/VerificationModel'
+import { FoundProof, MatchPanel } from '@/components/payroll-match/MatchParts'
 import '@/components/match-pairs.css'
 import {
   billedLines,
-  byBudgetLine,
-  engagementGroups,
   lineProof,
   nothingNew,
   notOnEngagements,
@@ -78,6 +76,9 @@ export function WorkspaceExpenses({
   period,
   stepper,
   onDone,
+  onBack,
+  nextLabel = 'Next: save and finish →',
+  backLabel = 'Back: find missing bank lines',
   onSaved,
 }: {
   workspaceId: string
@@ -86,6 +87,10 @@ export function WorkspaceExpenses({
   stepper?: ReactNode
   /** Left for later (or Back, for an auditor): back to the month's page. */
   onDone: () => void
+  /** Back to the step before, beside Cancel. */
+  onBack: () => void
+  backLabel?: string
+  nextLabel?: string
   /** Saved, or nothing new to save: on to the Summary, with the month's expenses as they are now. */
   onSaved: (expenses: WorkspaceExpensesDto, note: string | null) => void
 }) {
@@ -111,7 +116,6 @@ export function WorkspaceExpenses({
       </Card>
     )
   const can = d.can.change
-  const groups = engagementGroups(d.lines)
   const notOn = notOnEngagements(d.lines)
   const billed = billedLines(d.lines)
   const counts = saveCounts(d.lines, d.toRemove ?? [])
@@ -229,10 +233,6 @@ export function WorkspaceExpenses({
       setBusy(null)
     }
   }
-  // Bills with no receipt yet, of the lines billed: what a receipt matched to no bill may prove.
-  const openBills = billed.flatMap((l) =>
-    l.bills.filter((b) => !b.dropped && !b.receipt).map((b) => ({ line: l, bill: b }))
-  )
 
   return (
     <Card
@@ -283,106 +283,76 @@ export function WorkspaceExpenses({
                   : ', each fully proved.'}
               </div>
             </div>
-          ) : (
-            can && <p className="ad-replacing">Expenses are not saved until you press Save.</p>
-          )}
+          ) : null}
 
-          {remaining.length > 0 && (
-            <RemainingSection count={remaining.length}>
-              <RemainingTable lines={remaining} />
-            </RemainingSection>
-          )}
-
-          <section className="mx-work" aria-label="Expenses">
-            <h3 className="mx-work-title">
-              Expenses{' '}
-              <span className="mx-tally">
-                <span className="mx-tally-ok">✓ {many(billed.length, 'line')} from the books</span>
-                {remaining.length > 0 && (
-                  <span className="mx-tally-danger">{remaining.length} to prove</span>
-                )}
-              </span>
-              <VerificationModelLink who="expenses" />
-            </h3>
-            {groups.length === 0 ? (
-              <Empty>
-                The books bill nothing to an engagement this month. How the books were read, below,
-                says why for each line.
-              </Empty>
-            ) : (
-              <ExpenseTable
-                groups={groups}
-                exportName={d.file.fileName}
-                actions={actions}
-                onShow={show}
-              />
-            )}
-          </section>
-
-          {d.receipts.length > 0 && (
-            <section className="mx-work" aria-label="Receipts">
-              <h3 className="mx-work-title">
-                Receipts{' '}
-                <span className="mx-tally">
-                  <span className="mx-tally-ok">
-                    ✓ {(d.receipts.length - loose.length).toLocaleString('en-US')} matched
-                  </span>
-                  {loose.length > 0 && (
-                    <span className="mx-tally-warn">{loose.length} not matched to a bill</span>
-                  )}
-                </span>
-                {can && (
-                  <label className="wex-file wex-file-head">
-                    <input
-                      type="file"
-                      multiple
-                      accept=".pdf,.png,.jpg,.jpeg"
-                      disabled={!!busy}
-                      onChange={(ev) => {
-                        void addReceipts([...(ev.target.files ?? [])])
-                        ev.target.value = ''
-                      }}
+          {/* Review expenses (owner's ask, 2026-11-15): the same grid as the payroll steps. */}
+          <StaffReview
+            rows={billed.map((l) => {
+              const p = lineProof(l)
+              const live = l.bills.filter((b) => !b.dropped)
+              const part = (
+                x: { have: number; of: number },
+                label: string,
+                none: string,
+                fix: ReactNode
+              ) =>
+                x.of > 0 && x.have === x.of
+                  ? { label, state: 'ok' as const }
+                  : {
+                      label,
+                      state: 'missing' as const,
+                      fix: actions ? fix : undefined,
+                      problem:
+                        x.of === 0
+                          ? 'every bill on this line was dropped'
+                          : x.of === 1
+                            ? none
+                            : `${x.of - x.have} of ${x.of} bills have none`,
+                    }
+              return {
+                key: l.key,
+                engagementId: l.engagementId ?? '',
+                engagementName: l.engagementName ?? 'No engagement',
+                reportId: '',
+                title: l.vendor || 'No vendor',
+                sub: `${accountName(l.account)}${l.budgetLineName ? ` · ${l.budgetLineName}` : ''}`,
+                date: shortDate(l.date),
+                amount: l.amount,
+                slots: [
+                  part(
+                    p.receipts,
+                    'Receipt',
+                    'no receipt found for this bill',
+                    <BillStack
+                      bills={l.bills.filter((b) => b.dropped || !b.receipt)}
+                      render={(b) => <ReceiptOfBill b={b} actions={actions} onShow={show} quiet />}
+                      actions={actions}
                     />
-                    <span>Upload receipts</span>
-                  </label>
-                )}
-              </h3>
-              {loose.length === 0 ? (
-                <p className="text-sm text-soft">Every receipt of the month proves a bill.</p>
-              ) : (
-                <LooseReceipts
-                  receipts={loose}
-                  openBills={openBills}
-                  actions={actions}
-                  onShow={show}
-                />
-              )}
-            </section>
-          )}
-          {d.receipts.length === 0 && can && (
-            <section className="mx-work" aria-label="Receipts">
-              <h3 className="mx-work-title">
-                Receipts
-                <label className="wex-file wex-file-head">
-                  <input
-                    type="file"
-                    multiple
-                    accept=".pdf,.png,.jpg,.jpeg"
-                    disabled={!!busy}
-                    onChange={(ev) => {
-                      void addReceipts([...(ev.target.files ?? [])])
-                      ev.target.value = ''
-                    }}
-                  />
-                  <span>Upload receipts</span>
-                </label>
-              </h3>
-              <p className="text-sm text-soft">
-                No receipts for the month yet. Put them in the zip&apos;s {RECEIPTS_FOLDER} folder,
-                email them to the month, or upload them here.
-              </p>
-            </section>
-          )}
+                  ),
+                  ...(p.allocation === 'none'
+                    ? []
+                    : [
+                        p.allocation === 'on-file'
+                          ? { label: 'Allocation', state: 'ok' as const }
+                          : {
+                              label: 'Allocation',
+                              state: 'missing' as const,
+                              problem: 'the books show no split for this shared cost',
+                            },
+                      ]),
+                  part(
+                    p.payments,
+                    'Evidence of payment',
+                    'no bank or card line found for it',
+                    <BillStack
+                      bills={live.filter((b) => !b.payment)}
+                      render={(b) => <PaymentOfBill b={b} actions={actions} onShow={show} quiet />}
+                    />
+                  ),
+                ],
+              }
+            })}
+          />
         </>
       )}
 
@@ -435,64 +405,23 @@ export function WorkspaceExpenses({
         </div>
       </MatchPanel>
 
-      {can && d.file && !allSaved && (
-        <div className="grid gap-1">
-          <h3 className="font-bold">What Save will do</h3>
-          <ul className="wex-save-list">
-            {groups.map((g) => {
-              const lines = byBudgetLine(g.lines.filter((l) => l.status === 'billed'))
-              return (
-                <li key={g.id}>
-                  <b>{g.name}:</b>{' '}
-                  {many(g.lines.filter((l) => l.status === 'billed').length, 'expense')},{' '}
-                  {money(g.total)}
-                  {lines.length > 0 &&
-                    ` (${lines.map((b) => `${b.name} ${money(b.total)}`).join(', ')})`}
-                  .
-                </li>
-              )
-            })}
-            <li>
-              <b>Changes:</b> {many(counts.add, 'new line')}, {many(counts.change, 'change')},{' '}
-              {many(counts.remove, 'removal')}.
-            </li>
-            <li>
-              <b>Proof attached:</b>{' '}
-              {many(
-                billed.reduce((t, l) => t + lineProof(l).receipts.have, 0),
-                'receipt'
-              )}
-              ,{' '}
-              {many(
-                billed.reduce((t, l) => t + lineProof(l).payments.have, 0),
-                'payment'
-              )}
-              , {many(billed.filter((l) => l.split).length, 'allocation note')}.
-            </li>
-            <li>
-              <b>Dropped bills:</b>{' '}
-              {billed.reduce((t, l) => t + l.bills.filter((b) => b.dropped).length, 0) || 'none'}.
-            </li>
-          </ul>
-        </div>
-      )}
-
       <div className="ad-actions justify-between">
-        <Button kind="ghost" disabled={!!busy} onClick={onDone}>
-          {can ? 'Leave for later' : 'Back'}
-        </Button>
+        <span className="flex items-center gap-3">
+          <Button kind="ghost" disabled={!!busy} onClick={onBack}>
+            {backLabel}
+          </Button>
+          <Button kind="ghost" disabled={!!busy} onClick={onDone}>
+            Cancel
+          </Button>
+        </span>
         {can && allSaved && (
-          <Button kind="primary" onClick={() => onSaved(d, null)}>
-            Continue to summary
+          <Button kind="navy" onClick={() => onSaved(d, null)}>
+            {nextLabel}
           </Button>
         )}
         {can && !allSaved && (d.file || counts.remove > 0) && (
-          <Button
-            kind="primary"
-            disabled={!!busy || counts.pending === 0}
-            onClick={() => void save()}
-          >
-            Save and continue
+          <Button kind="navy" disabled={!!busy || counts.pending === 0} onClick={() => void save()}>
+            {nextLabel}
           </Button>
         )}
       </div>
@@ -593,164 +522,10 @@ interface BillActions {
   pay: (transactionId: string, payment: BooksPaymentInput['payment']) => void
 }
 
-const onFile = (
-  <Chip tone="ok" fill>
-    ✓ on file
-  </Chip>
-)
 const missing = (words: string) => <small className="ad-match-note-missing">✕ {words}</small>
-
-/** "Remaining to match": each expense still short of a proof, as payroll's table is. */
-function RemainingTable({ lines }: { lines: BooksLineDto[] }) {
-  return (
-    <div className="ad-tablewrap">
-      <table className="ad-table">
-        <thead>
-          <tr>
-            <th>Engagement</th>
-            <th>Paid to</th>
-            <th>Date</th>
-            <th className="ad-num">Amount</th>
-            <th>Receipt</th>
-            <th>Allocation</th>
-            <th>Evidence of payment</th>
-          </tr>
-        </thead>
-        <tbody>
-          {lines.map((l) => {
-            const p = lineProof(l)
-            const short = (x: { have: number; of: number }, none: string, some: string) =>
-              x.of === 1 ? missing(none) : missing(`${x.of - x.have} of ${x.of} bills ${some}`)
-            return (
-              <tr key={l.key}>
-                <td>
-                  <span className="font-semibold">{l.engagementName}</span>
-                  <span className="ad-table-sub">{l.budgetLineName}</span>
-                </td>
-                <td>
-                  <span className="font-semibold">{l.vendor || 'No vendor'}</span>
-                  <span className="ad-table-sub">{accountName(l.account)}</span>
-                </td>
-                <td className="whitespace-nowrap">{shortDate(l.date)}</td>
-                <td className="ad-num font-semibold">{money(l.amount)}</td>
-                <td className="ad-matchcell">
-                  {p.receipts.of === 0
-                    ? missing('Every bill dropped')
-                    : p.receipts.have === p.receipts.of
-                      ? onFile
-                      : short(p.receipts, 'No receipt found', 'have no receipt')}
-                </td>
-                <td className="ad-matchcell">
-                  {p.allocation === 'on-file' ? (
-                    onFile
-                  ) : p.allocation === 'none' ? (
-                    <Chip tone="muted">Not shared</Chip>
-                  ) : (
-                    missing('No split in the books')
-                  )}
-                </td>
-                <td className="ad-matchcell">
-                  {p.payments.of > 0 && p.payments.have === p.payments.of
-                    ? onFile
-                    : short(p.payments, 'No payment found', 'have no payment found')}
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
-  )
-}
 
 /** The account's own name, not its path in the books: "60203 Workers Comp". */
 const accountName = (a: string) => a.split(':').pop()!.trim()
-
-/**
- * Every expense on an engagement, grouped by engagement and budget line with their totals, as payroll's Staff table:
- * each bill's receipt, the books' split and each bill's bank or card line, found or not.
- */
-function ExpenseTable({
-  groups,
-  exportName,
-  actions,
-  onShow,
-}: {
-  groups: ReturnType<typeof engagementGroups>
-  exportName: string
-  actions: BillActions | null
-  onShow: (v: Viewing) => void
-}) {
-  return (
-    <div className="ad-tablewrap">
-      <table className="ad-table wex-table">
-        <thead>
-          <tr>
-            <th>Expense</th>
-            <th>Receipt</th>
-            <th>Allocation</th>
-            <th>Bank or card line</th>
-            <th className="ad-num">Amount</th>
-          </tr>
-        </thead>
-        {groups.map((g) =>
-          byBudgetLine(g.lines).map((b) => (
-            <tbody key={`${g.id}-${b.name}`}>
-              <tr className="wex-group">
-                <td colSpan={4}>
-                  <span className="wex-group-eng">{g.name}</span> · {b.name}
-                </td>
-                <td className="ad-num">{money(b.total)}</td>
-              </tr>
-              {b.lines.map((l) => (
-                <tr key={l.key}>
-                  <td>
-                    <span className="font-semibold">{l.vendor || 'No vendor'}</span>
-                    <span className="ad-table-sub">{accountName(l.account)}</span>
-                    <span className="ad-table-sub">
-                      {shortDate(l.date)} · {l.type} {l.transactionId}
-                    </span>
-                    {l.status === 'already-entered' && (
-                      <Chip tone="muted">Already on the month</Chip>
-                    )}
-                    {l.saved === 'same' && <Chip tone="ok">Saved</Chip>}
-                    {l.saved === 'changed' && <Chip tone="warn">Changed since saved</Chip>}
-                  </td>
-                  <td className="ad-matchcell">
-                    <BillStack
-                      bills={l.bills}
-                      render={(bill) => (
-                        <ReceiptOfBill b={bill} actions={actions} onShow={onShow} />
-                      )}
-                      actions={actions}
-                    />
-                  </td>
-                  <td className="ad-matchcell">
-                    <AllocationCell l={l} exportName={exportName} />
-                  </td>
-                  <td className="ad-matchcell">
-                    <BillStack
-                      bills={l.bills.filter((x) => !x.dropped)}
-                      render={(bill) => (
-                        <PaymentOfBill b={bill} actions={actions} onShow={onShow} />
-                      )}
-                    />
-                  </td>
-                  <td className="ad-num">
-                    <span className="font-semibold">{money(l.amount)}</span>
-                    {l.allocation && (
-                      <span className="ad-table-sub">of {money(l.allocation.total)}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          ))
-        )}
-      </table>
-    </div>
-  )
-}
 
 /** A line's bills one under another, as a person's pay runs are on payroll's grid: the first few, then the rest. */
 function BillStack({
@@ -807,10 +582,13 @@ function ReceiptOfBill({
   b,
   actions,
   onShow,
+  quiet,
 }: {
   b: BooksBillDto
   actions: BillActions | null
   onShow: (v: Viewing) => void
+  /** In the stepper's grid, which already says it is missing: the controls alone. */
+  quiet?: boolean
 }) {
   if (b.receipt) {
     const r = b.receipt
@@ -837,7 +615,7 @@ function ReceiptOfBill({
   }
   return (
     <>
-      {missing('Missing')}
+      {!quiet && missing('Missing')}
       {actions && (
         <span className="wex-acts">
           {actions.open.length > 0 && (
@@ -889,10 +667,13 @@ function PaymentOfBill({
   b,
   actions,
   onShow,
+  quiet,
 }: {
   b: BooksBillDto
   actions: BillActions | null
   onShow: (v: Viewing) => void
+  /** In the stepper's grid, which already says it is missing: the controls alone. */
+  quiet?: boolean
 }) {
   if (b.payment) {
     const p = b.payment
@@ -919,7 +700,7 @@ function PaymentOfBill({
   }
   return (
     <>
-      {missing('No payment found')}
+      {!quiet && missing('No payment found')}
       {actions && (
         <span className="wex-acts">
           {b.paymentChoices.length > 0 && (
@@ -958,119 +739,6 @@ function PaymentOfBill({
         </span>
       )}
     </>
-  )
-}
-
-/** The books' split of a shared cost: this program's dollars of the whole, and every program's on Show. */
-function AllocationCell({ l, exportName }: { l: BooksLineDto; exportName: string }) {
-  if (!l.allocation) return <small className="text-soft">Not shared: the whole bill</small>
-  if (!l.split) return missing('No split in the books')
-  const s = l.split
-  const mine = s.rows.filter((r) => r.mine)
-  const booked = mine.reduce((t, r) => t + r.amount, 0)
-  return (
-    <div className="wex-bill">
-      <span className="wex-bill-head">
-        {s.how === 'entry' ? `Allocation entry ${s.transactionId}` : `Split of ${s.transactionId}`}:
-      </span>
-      <span className="mx-proof-file" title={exportName}>
-        {exportName}
-      </span>
-      <details className="wex-split">
-        <summary>
-          <small className="ad-match-note-ok">
-            ✓ {money(booked)} of {money(s.total)}
-          </small>{' '}
-          <span className="ad-match-show">Show</span>
-        </summary>
-        <table className="wex-split-table">
-          <tbody>
-            {s.rows.map((r, i) => (
-              <tr key={i} className={r.mine ? 'wex-split-mine' : undefined}>
-                <td>{r.className}</td>
-                <td className="ad-num">{money(r.amount)}</td>
-              </tr>
-            ))}
-            <tr className="wex-split-total">
-              <td>Total</td>
-              <td className="ad-num">{money(s.total)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </details>
-    </div>
-  )
-}
-
-/** The month's receipts that prove no bill: each with Show, and the bill it may prove. */
-function LooseReceipts({
-  receipts,
-  openBills,
-  actions,
-  onShow,
-}: {
-  receipts: BooksReceiptDto[]
-  openBills: { line: BooksLineDto; bill: BooksBillDto }[]
-  actions: BillActions | null
-  onShow: (v: Viewing) => void
-}) {
-  return (
-    <div className="ad-tablewrap">
-      <table className="ad-table">
-        <thead>
-          <tr>
-            <th>Receipt</th>
-            <th>Vendor</th>
-            <th>Date</th>
-            <th className="ad-num">Amount</th>
-            <th>Bill it proves</th>
-          </tr>
-        </thead>
-        <tbody>
-          {receipts.map((r) => (
-            <tr key={r.documentId}>
-              <td className="ad-matchcell">
-                <FoundProof
-                  fileName={r.fileName}
-                  state="missing"
-                  text="✕ Matched to no bill"
-                  onShow={() =>
-                    onShow({ kind: 'receipt', documentId: r.documentId, fileName: r.fileName })
-                  }
-                />
-              </td>
-              <td>{r.vendor ?? '—'}</td>
-              <td className="whitespace-nowrap">{r.date ? shortDate(r.date) : '—'}</td>
-              <td className="ad-num">{r.amount == null ? 'Not read' : money(r.amount)}</td>
-              <td>
-                {actions && openBills.length > 0 ? (
-                  <select
-                    aria-label={`Bill that ${r.fileName} proves`}
-                    value=""
-                    disabled={actions.busy}
-                    onChange={(ev) =>
-                      ev.target.value && actions.choose(ev.target.value, r.documentId)
-                    }
-                  >
-                    <option value="">Choose its bill…</option>
-                    {openBills.map(({ line, bill }) => (
-                      <option key={bill.transactionId} value={bill.transactionId}>
-                        {bill.vendor || line.vendor} · {money(bill.amount)} · {shortDate(bill.date)}{' '}
-                        (bill {bill.transactionId})
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <small className="text-soft">
-                    No bill in the books billed this month has this amount and date.
-                  </small>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
   )
 }
 

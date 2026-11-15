@@ -88,7 +88,7 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   good; no file count or stat chips; Download zip gives every file in the payroll zip's own folders, Receipts included,
   one export line; Add files lists the same folders as the tree) with Re-match with same files and Re-match with new files (the match wizard with
   "Replace them" ticked, the only way to replace the set; owner's decisions, 2026-11-14); Save returns to this page. No
-  separate expenses card: Expense matching opens from the Actions rows or the month-end steps.
+  separate expenses card: Review expenses opens from the Actions rows or the month-end steps.
 - **The payroll zip's folders** are one list, `ZIP_FOLDER_LIST` in `packages/types` (owner's decision, 2026-11-14):
   each folder's name, older names, whether it is required, the file types it takes and whether its files are kept.
   The upload's check, the upload screens' words, File Management's tree, Add files and Download zip, and the sample
@@ -462,20 +462,25 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
   text link. A dialog saves when its form is done: no separate "Save all" button under a list.
 - **The two payroll match screens stay alike** (owner's decision, 2026-10-19): the bookkeeper's per-engagement wizard
   (`PayrollProof.tsx`) and the owner's workspace match (`WorkspacePayrollPage.tsx`) are built from the same components
-  (`components/payroll-match/`) and read the same way: a red count only on "Remaining to match" (and a red "N to look
-  at" beside the owner's Staff and Participants, with a green "✓ N matched"), each proof found as its file, "✓ Found,
-  page N" (or a guess, or missing) and Show, one "How Auto-Match decided" panel for every reason (closed until Show), no
-  "fully proved" panel, a short "What Save will do" beside the footer, and the footer Back: upload / Discard (a red
-  text link) / "Save and continue". Change one only with the other. They also match the same way (owner's decision,
-  2026-11-14): the wizard's slots are worked out by the owner's rules for its one month (`month-plan.ts`: `planMatch`,
-  so a staff line takes only its tagged people's rows, then Auto-Match's sure pick), it reads the month's workspace
-  files beside the engagement's own (replacing removes only the engagement's), both count an item complete as Payroll &
-  Proof does, both skip a file already on the upload (same sha256), both file a zip's Receipts folder (the wizard on its
-  own month, `POST /reports/:id/receipts`; owner's decision, 2026-11-14), both flag two files that disagree, and both save a best guess only once it is confirmed (Confirm beside
-  it, or the file chosen by hand; owner's decision, 2026-11-14), and both put a search and Set for selected above
-  Remaining to match (`BulkBar`). Both end with Unmatched payments (owner's decision, 2026-11-14):
-  each staff line with no bank line, found on the statement or drawn by hand (`FindLineModal`, the month's workspace
-  statements included); the owner's steps are Upload / Payroll matching / Unmatched payments / Expense matching / Summary.
+  (`components/payroll-match/`) and read the same way. **Both are a stepper down the side** (owner's decision,
+  2026-11-15, `StepperDesign.tsx`): Upload your files / Analyzing and reconciling (animated, played once per run) /
+  Review staff payroll / Review participant pay / Find missing bank lines (skipped when every bank line was found) /
+  Review expenses (owner only) / Save and finish / Summary (owner only). Each step opens with its `StepHead` (step N
+  of M, its title, one line on what we checked); a step passed shows a green ✓ on the rail. The review steps are
+  the month end's reconciliation grid (`StaffReview`: the three tiles, rows grouped by engagement, complete rows
+  folded, each proof a chip and each problem one plain sentence with its fix beside it), and people on no list are
+  offered to the staff list or participants. Every footer is Back / Cancel / Next with the step it goes to ("Next:
+  review participant pay →"); Next saves quietly, and Save and finish celebrates what was saved, in plain words, one
+  unit per row. No "How Auto-Match decided" or "What Save will do" panels. Change one only with the other. They also
+  match the same way (owner's decision, 2026-11-14): the wizard's slots are worked out by the owner's rules for its one
+  month (`month-plan.ts`: `planMatch`, so a staff line takes only its tagged people's rows, then Auto-Match's sure
+  pick), it reads the month's workspace files beside the engagement's own (replacing removes only the engagement's),
+  both count an item complete as Payroll & Proof does, both skip a file already on the upload (same sha256), both file
+  a zip's Receipts folder (the wizard on its own month, `POST /reports/:id/receipts`; owner's decision, 2026-11-14;
+  the same receipt filed on both months counts once for the bills, `ExpensesService.receiptsOf`), both flag two files
+  that disagree, and both save a best guess only once it is confirmed (Confirm beside it, or the file chosen by hand;
+  owner's decision, 2026-11-14). Find missing bank lines lists each staff line with no bank line, found on the
+  statement or drawn by hand (`FindLineModal`, the month's workspace statements included).
 
 Keep the words short: one bold line that says the point, then steps as a list, never a paragraph that wraps three
 times. Look at it in the browser at the width it will be used before showing it to the owner.

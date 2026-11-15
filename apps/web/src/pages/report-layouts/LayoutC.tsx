@@ -3,7 +3,7 @@
  * and clickable, then "Expenses & Proof" and "Payroll & Proof", each a grid with a search and filter bar. Receipt
  * matching and payroll proof open as dialogs.
  */
-import { useEffect, useState, type ReactNode } from 'react'
+import { cloneElement, isValidElement, useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
   DOCUMENT_PURPOSE_LABELS,
@@ -275,7 +275,11 @@ export function LayoutC({ r, busy, notice, highlight, sections: s, act }: MonthL
       )}
       {dialog === 'payroll' && (
         <Modal title="Match payroll & timecards" onClose={() => setDialog(null)} full>
-          <div className="rl-c-dialog">{s.payrollProof}</div>
+          <div className="rl-c-dialog">
+            {isValidElement<{ onDone?: () => void }>(s.payrollProof)
+              ? cloneElement(s.payrollProof, { onDone: () => setDialog(null) })
+              : s.payrollProof}
+          </div>
         </Modal>
       )}
       {dialog === 'earlier' && (

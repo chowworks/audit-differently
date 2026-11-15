@@ -624,7 +624,10 @@ export function ReconcileTiles({
   counts,
   filter,
   onFilter,
+  show = 'Show them in the grids',
 }: {
+  /** What a tile's click does, in its note. */
+  show?: string
   counts: Record<Tone, number>
   filter: Tone | null
   onFilter: (t: Tone | null) => void
@@ -643,11 +646,7 @@ export function ReconcileTiles({
           <span className="ad-tile-label">{TILE[t].label}</span>
           <span className="ad-tile-value">{counts[t]}</span>
           <span className="ad-tile-note">
-            {!counts[t]
-              ? TILE[t].none
-              : filter === t
-                ? 'Shown below · click to clear'
-                : 'Show them in the grids'}
+            {!counts[t] ? TILE[t].none : filter === t ? 'Shown below · click to clear' : show}
           </span>
         </button>
       ))}
@@ -718,7 +717,7 @@ function GridNote({
 }
 
 /** A grid's rows in engagement groups, complete rows folded into "+ N complete" until asked for. */
-function GroupedRows<R extends { key: string; tone: Tone; group: string }>({
+export function GroupedRows<R extends { key: string; tone: Tone; group: string }>({
   rows,
   all,
   names,
@@ -728,7 +727,10 @@ function GroupedRows<R extends { key: string; tone: Tone; group: string }>({
   narrowed,
   row,
   foldWords,
+  foldComplete = false,
 }: {
+  /** Complete rows start folded (the match's review steps: the focus is what needs work). */
+  foldComplete?: boolean
   /** The rows the filters leave. */
   rows: R[]
   /** Every row of the grid: each engagement's "N of M complete" counts them all, whatever the filter. */
@@ -762,7 +764,7 @@ function GroupedRows<R extends { key: string; tone: Tone; group: string }>({
         const done = mine.filter((r) => r.tone === 'green')
         const closedFirst = !narrowed && g.id === NO_ENGAGEMENT
         const isClosed = closedFirst !== flipped.has(g.id)
-        const unfolded = narrowed || !hid.has(g.id)
+        const unfolded = narrowed || foldComplete === hid.has(g.id)
         const shown = unfolded ? g.rows : g.rows.filter((r) => r.tone !== 'green')
         const greens = g.rows.filter((r) => r.tone === 'green').length
         const report = reports.get(g.id)

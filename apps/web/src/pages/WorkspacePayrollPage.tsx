@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   MAX_WORKSPACE_PAYROLL_FILES,
@@ -32,6 +32,12 @@ import {
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { ApiError } from '@/services/api'
+import {
+  StaffReview,
+  OnNoList,
+  type ReviewRow,
+  type ReviewSlot,
+} from '@/components/payroll-match/StaffReview'
 import { money, periodLabel } from '@/lib/format'
 import { HandCard } from '@/components/HandCard'
 import { AddParticipantModal } from '@/components/AddParticipantModal'
@@ -46,8 +52,9 @@ import { NotFoundPage } from '@/pages/NotFoundPage'
 import { useRowEditing, type RowEditing } from '@/pages/report-layouts/row-editing'
 import { WorkspaceExpenses } from '@/pages/WorkspaceExpenses'
 import { MonthSummary } from '@/pages/MonthSummary'
+import { payrollSummary } from '@/pages/month-summary'
 import { unmatchedPayments, WorkspaceUnmatchedPayments } from '@/pages/WorkspaceUnmatchedPayments'
-import { expenseActions } from '@/pages/workspace-expenses'
+import { expenseActions, expenseSummary } from '@/pages/workspace-expenses'
 import {
   MAPPING_MAX_BYTES,
   RECEIPT_MAX_BYTES,
@@ -72,38 +79,22 @@ import {
   type MonthReceipts,
   type PayrollUpload,
 } from '@/pages/WorkspacePayrollFiles'
+import { PlanWords } from '@/pages/WorkspacePayrollReview'
 import {
-  ParticipantsFound,
-  PlanWords,
-  StaffFound,
-  type ShowSpot,
-} from '@/pages/WorkspacePayrollReview'
-import {
-  BulkBar,
-  type BulkFiles,
   LineCapNotes,
   MatchFooter,
   ProofFoot,
   ProvedCount,
-  ReadingProgress,
-  RemainingSection,
-  MatchedBy,
-  UnsavedNote,
-  WhyPanel,
+  CancelButton,
 } from '@/components/payroll-match/MatchParts'
 import { SLOT_LABEL } from '@/components/payroll-match/why'
 import {
   isStaffLine,
-  itemBlocks,
   missingAfterSave,
-  nobodyBlock,
-  ownChoice,
   paidWords,
-  participantBlocks,
   proofList,
   provedRows,
   slotSource,
-  staffBlocks,
   staffMissingWhy,
 } from '@/pages/workspace-payroll-plan'
 import {
@@ -113,9 +104,20 @@ import {
   lacksLine,
   ownLinks,
   slotKey,
+  slotsOf,
   type Picks,
 } from '@/pages/workspace-payroll'
 import '@/components/match-pairs.css'
+import {
+  Analyzing,
+  DESIGN_STEPS,
+  type DesignStep,
+  SaveCapture,
+  type CaptureRow,
+  StepHead,
+  StepRail,
+  railSteps,
+} from '@/components/payroll-match/StepperDesign'
 import {
   Button,
   Card,
@@ -125,7 +127,6 @@ import {
   Field,
   Modal,
   Notice,
-  Stepper,
   inputClass,
 } from '@/components/ui'
 
@@ -146,14 +147,6 @@ const subOf = (i: WorkspacePayrollItemDto) =>
 const many = (n: number, one: string, more = `${one}s`) =>
   `${n.toLocaleString('en-US')} ${n === 1 ? one : more}`
 /** Files go up to the run 20 at a time, the server's limit for one request. */
-/** The month end's steps (owner's decision, 2026-11-13). */
-const MONTH_END_STEPS = [
-  'Upload',
-  'Payroll matching',
-  'Unmatched payments',
-  'Expense matching',
-  'Summary',
-] as const
 const BATCH = 20
 /** Receipts sent at once (the server's limit for one request). */
 const RECEIPTS_AT_ONCE = 20
@@ -260,14 +253,19 @@ export function WorkspacePayrollPage() {
    */
   const view = params.get('view')
   const focus = view === 'match'
-  const flow = view === 'payments' || view === 'expenses' || view === 'summary' ? view : null
+  const flow =
+    view === 'payments' || view === 'expenses' || view === 'summary' || view === 'finish'
+      ? view
+      : null
   /** Opening one from the month adds a step to the browser's history; moving between them or closing replaces it. */
-  const show = (next: 'match' | 'payments' | 'expenses' | 'summary' | null) => {
+  const show = (next: 'match' | 'payments' | 'expenses' | 'summary' | 'finish' | null) => {
     if (!period || next === view) return
     setParams(next ? { period, view: next } : { period }, { replace: !!view })
   }
   // A card's Match again: the match below starts it.
   const [again, setAgain] = useState(0)
+  /** The stepper's Back from Find missing bank lines: the match opens again at participant pay. */
+  const [reviewBack, setReviewBack] = useState(false)
   const [matchStep, setMatchStep] = useState<'Upload' | 'Match'>('Upload')
   /** Starts the match card afresh when the owner goes back to the summary. */
   const [matchKey, setMatchKey] = useState(0)
@@ -283,6 +281,15 @@ export function WorkspacePayrollPage() {
     setResolve(null)
   }
   const d = useCards(id, period ?? '', period ? cardsVersion : 0, !!period)
+  // Save and finish: its lines land first, then each is stamped saved.
+  const [stamped, setStamped] = useState(false)
+  // Stamped once the lines have all landed, counted from when both the payroll and the expenses are read.
+  const finishReady = view === 'finish' && !!recon.data && !!expenses.data
+  useEffect(() => {
+    if (!finishReady) return setStamped(false)
+    const t = setTimeout(() => setStamped(true), 1600)
+    return () => clearTimeout(t)
+  }, [finishReady])
   if (wStatus === 404 || status === 404 || (w && !reader)) return <NotFoundPage />
   if (wError || error) return <ErrorNote message={wError ?? error} />
   if (!w || !periods) return <Empty>Loading…</Empty>
@@ -349,6 +356,72 @@ export function WorkspacePayrollPage() {
   // The month has payroll files (or one was saved just now): the engagement cards show.
   const saved = !!shownFiles?.files.length || !!shownRecon?.pays.length || cardsVersion > 0
   const filesError = files.loading ? null : files.error
+  // The steps after payroll's Save, with the rail beside them.
+  const left = shownRecon ? unmatchedPayments(shownRecon).length : 0
+  const pSum = shownRecon ? payrollSummary(shownRecon) : null
+  const eSum = shownExpenses ? expenseSummary(shownExpenses) : null
+  const finishRows: CaptureRow[] = [
+    // Plain words, one unit per row (owner's ask, 2026-11-15): files are files, pays are pays.
+    ...(shownFiles ? [{ label: 'Files saved from your zip', value: shownFiles.files.length }] : []),
+    ...(pSum
+      ? [
+          {
+            label: 'Pays (staff and participants) with all their proof',
+            value: `${pSum.proved} of ${pSum.items}`,
+            warn: pSum.proved < pSum.items,
+          },
+          { label: 'Pays found on the bank statements', value: pSum.bankPaid },
+        ]
+      : []),
+    ...(eSum
+      ? [
+          { label: 'Expenses from the books', value: `${eSum.billed} · ${money(eSum.total)}` },
+          {
+            label: 'Expenses with their receipt',
+            value: `${eSum.withReceipt} of ${eSum.bills}`,
+            warn: eSum.withReceipt < eSum.bills,
+          },
+          {
+            label: 'Expenses found paid on a statement',
+            value: `${eSum.paid} of ${eSum.bills}`,
+            warn: eSum.paid < eSum.bills,
+          },
+          ...(eSum.notes
+            ? [{ label: 'Shared costs with their split noted', value: eSum.notes }]
+            : []),
+        ]
+      : []),
+    ...(pSum && pSum.items > pSum.proved
+      ? [{ label: 'Still to do: pays missing proof', value: pSum.items - pSum.proved, warn: true }]
+      : []),
+    ...(eSum && eSum.bills > eSum.withReceipt
+      ? [
+          {
+            label: 'Still to do: expenses missing a receipt',
+            value: eSum.bills - eSum.withReceipt,
+            warn: true,
+          },
+        ]
+      : []),
+  ]
+  const flowRail = (current: DesignStep, node: ReactNode) => (
+    <StepRail
+      steps={railSteps(DESIGN_STEPS, current, {
+        'Analyzing and reconciling': { note: 'Done' },
+        'Review staff payroll': { note: 'Done' },
+        'Review participant pay': { note: 'Done' },
+        'Find missing bank lines': left
+          ? { note: `${many(left, 'pay')} with no bank line`, tone: 'danger' }
+          : { note: 'All found' },
+        ...(current === 'Save and finish' || current === 'Summary'
+          ? { 'Review expenses': { note: 'Done' } }
+          : {}),
+        ...(current === 'Summary' ? { 'Save and finish': { note: 'Saved' } } : {}),
+      })}
+    >
+      {node}
+    </StepRail>
+  )
   return (
     <>
       <nav className="ad-crumbs" aria-label="Breadcrumb">
@@ -384,82 +457,148 @@ export function WorkspacePayrollPage() {
       </div>
       {period && flow ? (
         <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
-          <button
-            type="button"
-            className="wpd-back"
-            onClick={() => {
-              show(null)
-              window.scrollTo({ top: 0 })
-            }}
-          >
-            ← Back to {periodLabel(period)}
-          </button>
           {savedNote && (flow === 'expenses' || flow === 'payments') && (
             <Notice tone="ok" fade>
               {savedNote}
             </Notice>
           )}
-          {flow === 'payments' ? (
-            <WorkspaceUnmatchedPayments
-              recon={shownRecon}
-              stepper={<Stepper steps={MONTH_END_STEPS} current="Unmatched payments" />}
-              onFound={(text) => {
-                setSavedNote(text)
-                setCardsVersion((n) => n + 1)
-                void recon.reload()
-              }}
-              onBack={() => {
-                setSavedNote(null)
-                show('match')
-                window.scrollTo({ top: 0 })
-              }}
-              onNext={() => {
-                setSavedNote(null)
-                show('expenses')
-                window.scrollTo({ top: 0 })
-              }}
-            />
-          ) : flow === 'expenses' ? (
-            <WorkspaceExpenses
-              workspaceId={w.id}
-              period={period}
-              stepper={
-                owner ? (
-                  <Stepper steps={MONTH_END_STEPS} current="Expense matching" lastDone={false} />
-                ) : undefined
-              }
-              onDone={() => {
-                show(null)
-                setSavedNote(null)
-                window.scrollTo({ top: 0 })
-              }}
-              onSaved={(_, note) => {
-                show('summary')
-                setSavedNote(note)
-                setCardsVersion((n) => n + 1)
-                void recon.reload()
-                window.scrollTo({ top: 0 })
-              }}
-            />
-          ) : (
-            <MonthSummary
-              workspaceId={w.id}
-              period={period}
-              stepper={<Stepper steps={MONTH_END_STEPS} current="Summary" />}
-              recon={shownRecon}
-              cards={d.cards}
-              files={shownFiles ? shownFiles.files.length : null}
-              onFix={(step) => {
-                show(step === 'expenses' ? 'expenses' : 'match')
-                setSavedNote(null)
-                window.scrollTo({ top: 0 })
-              }}
-              onDone={() => {
-                show(null)
-                window.scrollTo({ top: 0 })
-              }}
-            />
-          )}
+          {flow === 'payments'
+            ? flowRail(
+                'Find missing bank lines',
+                <WorkspaceUnmatchedPayments
+                  recon={shownRecon}
+                  stepper={
+                    <StepHead
+                      n={5}
+                      of={DESIGN_STEPS.length}
+                      title="Find missing bank lines"
+                      did="Every pay has to show up as money leaving your bank. Your bank shows each pay run as one direct-deposit debit, so we looked for that debit on the statement."
+                    />
+                  }
+                  onFound={(text) => {
+                    setSavedNote(text)
+                    setCardsVersion((n) => n + 1)
+                    void recon.reload()
+                  }}
+                  backLabel="Back: participant pay"
+                  nextLabel="Next: review expenses →"
+                  onBack={() => {
+                    setSavedNote(null)
+                    // The stepper's Back: the saved files are matched again, opening at participant pay.
+                    setReviewBack(true)
+                    show('match')
+                    window.scrollTo({ top: 0 })
+                  }}
+                  onNext={() => {
+                    setSavedNote(null)
+                    show('expenses')
+                    window.scrollTo({ top: 0 })
+                  }}
+                />
+              )
+            : flow === 'expenses'
+              ? flowRail(
+                  'Review expenses',
+                  <WorkspaceExpenses
+                    workspaceId={w.id}
+                    period={period}
+                    stepper={
+                      <StepHead
+                        n={6}
+                        of={DESIGN_STEPS.length}
+                        title="Review expenses"
+                        did="For each expense the books bill to an engagement, we looked for its receipt, the books' split when the cost is shared, and its bank or card line."
+                      />
+                    }
+                    onDone={() => {
+                      show(null)
+                      setSavedNote(null)
+                      window.scrollTo({ top: 0 })
+                    }}
+                    onBack={() => {
+                      setSavedNote(null)
+                      // Find missing bank lines is skipped when every bank line was found.
+                      if (!unmatchedPayments(shownRecon).length) setReviewBack(true)
+                      show(unmatchedPayments(shownRecon).length ? 'payments' : 'match')
+                      window.scrollTo({ top: 0 })
+                    }}
+                    backLabel={
+                      unmatchedPayments(shownRecon).length
+                        ? 'Back: find missing bank lines'
+                        : 'Back: participant pay'
+                    }
+                    nextLabel="Next: save and finish →"
+                    onSaved={(_, note) => {
+                      show('finish')
+                      void expenses.reload()
+                      setSavedNote(note)
+                      setCardsVersion((n) => n + 1)
+                      void recon.reload()
+                      window.scrollTo({ top: 0 })
+                    }}
+                  />
+                )
+              : flow === 'finish'
+                ? flowRail(
+                    'Save and finish',
+                    <Card title={`Save and finish: ${periodLabel(period)}`}>
+                      <div className="grid gap-4">
+                        <StepHead
+                          n={DESIGN_STEPS.indexOf('Save and finish') + 1}
+                          of={DESIGN_STEPS.length}
+                          title="Save and finish"
+                          did={
+                            stamped
+                              ? `Saved. Here is what we saved for ${periodLabel(period)}. Anything still to do stays on Month End Close.`
+                              : `Saving ${periodLabel(period)}…`
+                          }
+                        />
+                        <SaveCapture
+                          key={finishReady ? 'ready' : 'loading'}
+                          period={periodLabel(period)}
+                          what="month end"
+                          saved={stamped}
+                          rows={finishRows}
+                          footer={
+                            <div className="ad-actions justify-between">
+                              <Button kind="ghost" onClick={() => show('expenses')}>
+                                Back: review expenses
+                              </Button>
+                              <Button
+                                kind="navy"
+                                disabled={!stamped}
+                                onClick={() => {
+                                  show('summary')
+                                  window.scrollTo({ top: 0 })
+                                }}
+                              >
+                                Next: summary →
+                              </Button>
+                            </div>
+                          }
+                        />
+                      </div>
+                    </Card>
+                  )
+                : flowRail(
+                    'Summary',
+                    <MonthSummary
+                      workspaceId={w.id}
+                      period={period}
+                      recon={shownRecon}
+                      cards={d.cards}
+                      files={shownFiles ? shownFiles.files.length : null}
+                      onFix={(step) => {
+                        show(step === 'expenses' ? 'expenses' : 'match')
+                        setSavedNote(null)
+                        window.scrollTo({ top: 0 })
+                      }}
+                      onDone={() => {
+                        show(null)
+                        window.scrollTo({ top: 0 })
+                      }}
+                    />
+                  )}
         </div>
       ) : !period ? (
         <Empty>No engagement has a month yet. Start one on an engagement&apos;s page first.</Empty>
@@ -600,6 +739,7 @@ export function WorkspacePayrollPage() {
                 compact={saved && !focus}
                 alone={focus}
                 again={again}
+                resumeReview={reviewBack}
                 receipts={monthReceipts}
                 onOpen={() => {
                   show('match')
@@ -626,6 +766,8 @@ export function WorkspacePayrollPage() {
                   // step; from there, back to the month's summary.
                   setMatchKey((n) => n + 1)
                   setSavedNote(`Saved the payroll for ${periodLabel(period)}.`)
+                  setReviewBack(false)
+                  // Find missing bank lines only when a staff line has no bank line (owner's decision, 2026-11-15).
                   show(unmatchedPayments(r).length ? 'payments' : 'expenses')
                   window.scrollTo({ top: 0 })
                 }}
@@ -665,7 +807,10 @@ function WorkspaceMatch({
   alone = false,
   again = 0,
   receipts,
+  resumeReview = false,
 }: {
+  /** Opened by the stepper's Back from Find missing bank lines: match the saved files again, at participant pay. */
+  resumeReview?: boolean
   /** The month's receipts, a folder of File Management. */
   receipts?: MonthReceipts
   workspaceId: string
@@ -689,10 +834,22 @@ function WorkspaceMatch({
   /** The match open on its own, with nothing else on the page (no files card above it). */
   alone?: boolean
 }) {
-  // Expense matching, the step after Save, opens on the page (WorkspaceExpenses); then Summary (MonthSummary).
-  const STEPS = MONTH_END_STEPS
   const [step, setStep] = useState<'Upload' | 'Match'>('Upload')
   useEffect(() => onStep?.(step), [step, onStep])
+  // The match split into its steps, after an animated "Analyzing" step.
+  const [analyzed, setAnalyzed] = useState(false)
+  /** The analysis has played once for this run: Back shows it finished. */
+  const [played, setPlayed] = useState(false)
+  /** Its last stage has run: the rail's step 2 stops spinning. */
+  const [analysisDone, setAnalysisDone] = useState(false)
+  const [part, setPart] = useState<'staff' | 'participant'>('staff')
+  useEffect(() => {
+    if (step === 'Upload') {
+      setAnalyzed(false)
+      setPlayed(false)
+      setPart('staff')
+    }
+  }, [step])
   /** "Read the files with AI", ticked on the Upload step: unticked each time the page opens (#22). */
   const [withAi, setWithAi] = useState(false)
   /** "Re-match with new files" opened the match: its upload starts with "Replace them" ticked. */
@@ -712,9 +869,6 @@ function WorkspaceMatch({
   /** The upload can't go on as it is (half sent, gone, a file removed): the screen offers Start again. */
   const [stuck, setStuck] = useState(false)
   const [picks, setPicks] = useState<Picks>({})
-  const [search, setSearch] = useState('')
-  const [chosen, setChosen] = useState<Set<string>>(new Set())
-  const [bulk, setBulk] = useState<BulkFiles>({ timesheet: '', register: '' })
   /** Guesses the owner confirmed (`slotKey`): sent with Save, as the owner's own decisions. */
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set())
   const [reopening, setReopening] = useState(false)
@@ -832,7 +986,6 @@ function WorkspaceMatch({
   const opened = (r: WorkspacePayrollRunDto) => {
     setRun(r)
     setPicks({})
-    setChosen(new Set())
     setConfirmed(new Set())
     setStep('Match')
   }
@@ -1000,6 +1153,22 @@ function WorkspaceMatch({
     }
   }
   const hasFiles = !!files?.files.length
+  // The stepper's Back from Find missing bank lines (saved already): the saved files are matched again, and once read the
+  // match opens at participant pay.
+  // Meanwhile participant pay shows at once, with a quiet line, never step 2's spinner (owner's ask, 2026-11-15).
+  const [resuming, setResuming] = useState(resumeReview)
+  useEffect(() => {
+    if (resumeReview) void matchAgain()
+    // On opening only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    if (!resuming || !run || waiting || ai.reading) return
+    setResuming(false)
+    setAnalyzed(true)
+    setPlayed(true)
+    setPart('participant')
+  }, [resuming, run, waiting, ai.reading])
   const againSeen = useRef(again)
   useEffect(() => {
     if (again === againSeen.current) return
@@ -1040,7 +1209,6 @@ function WorkspaceMatch({
     setProgress(null)
     setPollError(null)
     setPicks({})
-    setChosen(new Set())
     setConfirmed(new Set())
     setStep('Upload')
   }
@@ -1054,7 +1222,6 @@ function WorkspaceMatch({
     }
     setRun(null)
     setPicks({})
-    setChosen(new Set())
     setConfirmed(new Set())
     setSaveError(null)
     setStep('Upload')
@@ -1064,17 +1231,11 @@ function WorkspaceMatch({
   // What the plan attaches decides what is still open; the owner's own choices don't move a row off the table.
   const planned = run ? proofList(run, []) : []
   const open = items.filter((i) => missingAfterSave(i, planned).length > 0)
-  // Search and Set for selected, as on the bookkeeper's wizard (owner's decision, 2026-11-14).
-  const q = search.trim().toLowerCase()
-  const shownOpen = q
-    ? open.filter((i) =>
-        `${i.engagementName} ${i.title} ${subOf(i)} ${i.amount}`.toLowerCase().includes(q)
-      )
-    : open
-  const allShown = shownOpen.length > 0 && shownOpen.every((i) => chosen.has(keyOf(i)))
-  // A file is chosen here only for a participant's proof still to find: a staff line's comes from its tagged staff.
-  const choosable = (i: WorkspacePayrollItemDto, slot: PayrollSlot) =>
-    !isStaffLine(i) && !slotSource(i, slot, planned)
+  const countOf = (kind: 'staff' | 'participant') => {
+    const all = items.filter((i) => i.kind === kind).length
+    const left = open.filter((i) => i.kind === kind).length
+    return { all, left, proved: all - left }
+  }
   const pick = (i: WorkspacePayrollItemDto, slot: PayrollSlot) =>
     picks[keyOf(i)]?.[slot] ?? (run ? autoPick(run, i, slot).pick : null) ?? ''
   const candidate = (
@@ -1114,7 +1275,6 @@ function WorkspaceMatch({
       setReopening(false)
       setRun(null)
       setPicks({})
-      setChosen(new Set())
       setConfirmed(new Set())
       // Save goes back to the month's summary, which shows what it did.
       onSaved(out)
@@ -1237,40 +1397,15 @@ function WorkspaceMatch({
     )
   }
 
-  /** Show on Staff and Participants: the run's file itself, with the line found highlighted. */
-  const showSpot: ShowSpot = (spot, title, slot) => {
-    if (!run) return
-    setViewing({
-      title,
-      src: `/workspace-payroll-match/${run.id}/files/${spot.fileId}`,
-      page: spot.mark?.page ?? 1,
-      personal: slot === 'stub',
-      fileName: run.files.find((f) => f.id === spot.fileId)?.fileName,
-      mark: spot.mark,
-    })
-  }
-
   const shown = progress ?? {
     total: run?.files.length ?? 0,
     read: run?.files.filter((f) => f.status === 'read').length ?? 0,
     failed: run?.files.filter((f) => f.status === 'failed').length ?? 0,
   }
-  const uploadMode = run?.mode === 'replace' || run?.mode === 'add'
   // Replace all: Save waits until every file of the zip has arrived.
   const incomplete = !!run && !run.plan.complete
   // Fully proved once Save attaches the plan's proof, and "How Auto-Match decided", as on the bookkeeper's wizard.
   const proved = run ? provedRows(run, planned) : []
-  const choice = (i: WorkspacePayrollItemDto, slot: PayrollSlot) =>
-    run ? ownChoice(run, picks, confirmed, i, slot) : undefined
-  const nobody = run ? nobodyBlock(run, toSave) : null
-  const blocks = run
-    ? [
-        ...staffBlocks(run),
-        ...participantBlocks(run, planned, choice),
-        ...itemBlocks(run, open, planned, choice),
-        ...(nobody ? [nobody] : []),
-      ]
-    : []
 
   /** How the upload works, with the sample zip: on the first upload and on the match opened on its own. */
   const howTo = (
@@ -1282,13 +1417,10 @@ function WorkspaceMatch({
       <ol className="ad-hand-steps">
         <li>
           Upload the company&apos;s payroll zip for {periodLabel(period)}, in the sample&apos;s
-          folders.
+          folders: timesheets, registers, pay stubs, bank statements and receipts.
         </li>
-        <li>Check what Auto-Match found for each engagement, and save.</li>
-        <li>
-          The reconciliation below shows what was matched, anything that isn&apos;t, and items
-          needing adjustment.
-        </li>
+        <li>We read every file and match each pay to its engagement and its proof.</li>
+        <li>You check what needs you, step by step, then finish.</li>
       </ol>
       <p className="ad-hand-address">
         <span className="ad-hand-address-label">The zip&apos;s layout</span>
@@ -1350,7 +1482,144 @@ function WorkspaceMatch({
       />
     )
 
-  return (
+  const staffCount = countOf('staff')
+  const partCount = countOf('participant')
+  const designAt = resuming
+    ? 'Review participant pay'
+    : step === 'Upload'
+      ? 'Upload your files'
+      : !analyzed || waiting
+        ? 'Analyzing and reconciling'
+        : part === 'staff'
+          ? 'Review staff payroll'
+          : 'Review participant pay'
+  const proofWords = (c: { all: number; left: number; proved: number }) =>
+    c.all
+      ? `${c.proved} of ${c.all} proved${c.left ? ` · ${c.left} to match` : ''}`
+      : 'None this month'
+  const designRail = railSteps(
+    DESIGN_STEPS,
+    designAt,
+    run
+      ? {
+          'Analyzing and reconciling': {
+            note: waiting ? `Reading… ${shown.read} of ${shown.total}` : `${shown.read} read`,
+          },
+          ...(analyzed && !waiting
+            ? {
+                'Review staff payroll': {
+                  note: proofWords(staffCount),
+                  ...(staffCount.left ? { tone: 'warn' as const } : {}),
+                },
+                'Review participant pay': {
+                  note: proofWords(partCount),
+                  ...(partCount.left ? { tone: 'warn' as const } : {}),
+                },
+              }
+            : {}),
+        }
+      : {},
+    designAt === 'Analyzing and reconciling' && (waiting || (!analyzed && !analysisDone))
+  )
+  // Step 3 as its options show it (owner's ask, 2026-11-15): every staff pay line, what proved it and what is wrong.
+  const reviewSlot = (i: WorkspacePayrollItemDto, slot: PayrollSlot): ReviewSlot => {
+    const label = SLOT_LABEL[slot]
+    const from = slotSource(i, slot, planned)
+    if (from?.on === 'file') return { label, state: 'ok', file: 'Already on the month' }
+    if (from) {
+      const f = planned
+        .find((p) => p.target === i.target && p.id === i.id)
+        ?.files.find((x) => x.slot === slot)
+      return {
+        label,
+        state: 'ok',
+        file: f?.fileName,
+        onShow:
+          run && f
+            ? () =>
+                setViewing({
+                  title: `${i.title}: ${label.toLowerCase()}`,
+                  src: `/workspace-payroll-match/${run.id}/files/${f.fileId}/copy?target=${i.target}&id=${i.id}&slot=${slot}`,
+                  page: 1,
+                  personal: slot === 'stub',
+                  fileName: f.fileName,
+                })
+            : undefined,
+      }
+    }
+    if (!run) return { label, state: 'missing' }
+    if (isStaffLine(i)) return { label, state: 'missing', problem: staffMissingWhy(run, i, slot) }
+    const value = pick(i, slot)
+    const fileName = run.files.find((f) => f.id === value)?.fileName
+    if (!value)
+      return {
+        label,
+        state: 'missing',
+        problem: run.files.some((f) => f.kind === PAYROLL_SLOT_KIND[slot])
+          ? `no line for this pay was found in any ${label.toLowerCase()} file: choose the file`
+          : `no ${label.toLowerCase()} in your zip`,
+        fix: run.files.some((f) => f.kind === PAYROLL_SLOT_KIND[slot]) ? cell(i, slot) : undefined,
+      }
+    const auto = autoPick(run, i, slot)
+    const isAuto = picks[keyOf(i)]?.[slot] === undefined
+    if (noLine(i, slot, value))
+      return {
+        label,
+        state: 'guess',
+        file: fileName,
+        problem: `${fileName} is chosen, but no line for this pay was found in it`,
+        fix: cell(i, slot),
+      }
+    if (isAuto && !auto.sure && !confirmed.has(slotKey(i, slot)))
+      return {
+        label,
+        state: 'guess',
+        file: fileName,
+        problem: `best guess ${fileName}: check it and confirm`,
+        fix: cell(i, slot),
+      }
+    return { label, state: 'ok', file: fileName }
+  }
+  // Staff lines Save leaves without a bank line: Next goes on to Find missing bank lines only then.
+  const bankLeft = items.filter(
+    (i) => i.kind === 'staff' && missingAfterSave(i, planned).includes('bank')
+  ).length
+  const reviewRows: ReviewRow[] = items
+    .filter((i) => i.kind === part)
+    .map((i) => ({
+      key: keyOf(i),
+      engagementId: i.engagementId,
+      engagementName: i.engagementName,
+      reportId: i.reportId,
+      title: i.title,
+      sub: subOf(i),
+      date: paidWords(i),
+      amount: i.amount,
+      slots: slotsOf(i).map((slot) => reviewSlot(i, slot)),
+    }))
+  const designHead =
+    step === 'Match' && run && analyzed && !waiting ? (
+      part === 'staff' ? (
+        <>
+          <StepHead
+            n={3}
+            of={DESIGN_STEPS.length}
+            title="Review staff payroll"
+            did="For each staff pay line on your engagements, we looked for the person's timesheet, their row in the payroll register and their pay run on the bank statement."
+          />
+        </>
+      ) : (
+        <>
+          <StepHead
+            n={4}
+            of={DESIGN_STEPS.length}
+            title="Review participant pay"
+            did="For each participant's pay, we looked for their pay stub, their row in the payroll register and their timesheet."
+          />
+        </>
+      )
+    ) : null
+  const card = (
     <>
       {(hasFiles || !files) && !alone && (
         <PayrollFilesCard
@@ -1385,11 +1654,14 @@ function WorkspaceMatch({
           )
         }
       >
-        <Stepper steps={STEPS} current={step === 'Match' ? 'Payroll matching' : 'Upload'} />
+        {!resuming && step === 'Upload' && (
+          <StepHead n={1} of={DESIGN_STEPS.length} title="Upload your files" />
+        )}
+        {designHead}
         <ErrorNote message={runError} />
         {expenseWarning && <Notice tone="warn">{expenseWarning}</Notice>}
         {(runError || fileError) && stuck && againButton}
-        {step === 'Upload' && !hasFiles && (
+        {!resuming && step === 'Upload' && !hasFiles && (
           <div className="grid gap-4">
             {howTo}
             {aiBox}
@@ -1405,22 +1677,9 @@ function WorkspaceMatch({
             />
           </div>
         )}
-        {step === 'Upload' && hasFiles && (
+        {!resuming && step === 'Upload' && hasFiles && (
           <div className="grid gap-4">
-            {alone && howTo}
-            {alone ? (
-              <p className="text-sm">
-                <b>
-                  Upload the month&apos;s zip, or match the {files!.files.length} saved files again.
-                </b>{' '}
-                Nothing is saved until you check the result and press Save.
-              </p>
-            ) : (
-              <p className="text-sm">
-                <b>Change the files above, or match them again.</b> Each change is checked here
-                before it is saved.
-              </p>
-            )}
+            {howTo}
             {aiBox}
             {alone ? (
               // As the bookkeeper's wizard (the two match screens stay alike): a zip to add or to replace the saved
@@ -1443,17 +1702,79 @@ function WorkspaceMatch({
           </div>
         )}
 
-        {step === 'Match' && run && waiting && (
-          <div className="grid gap-4">
-            <ReadingProgress progress={shown} />
-            <HandCard
-              title="Reading your files"
-              icon="⏳"
-              lead="You can close this: it keeps reading."
-            >
-              <p>When you open this page again, you pick up here.</p>
-            </HandCard>
-          </div>
+        {resuming && (
+          <>
+            <StepHead
+              n={4}
+              of={DESIGN_STEPS.length}
+              title="Review participant pay"
+              did="Opening your saved match again…"
+            />
+            <p className="text-sm text-soft" role="status">
+              <span className="ad-hourglass" aria-hidden="true">
+                ⏳
+              </span>{' '}
+              Reading the saved files once more: a few seconds.
+            </p>
+          </>
+        )}
+        {!resuming && step === 'Match' && run && !pollError && (waiting || !analyzed) && (
+          <>
+            <StepHead
+              n={2}
+              of={DESIGN_STEPS.length}
+              title="Analyzing and reconciling"
+              did={`We're reading your ${many(run.files.length, 'file')} and matching every pay on your engagements to its proof.`}
+            />
+            <Analyzing
+              instant={played}
+              onFinished={setAnalysisDone}
+              files={run.files}
+              progress={shown}
+              read={!waiting && !ai.reading}
+              stages={[
+                {
+                  title: 'Found the pay in them',
+                  did: 'Register rows, pay stubs and payroll details: whose pay, which period, how much.',
+                  result: `${many(run.runs.length, 'pay run')} · ${many(run.plan.stubs.length, 'pay stub')}`,
+                },
+                {
+                  title: 'Staff pay lines → their proof',
+                  did: 'Each staff line on your engagements, against its timesheet and register row.',
+                  result: proofWords(staffCount),
+                },
+                {
+                  title: 'Participant pay → their stubs',
+                  did: "Each participant's pay, against their pay stub and the register.",
+                  result: proofWords(partCount),
+                },
+                {
+                  title: 'Pay runs → the bank statement',
+                  did: "Each run's one direct-deposit debit, against the register's total.",
+                  result: `${many(run.files.filter((f) => f.kind === 'bank-statement').length, 'statement')} checked`,
+                },
+              ]}
+              back={
+                <span className="flex items-center gap-3">
+                  <Button kind="ghost" onClick={() => setStep('Upload')}>
+                    Back: upload
+                  </Button>
+                  <CancelButton onCancel={() => void discard()} />
+                </span>
+              }
+              next={
+                <Button
+                  kind="navy"
+                  onClick={() => {
+                    setAnalyzed(true)
+                    setPlayed(true)
+                  }}
+                >
+                  Next: review staff payroll →
+                </Button>
+              }
+            />
+          </>
         )}
         {step === 'Match' && run && pollError && (
           <>
@@ -1461,139 +1782,49 @@ function WorkspaceMatch({
             {againButton}
           </>
         )}
-        {step === 'Match' && run && !waiting && !pollError && ai.reading && (
-          <AiReadingNote progress={ai.progress} error={null} />
-        )}
-        {step === 'Match' && run && !waiting && !pollError && !ai.reading && (
+        {step === 'Match' && run && !waiting && !pollError && !ai.reading && analyzed && (
           <div className="grid gap-4">
-            <UnsavedNote what={uploadMode ? 'upload' : 'change'} />
             {ai.error && <AiReadingNote progress={null} error={ai.error} />}
             <LineCapNotes files={run.files.filter((f) => f.overLineCap)} />
-            {items.length === 0 ? (
-              // Nothing to fill on the months yet (no staff lines imported, no payments): what Save does is below.
+            {items.length > 0 ? (
+              <>
+                <StaffReview key={part} rows={reviewRows} />
+                {staff?.can.change && (
+                  <OnNoList
+                    people={
+                      part === 'staff'
+                        ? run.plan.unlisted.map((u) => ({
+                            name: u.name,
+                            where: 'in the timesheet or payroll register',
+                            action: 'Add to the staff list',
+                            onAdd: () => setAddingStaff(u.name),
+                          }))
+                        : run.plan.stubs
+                            .filter((x) => !x.participant && x.flags.includes('no-participant'))
+                            .map((x) => ({
+                              name: x.named ?? 'Someone',
+                              where: 'on a pay stub',
+                              action: 'Add to participants',
+                              onAdd: () => setAddingStub(x),
+                            }))
+                    }
+                  />
+                )}
+              </>
+            ) : (
+              // Nothing to fill on the months yet (no staff lines imported, no payments).
               run.months.length === 0 && (
                 <Empty>
                   No engagement has a month for {periodLabel(period)}: start one to file this
                   payroll.
                 </Empty>
               )
-            ) : open.length === 0 ? (
-              <Empty>Every payroll item has its proof once you save.</Empty>
-            ) : (
-              <RemainingSection count={open.length}>
-                <BulkBar
-                  search={search}
-                  onSearch={setSearch}
-                  allShown={allShown}
-                  found={shownOpen.length}
-                  onSelectAll={(all) => {
-                    const next = new Set(chosen)
-                    for (const i of shownOpen)
-                      if (all) next.add(keyOf(i))
-                      else next.delete(keyOf(i))
-                    setChosen(next)
-                  }}
-                  files={{
-                    timesheet: run.files.filter((f) => f.kind === PAYROLL_SLOT_KIND.timesheet),
-                    register: run.files.filter((f) => f.kind === PAYROLL_SLOT_KIND.register),
-                  }}
-                  bulk={bulk}
-                  onBulk={setBulk}
-                  chosen={chosen.size}
-                  onSet={() => {
-                    const next = { ...picks }
-                    for (const i of open)
-                      if (chosen.has(keyOf(i)))
-                        next[keyOf(i)] = {
-                          ...next[keyOf(i)],
-                          ...(bulk.timesheet && choosable(i, 'timesheet')
-                            ? { timesheet: bulk.timesheet }
-                            : {}),
-                          ...(bulk.register && choosable(i, 'register')
-                            ? { register: bulk.register }
-                            : {}),
-                        }
-                    setPicks(next)
-                    setChosen(new Set())
-                  }}
-                />
-                <div className="ad-tablewrap">
-                  <table className="ad-table">
-                    <thead>
-                      <tr>
-                        <th></th>
-                        <th>Engagement</th>
-                        <th>Vendor/Participant Paid</th>
-                        <th>Date</th>
-                        <th className="ad-num">Amount</th>
-                        <th>Timesheet</th>
-                        <th>Payroll register</th>
-                        <th>Evidence of payment</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {shownOpen.length === 0 && (
-                        <tr>
-                          <td colSpan={8} className="text-soft">
-                            No payroll item matches &ldquo;{search}&rdquo;.
-                          </td>
-                        </tr>
-                      )}
-                      {shownOpen.map((i) => (
-                        <tr key={keyOf(i)}>
-                          <td>
-                            <input
-                              type="checkbox"
-                              aria-label={`Select ${i.title}`}
-                              checked={chosen.has(keyOf(i))}
-                              onChange={(e) => {
-                                const next = new Set(chosen)
-                                if (e.target.checked) next.add(keyOf(i))
-                                else next.delete(keyOf(i))
-                                setChosen(next)
-                              }}
-                            />
-                          </td>
-                          <td>
-                            <span className="font-semibold">{i.engagementName}</span>
-                            <span className="ad-table-sub">
-                              {REPORT_STATUS_LABELS[i.monthStatus]}
-                            </span>
-                          </td>
-                          <td>
-                            <span className="font-semibold">{i.title}</span>
-                            <span className="ad-table-sub">{subOf(i)}</span>
-                          </td>
-                          <td className="whitespace-nowrap">{paidWords(i)}</td>
-                          <td className="ad-num font-semibold">{money(i.amount)}</td>
-                          <td className="ad-matchcell">{cell(i, 'timesheet')}</td>
-                          <td className="ad-matchcell">{cell(i, 'register')}</td>
-                          <td className="ad-matchcell">
-                            {cell(i, i.kind === 'participant' ? 'stub' : 'bank')}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </RemainingSection>
             )}
             {addedNote && (
               <Notice tone="ok" fade>
                 {addedNote}
               </Notice>
             )}
-            <StaffFound
-              run={run}
-              workspaceId={workspaceId}
-              onShow={showSpot}
-              onAdd={staff?.can.change ? (name) => setAddingStaff(name) : undefined}
-            />
-            <ParticipantsFound
-              run={run}
-              onShow={showSpot}
-              onAdd={staff?.can.change ? (stub) => setAddingStub(stub) : undefined}
-            />
             {addingStaff && staff && (
               <AddStaffFoundModal
                 runId={run.id}
@@ -1632,14 +1863,7 @@ function WorkspaceMatch({
             )}
             {!reopening && <ErrorNote message={saveError} />}
             {saveError && stuck && againButton}
-            {blocks.length > 0 && (
-              <WhyPanel
-                blocks={blocks}
-                source={<MatchedBy run={run} />}
-                intro="Auto-Match opens every file in your zip and looks for each person's name, pay and pay period. Below, for every staff member, participant and item still to match, you see which file it picked for each proof and what it found there, or why it found nothing; last, the lines and files that land on no engagement. Show, on the grid, opens that file with those words highlighted."
-              />
-            )}
-            {incomplete && (
+            {incomplete && part === 'participant' && (
               <div className="grid gap-3">
                 <p className="ad-field-error-sum" role="status">
                   {run.files.length.toLocaleString('en-US')} of the zip&apos;s{' '}
@@ -1659,29 +1883,56 @@ function WorkspaceMatch({
                 />
               </div>
             )}
-            <PlanWords
-              run={run}
-              chosen={toSave}
-              proof={proof}
-              reopen={toReopen}
-              onBudget={() =>
-                void api
-                  .get<WorkspacePayrollRunDto>(`/workspace-payroll-match/${run.id}`)
-                  .then(setRun, (e: Error) => setRunError(e.message))
-              }
-            />
-            <MatchFooter
-              onBack={() => setStep('Upload')}
-              backLabel="Back: upload"
-              onDiscard={() => void discard()}
-              discardLabel={uploadMode ? 'Discard this upload' : 'Discard this change'}
-              saving={saving}
-              save={{
-                label: saving ? 'Saving…' : 'Save and continue',
-                disabled: saving || incomplete,
-                onClick: () => (toReopen.length ? setReopening(true) : void save()),
-              }}
-            />
+            {part === 'staff' ? (
+              <MatchFooter
+                onBack={() => setAnalyzed(false)}
+                backLabel="Back: analyzing"
+                onDiscard={() => void discard()}
+                saving={false}
+                save={{
+                  label: 'Next: review participant pay →',
+                  disabled: false,
+                  onClick: () => {
+                    setPart('participant')
+                    window.scrollTo({ top: 0 })
+                  },
+                }}
+              />
+            ) : (
+              // Saved quietly on Next (owner's decision, 2026-11-15): the celebration is at the end.
+              <>
+                {/* Only what must be set up before Next can save (owner's ask, 2026-11-15: no detail panels here). */}
+                {(run.setup ?? []).length > 0 && (
+                  <PlanWords
+                    run={run}
+                    chosen={toSave}
+                    proof={proof}
+                    reopen={toReopen}
+                    onBudget={() =>
+                      void api
+                        .get<WorkspacePayrollRunDto>(`/workspace-payroll-match/${run.id}`)
+                        .then(setRun, (e: Error) => setRunError(e.message))
+                    }
+                  />
+                )}
+                <MatchFooter
+                  error={saveError}
+                  onBack={() => setPart('staff')}
+                  backLabel="Back: staff payroll"
+                  onDiscard={() => void discard()}
+                  saving={saving}
+                  save={{
+                    label: saving
+                      ? 'Saving…'
+                      : bankLeft
+                        ? 'Next: find missing bank lines →'
+                        : 'Next: review expenses →',
+                    disabled: saving || incomplete,
+                    onClick: () => (toReopen.length ? setReopening(true) : void save()),
+                  }}
+                />
+              </>
+            )}
           </div>
         )}
 
@@ -1768,6 +2019,7 @@ function WorkspaceMatch({
       </Card>
     </>
   )
+  return alone || step === 'Match' ? <StepRail steps={designRail}>{card}</StepRail> : card
 }
 
 /**

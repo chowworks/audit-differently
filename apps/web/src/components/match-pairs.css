@@ -306,23 +306,6 @@ details[open] > summary .mx-toggle-hide {
   font-size: 13px;
   font-weight: 600;
 }
-/* Discard on the Match step's footer: a removal, so a red text link. */
-.mx-discard {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--danger);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.mx-discard:hover:not(:disabled) {
-  text-decoration: underline;
-}
-.mx-discard:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
 
 /* A proof found in several payroll runs: one line per run, each with its pay date. */
 .mx-runs {

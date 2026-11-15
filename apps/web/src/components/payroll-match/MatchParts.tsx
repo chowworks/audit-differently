@@ -1,9 +1,8 @@
 import type { ReactNode } from 'react'
-import { MAX_PAY_LINES, type PayrollMatchProgress, type PayrollMatchRunDto } from '@ad/types'
-import { shortDate } from '@/lib/format'
-import { Button, ErrorNote, Notice, inputClass } from '@/components/ui'
+import { MAX_PAY_LINES } from '@ad/types'
+import { Button, ErrorNote, Notice } from '@/components/ui'
 import '@/components/match-pairs.css'
-import { WHY_RESULT, provedWords, type WhyBlock } from './why'
+import { provedWords } from './why'
 
 /**
  * The pieces of the Match step both payroll match screens render (owner's decision, 2026-10-19): the bookkeeper's
@@ -11,81 +10,23 @@ import { WHY_RESULT, provedWords, type WhyBlock } from './why'
  * here and both change.
  */
 
-/** "Reading the files on the server: 3 of 8 done", with its bar, while the job reads the upload. */
-export function ReadingProgress({ progress }: { progress: PayrollMatchProgress }) {
-  const { read, failed, total } = progress
-  return (
-    <div className="grid gap-2">
-      <p className="text-sm font-semibold" role="status">
-        <span className="ad-hourglass" aria-hidden="true">
-          ⏳
-        </span>{' '}
-        Reading the files on the server: {read} of {total} done
-        {failed ? `, ${failed} could not be read` : ''}
-      </p>
-      <span className="ad-progress" aria-hidden="true">
-        <span style={{ width: `${total ? ((read + failed) / total) * 100 : 0}%` }} />
-      </span>
-    </div>
-  )
-}
-
 /** "N of M payroll items complete", beside the card's title. */
 export function ProvedCount({ proved, total }: { proved: number; total: number }) {
   return <span className="text-xs text-soft">{provedWords(proved, total)}</span>
 }
 
-/** What the match was worked out from (#22): the runs the registers print, payroll details, and the files AI read. */
-export function MatchedBy({ run }: { run: PayrollMatchRunDto }) {
-  const details = run.files.filter((f) => f.kind === 'payroll-details').length
-  const day = (d: string) => shortDate(d).replace(/, \d{4}$/, '')
-  const parts = [
-    run.runs.length
-      ? `the ${run.runs.map((r) => day(r.payDate)).join(' and ')} payroll ${run.runs.length === 1 ? 'run' : 'runs'}`
-      : "the files' own pay dates",
-    ...(details ? ['payroll details'] : []),
-    ...(run.ai.read.length ? [`AI (${run.ai.read.length} files)`] : []),
-  ]
-  return (
-    <p className="text-sm">
-      <b>Matched with</b>{' '}
-      {parts.length > 1
-        ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
-        : parts[0]}
-      .
-    </p>
-  )
-}
+/** How sure a found proof is: found (green), a guess to check (amber) or missing (red), as the bookkeeper's grid says. */
+export type ProofState = 'ok' | 'guess' | 'missing'
 
-/** Nothing is saved until Save; the upload waits a day. */
-export function UnsavedNote({
-  removing = 0,
-  what = 'upload',
-}: {
-  removing?: number
-  what?: string
-}) {
-  return (
-    <p className="ad-replacing" role="status">
-      Nothing is saved until you press Save
-      {removing
-        ? `, which also removes the ${removing} earlier payroll ${removing === 1 ? 'file' : 'files'}`
-        : ''}
-      . Close any time: this {what} waits here for a day.
-    </p>
-  )
+const NOTE_CLASS: Record<ProofState, string> = {
+  ok: 'ad-match-note-ok',
+  guess: 'ad-match-note-guess',
+  missing: 'ad-match-note-missing',
 }
-
-/** The work still to do, with its red count. */
-export function RemainingSection({ count, children }: { count: number; children: ReactNode }) {
-  return (
-    <section className="mx-work" aria-label="To match">
-      <h3 className="mx-work-title">
-        Remaining to match: <span className="mx-count">{count}</span>
-      </h3>
-      {children}
-    </section>
-  )
+const NOTE_WORDS: Record<ProofState, string> = {
+  ok: '✓ Found',
+  guess: '⚠️ Best guess: check it',
+  missing: '✕ Missing',
 }
 
 /** A box that opens: a chevron, its title and one line, and Show/Hide. */
@@ -118,70 +59,6 @@ export function MatchPanel({
       </details>
     </section>
   )
-}
-
-const WHY_INTRO =
-  "Auto-Match opens every file in your zip and looks for each person's name, pay and pay period. Below, for every item, you see which file it picked for each proof and what it found there, or why it found nothing. Show, on the grid, opens that file with those words highlighted."
-
-/** "How Auto-Match decided": one block per item (or person), one row per proof. */
-export function WhyPanel({
-  blocks,
-  intro = WHY_INTRO,
-  source,
-}: {
-  blocks: WhyBlock[]
-  intro?: string
-  /** What the match was worked out from (`MatchedBy`), under the intro (owner's decision, 2026-10-19). */
-  source?: ReactNode
-}) {
-  return (
-    <MatchPanel
-      label="How Auto-Match decided"
-      title="How Auto-Match decided"
-      sub="Why each file was matched, or why nothing was."
-    >
-      <p className="mx-why-intro">{intro}</p>
-      {source}
-      <div className="mx-why-list">
-        {blocks.map((b) => (
-          <div key={b.key} className="mx-why">
-            <div className="mx-why-head">
-              <b>{b.title}</b>
-              {b.sub && <span className="text-soft">{b.sub}</span>}
-            </div>
-            <table className="mx-why-table">
-              <tbody>
-                {b.rows.map((row, n) => (
-                  <tr key={`${row.label}-${n}`} className={`mx-why-${row.tone}`}>
-                    <th scope="row">{row.label}</th>
-                    <td className="mx-why-result">{WHY_RESULT[row.tone]}</td>
-                    <td className="mx-why-file" title={row.file}>
-                      {row.file ?? '—'}
-                    </td>
-                    <td>{row.text}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
-      </div>
-    </MatchPanel>
-  )
-}
-
-/** How sure a found proof is: found (green), a guess to check (amber) or missing (red), as the bookkeeper's grid says. */
-export type ProofState = 'ok' | 'guess' | 'missing'
-
-const NOTE_CLASS: Record<ProofState, string> = {
-  ok: 'ad-match-note-ok',
-  guess: 'ad-match-note-guess',
-  missing: 'ad-match-note-missing',
-}
-const NOTE_WORDS: Record<ProofState, string> = {
-  ok: '✓ Found',
-  guess: '⚠️ Best guess: check it',
-  missing: '✕ Missing',
 }
 
 /** "✓ Found, page 2", or "✓ ✨ Found by AI, page 2" when AI read it from the file. */
@@ -260,13 +137,12 @@ export function Tally({
   )
 }
 
-/** The Match step's footer: Back: upload and Discard (a red text link) on the left, the green Save on the right. */
+/** A step's footer: Back and Cancel on the left, Next on the right. */
 export function MatchFooter({
   error,
   onBack,
   backLabel = 'Back: upload',
   onDiscard,
-  discardLabel = 'Discard this upload',
   saving,
   save,
 }: {
@@ -275,10 +151,10 @@ export function MatchFooter({
   backLabel?: string
   /** Only while there is an upload to discard. */
   onDiscard?: () => void
-  discardLabel?: string
   saving: boolean
   save: { label: string; disabled: boolean; onClick: () => void }
 }) {
+  // Every footer is Back, Cancel and Next (owner's ask, 2026-11-15).
   return (
     <>
       <ErrorNote message={error ?? null} />
@@ -287,17 +163,29 @@ export function MatchFooter({
           <Button kind="ghost" onClick={onBack}>
             {backLabel}
           </Button>
-          {onDiscard && (
-            <button type="button" className="mx-discard" onClick={onDiscard} disabled={saving}>
-              {discardLabel}
-            </button>
-          )}
+          {onDiscard && <CancelButton onCancel={onDiscard} disabled={saving} />}
         </span>
-        <Button kind="primary" onClick={save.onClick} disabled={save.disabled}>
+        <Button kind="navy" onClick={save.onClick} disabled={save.disabled}>
           {save.label}
         </Button>
       </div>
     </>
+  )
+}
+
+/** The stepper's Cancel: asks first, then drops the upload; nothing is saved. */
+export function CancelButton({ onCancel, disabled }: { onCancel: () => void; disabled?: boolean }) {
+  return (
+    <Button
+      kind="ghost"
+      disabled={disabled}
+      onClick={() =>
+        confirm('Cancel this match? The files you uploaded are dropped and nothing is saved.') &&
+        onCancel()
+      }
+    >
+      Cancel
+    </Button>
   )
 }
 
@@ -331,89 +219,3 @@ export function Resolve({ onClick, label = 'Resolve' }: { onClick: () => void; l
 
 /** The two files Set for selected fills in. */
 export type BulkFiles = { timesheet: string; register: string }
-
-/**
- * Above the Remaining to match table on both match screens (owner's decision, 2026-11-14): a search, Select all (what
- * the search found), a timesheet and a register, and Set for selected, which fills them in where a selected item can
- * take that file.
- */
-export function BulkBar({
-  search,
-  onSearch,
-  allShown,
-  found,
-  onSelectAll,
-  files,
-  bulk,
-  onBulk,
-  chosen,
-  onSet,
-}: {
-  search: string
-  onSearch: (q: string) => void
-  allShown: boolean
-  /** How many rows the search found, for "Select all N found". */
-  found: number
-  onSelectAll: (all: boolean) => void
-  files: {
-    timesheet: { id: string; fileName: string }[]
-    register: { id: string; fileName: string }[]
-  }
-  bulk: BulkFiles
-  onBulk: (b: BulkFiles) => void
-  chosen: number
-  onSet: () => void
-}) {
-  return (
-    <div className="ad-bulkbar">
-      <label className="ad-search">
-        <svg
-          className="ad-search-icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          aria-hidden="true"
-        >
-          <circle cx="10.5" cy="10.5" r="6.5" />
-          <path d="M15.5 15.5 21 21" />
-        </svg>
-        <input
-          type="search"
-          placeholder="Search name, item or amount"
-          aria-label="Search the payroll items"
-          value={search}
-          onChange={(e) => onSearch(e.target.value)}
-        />
-      </label>
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={allShown} onChange={(e) => onSelectAll(e.target.checked)} />
-        {search.trim() ? `Select all ${found} found` : 'Select all'}
-      </label>
-      {(['timesheet', 'register'] as const).map((slot) => (
-        <select
-          key={slot}
-          className={inputClass}
-          aria-label={`${slot} for the selected items`}
-          value={bulk[slot]}
-          onChange={(e) => onBulk({ ...bulk, [slot]: e.target.value })}
-        >
-          <option value="">{slot === 'timesheet' ? 'Timesheet…' : 'Register…'}</option>
-          {files[slot].map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.fileName}
-            </option>
-          ))}
-        </select>
-      ))}
-      <Button
-        kind="navy"
-        size="sm"
-        disabled={!chosen || (!bulk.timesheet && !bulk.register)}
-        onClick={onSet}
-      >
-        Set for selected
-      </Button>
-    </div>
-  )
-}

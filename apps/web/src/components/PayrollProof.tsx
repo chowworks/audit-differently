@@ -1,6 +1,5 @@
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { Suspense, cloneElement, lazy, useEffect, useRef, useState } from 'react'
 import {
-  ZIP_FOLDER_LIST,
   andList,
   PAYROLL_PERSONAL_KINDS,
   PAYROLL_DOCUMENT_KINDS,
@@ -34,19 +33,24 @@ import {
 } from '@/lib/zip-files'
 import { HandCard } from '@/components/HandCard'
 import './match-pairs.css'
+import {
+  Analyzing,
+  DESIGN_STEPS,
+  SaveCapture,
+  type CaptureRow,
+  StepHead,
+  StepRail,
+  railSteps,
+  type DesignStep,
+} from '@/components/payroll-match/StepperDesign'
 import { money, payPeriodWords, periodLabel, shortDate } from '@/lib/format'
 import { DocumentLink } from '@/components/DocumentLink'
 import {
-  BulkBar,
   MatchFooter,
   ProofFoot,
   ProvedCount,
-  ReadingProgress,
   LineCapNotes,
-  RemainingSection,
-  MatchedBy,
-  UnsavedNote,
-  WhyPanel,
+  CancelButton,
 } from '@/components/payroll-match/MatchParts'
 import {
   AiReadBox,
@@ -54,11 +58,15 @@ import {
   useAiAfterUpload,
   usePayrollAi,
 } from '@/components/payroll-match/AiReadBox'
-import { SLOT_LABEL, slotWhy } from '@/components/payroll-match/why'
+import { SLOT_LABEL } from '@/components/payroll-match/why'
+import {
+  StaffReview,
+  type ReviewRow,
+  type ReviewSlot,
+} from '@/components/payroll-match/StaffReview'
 import {
   Button,
   Card,
-  Stepper,
   Chip,
   Empty,
   ErrorNote,
@@ -133,15 +141,40 @@ export function PayrollProof({
   report: r,
   onChange,
   onNotice,
+  onDone,
 }: {
   report: ReportDetail
   onChange: (report: ReportDetail) => void
   onNotice: (text: string) => void
+  /** Closes the wizard: the stepper's Done on its last step. */
+  onDone?: () => void
 }) {
-  const STEPS = ['Upload', 'Payroll matching', 'Unmatched payments', 'Summary'] as const
   // An opening picks up the person's unsaved run of the month (the job keeps reading while the wizard is closed);
   // without one it starts at Upload.
-  const [step, setStep] = useState<(typeof STEPS)[number]>('Upload')
+  const [step, setStep] = useState<
+    'Upload' | 'Payroll matching' | 'Unmatched payments' | 'Summary'
+  >('Upload')
+  // The match split into its steps, after an animated "Analyzing" step.
+  const [analyzed, setAnalyzed] = useState(false)
+  /** The analysis has played once for this run: Back shows it finished. */
+  const [played, setPlayed] = useState(false)
+  /** Its last stage has run: the rail's step 2 stops spinning. */
+  const [analysisDone, setAnalysisDone] = useState(false)
+  const [part, setPart] = useState<'staff' | 'participant'>('staff')
+  // Save and finish: its lines land first, then each is stamped saved.
+  const [stamped, setStamped] = useState(false)
+  useEffect(() => {
+    if (step !== 'Summary') return setStamped(false)
+    const t = setTimeout(() => setStamped(true), 1100)
+    return () => clearTimeout(t)
+  }, [step])
+  useEffect(() => {
+    if (step === 'Upload') {
+      setAnalyzed(false)
+      setPlayed(false)
+      setPart('staff')
+    }
+  }, [step])
   const [run, setRun] = useState<PayrollMatchRunDto | null>(null)
   const [reading, setReading] = useState<string | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
@@ -352,26 +385,8 @@ export function PayrollProof({
   // and its payment goes on to Unmatched payments to have the line found there.
   const noLine = (item: PayrollItem, slot: PayrollSlot, fileId: string) =>
     slot === 'bank' && !candidate(item, slot, fileId)?.mark
-  // Why each slot was filled or left empty, for "How Auto-Match decided".
-  const whyOf = (item: PayrollItem, slot: PayrollSlot) => {
-    const attached = has(item, slot)
-    return slotWhy({
-      attached: attached ? { file: attached.document.fileName } : null,
-      chosen: picks[keyOf(item)]?.[slot],
-      match: matchOf(item, slot),
-      fileName: (id) => fileOf(id)?.fileName,
-      noLine: (id) => noLine(item, slot, id),
-      noLineText: 'No line for this payment was found on it: find it under Unmatched payments.',
-    })
-  }
-  const [search, setSearch] = useState('')
   // What the zip's Receipts folder did: added and matched, and any left out.
   const [receiptsLeft, setReceiptsLeft] = useState<string | null>(null)
-  const [chosen, setChosen] = useState<Set<string>>(new Set())
-  const [bulk, setBulk] = useState<{ timesheet: string; register: string }>({
-    timesheet: '',
-    register: '',
-  })
   const [saving, setSaving] = useState(false)
   // How many earlier payroll files the last Save replaced, for the Done step.
   const [replaced, setReplaced] = useState(0)
@@ -396,11 +411,11 @@ export function PayrollProof({
       return !auto || (!unsure(i, slot, v) && !m?.twoProofs)
     })
   ).length
-  const q = search.trim().toLowerCase()
-  const shown = q
-    ? openItems.filter((i) => `${i.title} ${i.sub} ${i.amount}`.toLowerCase().includes(q))
-    : openItems
-  const allShown = shown.length > 0 && shown.every((i) => chosen.has(keyOf(i)))
+  const countOf = (kind: 'staff' | 'participant') => {
+    const all = items.filter((i) => i.kind === kind).length
+    const left = openItems.filter((i) => i.kind === kind).length
+    return { all, left, proved: all - left }
+  }
   const toSave = items.flatMap((item) =>
     slotsOf(item)
       .filter(
@@ -599,7 +614,6 @@ export function PayrollProof({
       setPicks({})
       setConfirmed(new Set())
       setProgress(null)
-      setChosen(new Set())
       return true
     } catch (e) {
       setSaveError((e as Error).message)
@@ -752,6 +766,82 @@ export function PayrollProof({
     )
   }
 
+  // Steps 3 and 4 as the owner's match shows them (owner's choice, 2026-11-15): the reconciliation's grid.
+  const reviewSlot = (item: PayrollItem, slot: PayrollSlot): ReviewSlot => {
+    const label = SLOT_LABEL[slot]
+    const attached = has(item, slot)
+    if (attached)
+      return {
+        label,
+        state: 'ok',
+        file: attached.document.fileName,
+        onShow:
+          attached.marks?.length || attached.mark
+            ? () => showSaved(item, slot, attached)
+            : undefined,
+      }
+    if (!r.can.edit || !run) return { label, state: 'missing', problem: 'not on file' }
+    const value = pick(item, slot)
+    const fileName = value ? fileOf(value)?.fileName : undefined
+    const auto = !picks[keyOf(item)]?.[slot] && !!value
+    const fix = offered(item, slot).length ? docSelect(item, slot) : undefined
+    if (!value)
+      return {
+        label,
+        state: 'missing',
+        problem: offered(item, slot).length
+          ? `no line for this pay was found in any ${label.toLowerCase()} file: choose the file`
+          : files.some((d) => d.kind === PAYROLL_SLOT_KIND[slot])
+            ? `no ${label.toLowerCase()} names ${item.kind === 'staff' ? 'the people on this line' : 'this participant'}`
+            : `no ${label.toLowerCase()} in your zip`,
+        fix,
+      }
+    if (noLine(item, slot, value))
+      return {
+        label,
+        state: 'guess',
+        file: fileName,
+        problem: `no line for this pay was found in ${fileName}: find it on Find missing bank lines`,
+        fix,
+      }
+    if (auto && matchOf(item, slot)?.twoProofs)
+      return {
+        label,
+        state: 'guess',
+        file: fileName,
+        problem: 'a different file is already on file: check which is right',
+        fix,
+      }
+    if (auto && unsure(item, slot, value))
+      return {
+        label,
+        state: 'guess',
+        file: fileName,
+        problem: `best guess ${fileName}: check it and confirm`,
+        fix,
+      }
+    return {
+      label,
+      state: 'ok',
+      file: fileName,
+      onShow: () => show(item, slot, value),
+    }
+  }
+  const reviewRows: ReviewRow[] = items
+    .filter((i) => i.kind === part)
+    .map((i) => ({
+      key: keyOf(i),
+      engagementId: r.engagement.id,
+      engagementName: r.engagement.name,
+      // The month itself: its group has no link to it.
+      reportId: '',
+      title: i.title,
+      sub: i.sub,
+      date: i.paid,
+      amount: i.amount,
+      slots: slotsOf(i).map((slot) => reviewSlot(i, slot)),
+    }))
+
   // Back and Save on the Match step, with or without payroll items: the zip's files are filed either way.
   const matchActions = (
     <MatchFooter
@@ -778,40 +868,184 @@ export function PayrollProof({
               .map(keyOf)
             if (!(await saveAll())) return
             setUnmatched(left)
+            // Find missing bank lines only when a staff line has no bank line (owner's decision, 2026-11-15).
             setStep(left.length ? 'Unmatched payments' : 'Summary')
           })(),
       }}
     />
   )
 
-  return (
+  // The bookkeeper's flow has no expenses step.
+  const designSteps = DESIGN_STEPS.filter((x) => x !== 'Review expenses' && x !== 'Summary')
+  const staffCount = countOf('staff')
+  const partCount = countOf('participant')
+  const leftToDo = items.length - proved
+  const finishRows: CaptureRow[] = [
+    { label: 'Payroll files saved on this month', value: r.payrollDocuments.length },
+    {
+      label: 'Staff pays with all their proof',
+      value: `${staffCount.proved} of ${staffCount.all}`,
+      warn: staffCount.left > 0,
+    },
+    {
+      label: 'Participant pays with all their proof',
+      value: `${partCount.proved} of ${partCount.all}`,
+      warn: partCount.left > 0,
+    },
+    {
+      label: 'Staff pays found on the bank statement',
+      value: `${staffItems.filter((i) => has(i, 'bank')).length} of ${staffItems.length}`,
+    },
+    ...(replaced ? [{ label: 'Earlier files replaced', value: replaced }] : []),
+    ...(leftToDo
+      ? [{ label: 'Still to do: pays missing proof', value: leftToDo, warn: true }]
+      : []),
+  ]
+  const proofWords = (c: { all: number; left: number; proved: number }) =>
+    c.all
+      ? `${c.proved} of ${c.all} proved${c.left ? ` · ${c.left} to match` : ''}`
+      : 'None this month'
+  const designAt: DesignStep =
+    step === 'Upload'
+      ? 'Upload your files'
+      : step === 'Unmatched payments'
+        ? 'Find missing bank lines'
+        : step === 'Summary'
+          ? 'Save and finish'
+          : !analyzed || waiting
+            ? 'Analyzing and reconciling'
+            : part === 'staff'
+              ? 'Review staff payroll'
+              : 'Review participant pay'
+  const reviewed = step === 'Unmatched payments' || step === 'Summary' || (analyzed && !waiting)
+  const designRail = railSteps(
+    designSteps,
+    designAt,
+    {
+      ...(run
+        ? {
+            'Analyzing and reconciling': {
+              note: waiting
+                ? `Reading… ${shownProgress.read} of ${shownProgress.total}`
+                : `${shownProgress.read} read`,
+            },
+          }
+        : {}),
+      ...(reviewed
+        ? {
+            'Review staff payroll': {
+              note: proofWords(staffCount),
+              ...(staffCount.left ? { tone: 'warn' as const } : {}),
+            },
+            'Review participant pay': {
+              note: proofWords(partCount),
+              ...(partCount.left ? { tone: 'warn' as const } : {}),
+            },
+          }
+        : {}),
+      ...(step === 'Summary' || step === 'Unmatched payments'
+        ? {
+            'Find missing bank lines': stillUnmatched
+              ? { note: `${stillUnmatched} with no bank line`, tone: 'danger' as const }
+              : { note: 'All found' },
+          }
+        : {}),
+    },
+    designAt === 'Analyzing and reconciling' && (waiting || (!analyzed && !analysisDone))
+  )
+  const analyzing = step === 'Payroll matching' && !!run && !pollError && (waiting || !analyzed)
+  const card = (
     <Card
       className="mt-4"
       title="Payroll proof"
       aside={<ProvedCount proved={proved} total={items.length} />}
     >
-      <Stepper steps={STEPS} current={step} />
-      {run && step === 'Payroll matching' && waiting && (
-        <div className="grid gap-4">
-          <ReadingProgress progress={shownProgress} />
-          <HandCard
-            title="Reading your files"
-            icon="⏳"
-            lead="You can close this: it keeps reading."
-          >
-            <p>When you open Match payroll &amp; timecards again, you pick up here.</p>
-          </HandCard>
-          {matchActions}
-        </div>
+      {step === 'Upload' && <StepHead n={1} of={designSteps.length} title="Upload your files" />}
+      {analyzing && run && (
+        <>
+          <StepHead
+            n={2}
+            of={designSteps.length}
+            title="Analyzing and reconciling"
+            did={`We're reading your ${run.files.length} files and matching every pay on ${periodLabel(r.period)} to its proof.`}
+          />
+          <Analyzing
+            instant={played}
+            onFinished={setAnalysisDone}
+            files={run.files}
+            progress={shownProgress}
+            read={!waiting && !atAi}
+            stages={[
+              {
+                title: 'Found the pay in them',
+                did: 'Register rows, pay stubs and payroll details: whose pay, which period, how much.',
+                result: `${run.runs.length} ${run.runs.length === 1 ? 'pay run' : 'pay runs'}`,
+              },
+              {
+                title: 'Staff pay lines → their proof',
+                did: 'Each staff line, against its timesheet and register row.',
+                result: proofWords(staffCount),
+              },
+              {
+                title: 'Participant pay → their stubs',
+                did: "Each participant's pay, against their pay stub and the register.",
+                result: proofWords(partCount),
+              },
+              {
+                title: 'Pay runs → the bank statement',
+                did: "Each run's one direct-deposit debit, against the register's total.",
+                result: `${run.files.filter((f) => f.kind === 'bank-statement').length} checked`,
+              },
+            ]}
+            back={
+              <span className="flex items-center gap-3">
+                <Button kind="ghost" onClick={() => setStep('Upload')}>
+                  Back: upload
+                </Button>
+                <CancelButton onCancel={() => void discard()} />
+              </span>
+            }
+            next={
+              <Button
+                kind="navy"
+                onClick={() => {
+                  setAnalyzed(true)
+                  setPlayed(true)
+                }}
+              >
+                Next: review staff payroll →
+              </Button>
+            }
+          />
+        </>
+      )}
+      {analyzed && step === 'Payroll matching' && run && !waiting && !pollError && !atAi && (
+        <>
+          <StepHead
+            n={part === 'staff' ? 3 : 4}
+            of={designSteps.length}
+            title={part === 'staff' ? 'Review staff payroll' : 'Review participant pay'}
+            did={
+              part === 'staff'
+                ? "For each staff pay line, we looked for the person's timesheet, their row in the payroll register and their pay run on the bank statement."
+                : "For each participant's pay, we looked for their pay stub, their row in the payroll register and their timesheet."
+            }
+          />
+        </>
+      )}
+      {step === 'Unmatched payments' && (
+        <StepHead
+          n={5}
+          of={designSteps.length}
+          title="Find missing bank lines"
+          did="Every pay has to show up as money leaving your bank. Your bank shows each pay run as one direct-deposit debit, so we looked for that debit on the statement."
+        />
       )}
       {run && step === 'Payroll matching' && pollError && (
         <>
           <ErrorNote message={pollError} />
           {matchActions}
         </>
-      )}
-      {run && step === 'Payroll matching' && !waiting && !pollError && (
-        <UnsavedNote removing={run.replace ? ownFiles : 0} />
       )}
       {step === 'Unmatched payments' && <ErrorNote message={saveError} />}
       {step === 'Upload' && (
@@ -823,14 +1057,11 @@ export function PayrollProof({
           >
             <ol className="ad-hand-steps">
               <li>
-                Upload the month&apos;s payroll zip, in the sample&apos;s folders. Its files join
-                what&apos;s already here.
+                Upload the month&apos;s payroll zip, in the sample&apos;s folders: timesheets,
+                registers, pay stubs, bank statements and receipts.
               </li>
-              <li>
-                Auto-Match reads every file and finds the line where each person&apos;s name and pay
-                appear.
-              </li>
-              <li>Check the highlighted lines and save.</li>
+              <li>We read every file and match each pay to its proof.</li>
+              <li>You check what needs you, step by step, then finish.</li>
             </ol>
             <p>Evidence of payment: a pay stub for participants, the bank line for staff.</p>
             <p className="ad-hand-address">
@@ -902,133 +1133,50 @@ export function PayrollProof({
           {matchActions}
         </>
       )}
-      {step === 'Payroll matching' && !waiting && !pollError && !atAi && items.length > 0 && (
-        <>
-          {openItems.length === 0 ? (
-            <Empty>Auto-Match proved every payroll item this month.</Empty>
-          ) : (
-            <RemainingSection count={openItems.length}>
-              {r.can.edit && (
-                <BulkBar
-                  search={search}
-                  onSearch={setSearch}
-                  allShown={allShown}
-                  found={shown.length}
-                  onSelectAll={(all) => {
-                    const next = new Set(chosen)
-                    for (const i of shown)
-                      if (all) next.add(keyOf(i))
-                      else next.delete(keyOf(i))
-                    setChosen(next)
-                  }}
-                  files={{
-                    timesheet: files.filter((d) => d.kind === PAYROLL_SLOT_KIND.timesheet),
-                    register: files.filter((d) => d.kind === PAYROLL_SLOT_KIND.register),
-                  }}
-                  bulk={bulk}
-                  onBulk={setBulk}
-                  chosen={chosen.size}
-                  onSet={() => {
-                    const next = { ...picks }
-                    for (const i of items)
-                      if (chosen.has(keyOf(i)))
-                        next[keyOf(i)] = {
-                          ...next[keyOf(i)],
-                          ...(bulk.timesheet &&
-                          !has(i, 'timesheet') &&
-                          offered(i, 'timesheet').some((d) => d.id === bulk.timesheet)
-                            ? { timesheet: bulk.timesheet }
-                            : {}),
-                          ...(bulk.register &&
-                          !has(i, 'register') &&
-                          offered(i, 'register').some((d) => d.id === bulk.register)
-                            ? { register: bulk.register }
-                            : {}),
-                        }
-                    setPicks(next)
-                    setChosen(new Set())
-                  }}
-                />
-              )}
-              <div className="ad-tablewrap">
-                <table className="ad-table">
-                  <thead>
-                    <tr>
-                      {r.can.edit && <th></th>}
-                      <th>Vendor/Participant Paid</th>
-                      <th>Date</th>
-                      <th className="ad-num">Amount</th>
-                      <th>Timesheet</th>
-                      <th>Payroll register</th>
-                      <th>Evidence of payment</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shown.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="text-soft">
-                          No payroll item matches &ldquo;{search}&rdquo;.
-                        </td>
-                      </tr>
-                    )}
-                    {shown.map((item) => {
-                      return (
-                        <tr key={keyOf(item)} data-testid={`payroll-${item.id}`}>
-                          {r.can.edit && (
-                            <td>
-                              <input
-                                type="checkbox"
-                                aria-label={`Select ${item.title}`}
-                                checked={chosen.has(keyOf(item))}
-                                onChange={(e) => {
-                                  const next = new Set(chosen)
-                                  if (e.target.checked) next.add(keyOf(item))
-                                  else next.delete(keyOf(item))
-                                  setChosen(next)
-                                }}
-                              />
-                            </td>
-                          )}
-                          <td>
-                            <span className="font-semibold">{item.title}</span>
-                            <span className="ad-table-sub">{item.sub}</span>
-                          </td>
-                          <td className="whitespace-nowrap">{item.paid}</td>
-                          <td className="ad-num font-semibold">{money(item.amount)}</td>
-                          <td className="ad-matchcell">{docSelect(item, 'timesheet')}</td>
-                          <td className="ad-matchcell">{docSelect(item, 'register')}</td>
-                          <td className="ad-matchcell">
-                            {docSelect(item, item.kind === 'participant' ? 'stub' : 'bank')}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </RemainingSection>
-          )}
-          <ErrorNote message={saveError} />
-          {openItems.length > 0 && (
-            <WhyPanel
-              source={run && <MatchedBy run={run} />}
-              blocks={[
-                ...openItems.map((item) => ({
-                  key: keyOf(item),
-                  title: item.title,
-                  sub: `${item.paid} · ${money(item.amount)}`,
-                  rows: slotsOf(item).map((slot) => ({
-                    label: SLOT_LABEL[slot],
-                    ...whyOf(item, slot),
-                  })),
-                })),
-              ]}
-            />
-          )}
-          {saveWords}
-          {matchActions}
-        </>
-      )}
+      {step === 'Payroll matching' &&
+        !waiting &&
+        !pollError &&
+        !atAi &&
+        items.length > 0 &&
+        analyzed && (
+          <>
+            <StaffReview key={part} rows={reviewRows} />
+            <ErrorNote message={saveError} />
+            {part === 'staff' ? (
+              <MatchFooter
+                onBack={() => setAnalyzed(false)}
+                backLabel="Back: analyzing"
+                onDiscard={run ? () => void discard() : undefined}
+                saving={false}
+                save={{
+                  label: 'Next: review participant pay →',
+                  disabled: false,
+                  onClick: () => setPart('participant'),
+                }}
+              />
+            ) : (
+              // Saved quietly on Next (owner's decision, 2026-11-15): the celebration is at the end.
+              <>
+                {cloneElement(matchActions, {
+                  onBack: () => setPart('staff'),
+                  backLabel: 'Back: staff payroll',
+                  save: {
+                    ...matchActions.props.save,
+                    label: saving
+                      ? 'Saving…'
+                      : staffItems.some(
+                            (i) =>
+                              !has(i, 'bank') &&
+                              (!pick(i, 'bank') || noLine(i, 'bank', pick(i, 'bank')))
+                          )
+                        ? 'Next: find missing bank lines →'
+                        : 'Next: save and finish →',
+                  },
+                })}
+              </>
+            )}
+          </>
+        )}
 
       {step === 'Unmatched payments' && (
         <div className="grid gap-4">
@@ -1042,24 +1190,26 @@ export function PayrollProof({
                 'Every payment here now has its bank line'
               )}
             </h3>
-            <HandCard
-              title="Prove these payments by hand"
-              icon="🔎"
-              lead="We couldn't find these payees' amounts among the bank statement's transactions."
-            >
-              <ol className="ad-hand-steps">
-                <li>Press Find the bank line beside a payment.</li>
-                <li>
-                  Pick its transaction from the lines we found, or draw a box around it on the
-                  statement. That box is what the auditor sees highlighted as its evidence of
-                  payment.
-                </li>
-              </ol>
-              <p>
-                You can leave any of them for later: press Next. To come back, open Match payroll
-                &amp; timecards and choose Skip: Re-attempt a match of existing uploaded files.
-              </p>
-            </HandCard>
+            {stillUnmatched > 0 && (
+              <HandCard
+                title="Prove these payments by hand"
+                icon="🔎"
+                lead="We couldn't find these payees' amounts among the bank statement's transactions."
+              >
+                <ol className="ad-hand-steps">
+                  <li>Press Find the bank line beside a payment.</li>
+                  <li>
+                    Pick its transaction from the lines we found, or draw a box around it on the
+                    statement. That box is what the auditor sees highlighted as its evidence of
+                    payment.
+                  </li>
+                </ol>
+                <p>
+                  You can leave any of them for later: press Next. To come back, open Match payroll
+                  &amp; timecards and re-run matching with the saved files.
+                </p>
+              </HandCard>
+            )}
             <ul className="mx-list">
               {unmatchedItems.map((item) => {
                 const line = markedLine(item)
@@ -1095,11 +1245,17 @@ export function PayrollProof({
             </ul>
           </section>
           <div className="ad-actions justify-between">
-            <Button kind="ghost" onClick={() => setStep('Payroll matching')}>
-              Back: match
+            <Button
+              kind="ghost"
+              onClick={() => {
+                setStep('Payroll matching')
+                setPart('participant')
+              }}
+            >
+              Back: participant pay
             </Button>
-            <Button kind="primary" onClick={() => setStep('Summary')}>
-              Next
+            <Button kind="navy" onClick={() => setStep('Summary')}>
+              Next: save and finish →
             </Button>
           </div>
         </div>
@@ -1148,52 +1304,42 @@ export function PayrollProof({
       )}
       {step === 'Summary' && items.length > 0 && (
         <div className="grid gap-4">
-          <div className="ad-done">
-            <span className="ad-done-check" aria-hidden="true">
-              ✓
-            </span>
-            <h3>
-              {proved} of {items.length} payroll {items.length === 1 ? 'item' : 'items'} fully
-              proved
-            </h3>
-            <p>A timesheet, the payroll register and evidence of payment for each.</p>
-          </div>
-          <div className="ad-done-tiles">
-            <div className="ad-tile ad-tile-ok">
-              <span className="ad-tile-label">Fully proved</span>
-              <span className="ad-tile-value">{proved}</span>
-            </div>
-            <div className={`ad-tile ${items.length - proved ? 'ad-tile-warn' : 'ad-tile-ok'}`}>
-              <span className="ad-tile-label">Still missing proof</span>
-              <span className="ad-tile-value">{items.length - proved}</span>
-            </div>
-            <div className="ad-tile">
-              <span className="ad-tile-label">Payroll files this month</span>
-              <span className="ad-tile-value">{r.payrollDocuments.length}</span>
-            </div>
-            {replaced > 0 && (
-              <div className="ad-tile">
-                <span className="ad-tile-label">Earlier files replaced</span>
-                <span className="ad-tile-value">{replaced}</span>
-              </div>
-            )}
-          </div>
-          <HandCard
-            title="What to do next"
-            icon="📎"
-            lead={
-              items.length - proved
-                ? 'Go back to Match for the items still missing a document.'
-                : 'Payroll proof is complete for this month.'
+          <StepHead
+            n={designSteps.indexOf('Save and finish') + 1}
+            of={designSteps.length}
+            title="Save and finish"
+            did={
+              stamped
+                ? `Saved. Here is what we saved for ${periodLabel(r.period)}'s payroll. Anything still to do stays on the month page.`
+                : `Saving ${periodLabel(r.period)}'s payroll…`
             }
-          >
-            <p>Each item&apos;s proof shows on its row in Payroll &amp; Proof.</p>
-          </HandCard>
-          <div className="ad-actions justify-start">
-            <Button kind="ghost" onClick={() => setStep('Payroll matching')}>
-              Back: match
-            </Button>
-          </div>
+          />
+          <SaveCapture
+            period={periodLabel(r.period)}
+            saved={stamped}
+            rows={finishRows}
+            footer={
+              <div className="ad-actions justify-between">
+                <Button
+                  kind="ghost"
+                  onClick={() => {
+                    if (unmatchedItems.length) return setStep('Unmatched payments')
+                    setStep('Payroll matching')
+                    setPart('participant')
+                  }}
+                >
+                  {unmatchedItems.length
+                    ? 'Back: find missing bank lines'
+                    : 'Back: participant pay'}
+                </Button>
+                {onDone && (
+                  <Button kind="navy" onClick={onDone} disabled={!stamped}>
+                    Done
+                  </Button>
+                )}
+              </div>
+            }
+          />
         </div>
       )}
 
@@ -1230,6 +1376,7 @@ export function PayrollProof({
       )}
     </Card>
   )
+  return <StepRail steps={designRail}>{card}</StepRail>
 }
 
 /** What one payroll zip may hold: the zip is opened in the browser, and its files go up 20 at a time. */
@@ -1325,11 +1472,6 @@ export function UploadPanel({
   // Too big to take: the zip, the number of files, or one file over the server's limit. Said as it is, not as a layout problem.
   const [tooBig, setTooBig] = useState<string | null>(null)
   const [replace, setReplace] = useState(replaceFirst)
-  // The folders this screen reads: the workspace's own (program names, account mappings, receipts) only an owner's does.
-  const read = ZIP_FOLDER_LIST.filter(
-    (f) =>
-      takesNames || f.holds === 'payroll-proof' || (takesReceipts && f.name === RECEIPTS_FOLDER)
-  )
   const choose = async (zip: File | undefined) => {
     setFiles([])
     setNames([])
@@ -1392,7 +1534,7 @@ export function UploadPanel({
         </p>
       )}
       <Field
-        label={`One zip with the folders ${andList(read.filter((f) => f.required).map((f) => f.name))} (and ${andList(read.filter((f) => !f.required).map((f) => f.name))}, when you have them), as in the sample above. Files as your payroll company and books export them: PDF, XLSX or CSV, and a zip of pay stubs as it comes.`}
+        label="The month's zip, in the sample's folders"
         required
         hint={`Up to ${mb(ZIP_MAX_BYTES)} and ${maxFiles.toLocaleString('en-US')} files; each file up to ${mb(FILE_MAX_BYTES)}.`}
       >
@@ -1507,7 +1649,7 @@ export function UploadPanel({
       <div className="ad-actions justify-end">
         {onSkip && (
           <Button kind="ghost" onClick={onSkip} disabled={!!busy}>
-            Skip: Re-attempt a match of existing uploaded files
+            {`Or re-run matching with the ${existing} saved ${existing === 1 ? 'file' : 'files'}`}
           </Button>
         )}
         <Button

@@ -23,6 +23,8 @@ export function WorkspaceUnmatchedPayments({
   stepper,
   onFound,
   onBack,
+  backLabel = 'Back: match',
+  nextLabel = 'Next',
   onNext,
 }: {
   recon: PayrollReconciliationDto | null
@@ -30,6 +32,8 @@ export function WorkspaceUnmatchedPayments({
   /** A line was marked: the page reads the reconciliation again. */
   onFound: (text: string) => void
   onBack: () => void
+  backLabel?: string
+  nextLabel?: string
   onNext: () => void
 }) {
   const now = unmatchedPayments(recon)
@@ -58,7 +62,7 @@ export function WorkspaceUnmatchedPayments({
             'Every staff payment has its bank line'
           )}
         </h3>
-        {shown.length > 0 && (
+        {left > 0 && (
           <HandCard
             title="Prove these payments by hand"
             icon="🔎"
@@ -98,10 +102,10 @@ export function WorkspaceUnmatchedPayments({
       </section>
       <div className="ad-actions justify-between">
         <Button kind="ghost" onClick={onBack}>
-          Back: match
+          {backLabel}
         </Button>
         <Button kind="navy" onClick={onNext}>
-          Next
+          {nextLabel}
         </Button>
       </div>
       {finding && (
