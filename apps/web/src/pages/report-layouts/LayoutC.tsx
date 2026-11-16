@@ -7,8 +7,6 @@ import { cloneElement, isValidElement, useEffect, useState, type ReactNode } fro
 import { Link } from 'react-router-dom'
 import {
   DOCUMENT_PURPOSE_LABELS,
-  PAYROLL_REPORT_LINES,
-  isPayrollLine,
   type CheckDto,
   type DocumentPurpose,
   type ExpenseDto,
@@ -110,21 +108,11 @@ function overrunOf(k: CheckDto, lines: TileLine[]) {
 }
 
 /**
- * The tables a budget line's filter applies to: a payroll line's pay is in the payroll table, and the books' expenses
- * on it (payroll fees, workers comp: no one's pay) are in the expenses table, so a payroll line with any filters both.
+ * The budget line a grid's chips filter to, the last one chosen. Both grids share it, so a budget line always filters
+ * Expenses & Proof and Payroll & Proof together, and clearing it in either clears both.
  */
-export function tablesOfLine(
-  r: ReportDetail,
-  line: string
-): { payroll: boolean; expenses: boolean } {
-  const of = r.budgetLines.find((b) => b.id === line)
-  const payroll = !!of && PAYROLL_REPORT_LINES.has(of.reportLine)
-  if (!payroll) return { payroll: false, expenses: true }
-  return {
-    payroll: true,
-    expenses: r.expenses.some((e) => lineKey(e) === line && !isPayrollLine(e)),
-  }
-}
+export const lineOf = (tokens: FilterToken[]): FilterToken | null =>
+  tokens.filter((t) => t.field === 'line').pop() ?? null
 
 /** Where each check shows: on its expense row, its payroll row, its report line, or above the grid. */
 export function placeChecks(r: ReportDetail) {
@@ -184,6 +172,7 @@ export function LayoutC({ r, busy, notice, highlight, sections: s, act }: MonthL
   const [expText, setExpText] = useState('')
   const [payTokens, setPayTokens] = useState<FilterToken[]>([])
   const [payText, setPayText] = useState('')
+  const [line, setLine] = useState<FilterToken | null>(null)
 
   useEffect(() => scrollToExpense(highlight), [highlight])
 
@@ -192,14 +181,11 @@ export function LayoutC({ r, busy, notice, highlight, sections: s, act }: MonthL
   const filterTo = (q: Quick) => setQuick((now) => (now === q ? null : q))
   const next = nextActionOf(r, p, act, () => setQuick('other'))
   const unmatched = r.matching.receipts.filter((x) => !x.dismissed && x.matchedTo.length === 0)
-  const filterLine = (line: string, label: string) => {
-    const on = tablesOfLine(r, line)
-    const filter = (tokens: FilterToken[], set: (t: FilterToken[]) => void) => {
-      if (!tokens.some((t) => t.field === 'line' && t.value === line))
-        set([...tokens.filter((t) => t.field !== 'line'), { field: 'line', value: line, label }])
-    }
-    if (on.payroll) filter(payTokens, setPayTokens)
-    if (on.expenses) filter(expTokens, setExpTokens)
+  const filterLine = (value: string, label: string) => setLine({ field: 'line', value, label })
+  const tokensOf = (own: FilterToken[]) => (line ? [...own, line] : own)
+  const onTokensOf = (set: (t: FilterToken[]) => void) => (next: FilterToken[]) => {
+    set(next.filter((t) => t.field !== 'line'))
+    setLine(lineOf(next))
   }
 
   const row = actionRowOf(r, p, next, act)
@@ -244,8 +230,8 @@ export function LayoutC({ r, busy, notice, highlight, sections: s, act }: MonthL
         act={act}
         quick={quick}
         clearQuick={() => setQuick(null)}
-        tokens={expTokens}
-        onTokens={setExpTokens}
+        tokens={tokensOf(expTokens)}
+        onTokens={onTokensOf(setExpTokens)}
         text={expText}
         onText={setExpText}
         loose={placed.loose}
@@ -261,8 +247,8 @@ export function LayoutC({ r, busy, notice, highlight, sections: s, act }: MonthL
         act={act}
         quick={quick}
         clearQuick={() => setQuick(null)}
-        tokens={payTokens}
-        onTokens={setPayTokens}
+        tokens={tokensOf(payTokens)}
+        onTokens={onTokensOf(setPayTokens)}
         text={payText}
         onText={setPayText}
         openProof={() => setDialog('payroll')}
