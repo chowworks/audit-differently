@@ -45,3 +45,6 @@ export const payPeriodWords = (start: string, end: string) => {
 /** A payroll CSV (timesheet, register, payroll details): shown as a table in the app. */
 export const isCsv = (f: { contentType?: string; fileName: string }) =>
   /csv/i.test(f.contentType ?? '') || /\.csv$/i.test(f.fileName)
+/** An xlsx file, by its type or name. */
+export const isXlsx = (f: { contentType?: string; fileName: string }) =>
+  /spreadsheetml\.sheet/i.test(f.contentType ?? '') || /\.xlsx$/i.test(f.fileName)

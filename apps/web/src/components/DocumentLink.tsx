@@ -2,7 +2,7 @@ import { Suspense, lazy, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { DOCUMENT_KIND_LABELS, PAYROLL_DOCUMENT_KINDS, type DocumentDto } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
-import { isCsv } from '@/lib/format'
+import { isCsv, isXlsx } from '@/lib/format'
 import { Modal } from '@/components/ui'
 
 /** pdf.js is large: it loads when a proof is first shown. */
@@ -12,12 +12,16 @@ const StatementViewer = lazy(() =>
 const CsvViewer = lazy(() =>
   import('@/components/CsvViewer').then((m) => ({ default: m.CsvViewer }))
 )
+const SheetViewer = lazy(() =>
+  import('@/components/SheetViewer').then((m) => ({ default: m.SheetViewer }))
+)
 
 /**
  * Opens a document through a short-lived link from the API (which logs the read). With `proofOf`, a payroll proof opens
  * as that item's own copy instead, drawn by the API with only that item's highlights: a PDF in the in-app viewer, with
- * Download under its own name (a browser tab of it would save under a made-up one), a CSV as a table in the same way;
- * another file downloads under its name.
+ * Download under its own name (a browser tab of it would save under a made-up one), a CSV or a spreadsheet (payroll
+ * details, the books' export behind an allocation worksheet) as a table in the same way; another file downloads under
+ * its name.
  */
 export function DocumentLink({
   doc,
@@ -40,7 +44,8 @@ export function DocumentLink({
   const open = async () => {
     try {
       if (copy && (PAYROLL_DOCUMENT_KINDS as readonly string[]).includes(doc.kind)) {
-        if (doc.contentType === 'application/pdf' || isCsv(doc)) return setViewing(true)
+        if (doc.contentType === 'application/pdf' || isCsv(doc) || isXlsx(doc))
+          return setViewing(true)
         const bytes = await api.bytes(copy)
         const url = URL.createObjectURL(new Blob([bytes], { type: doc.contentType }))
         const a = document.createElement('a')
@@ -81,6 +86,8 @@ export function DocumentLink({
             <Suspense fallback={<p className="text-sm text-soft">Opening the file…</p>}>
               {isCsv(doc) ? (
                 <CsvViewer src={copy} downloadName={doc.fileName} />
+              ) : isXlsx(doc) ? (
+                <SheetViewer src={copy} downloadName={doc.fileName} />
               ) : (
                 <StatementViewer doc={doc} src={copy} page={page} downloadName={doc.fileName} />
               )}
