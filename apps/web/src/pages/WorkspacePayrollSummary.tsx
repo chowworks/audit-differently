@@ -50,6 +50,13 @@ import {
   PayrollHead,
   PayrollRow as MonthPayrollRow,
 } from './report-layouts/proof-rows'
+import {
+  LineSections,
+  NO_LINE,
+  OTHER_LINE,
+  WEX_LINE,
+  lineGroups,
+} from './report-layouts/budget-groups'
 import './report-layouts/report-layouts.css'
 import './workspace-payroll-summary.css'
 
@@ -728,7 +735,10 @@ export function GroupedRows<R extends { key: string; tone: Tone; group: string }
   row,
   foldWords,
   foldComplete = false,
+  inner,
 }: {
+  /** An engagement's shown rows laid out in budget-line sections (budget-groups.tsx); `row` still lays out the rest. */
+  inner?: (group: string, shown: R[], all: R[]) => ReactNode
   /** Complete rows start folded (the match's review steps: the focus is what needs work). */
   foldComplete?: boolean
   /** The rows the filters leave. */
@@ -771,7 +781,7 @@ export function GroupedRows<R extends { key: string; tone: Tone; group: string }
         return (
           <Fragment key={g.id || 'none'}>
             <tr
-              className="wpd-group"
+              className={`wpd-group${g.id === NO_ENGAGEMENT ? ' wpd-group-none' : ''}`}
               aria-expanded={!isClosed}
               onClick={(e) => {
                 // A click on the row folds the group; its link still opens the month.
@@ -807,7 +817,10 @@ export function GroupedRows<R extends { key: string; tone: Tone; group: string }
                 </span>
               </td>
             </tr>
-            {!isClosed && shown.map((r) => <Fragment key={r.key}>{row(r)}</Fragment>)}
+            {!isClosed &&
+              (inner && g.id !== NO_ENGAGEMENT
+                ? inner(g.id, shown, mine)
+                : shown.map((r) => <Fragment key={r.key}>{row(r)}</Fragment>))}
             {!isClosed && greens > 0 && !narrowed && (
               <tr className="wpd-fold">
                 <td colSpan={columns}>
@@ -878,6 +891,10 @@ function useRowChecks(filter: Tone | null) {
   }
 }
 
+/** The engagement month a group's rows are from, for its budget lines' order and names. */
+const monthOf = (rows: { kind: string; r?: unknown }[]) =>
+  (rows.find((x) => x.kind === 'month')?.r as ReportDetail | undefined) ?? null
+
 const missingField = (purposes: DocumentPurpose[]): FieldChoices => ({
   field: 'missing',
   hint: 'missing proof',
@@ -925,6 +942,23 @@ export function ExpensesGrid({
     (r) => (r.kind === 'month' ? r.missing : [])
   )
   const checks = useRowChecks(filter)
+  const expenseLine = (r: ExpenseRow) =>
+    r.kind === 'month' ? (r.e.budgetLineId ?? NO_LINE) : OTHER_LINE
+  const expenseRow = (r: ExpenseRow) =>
+    r.kind === 'month' ? (
+      <MonthExpenseRow
+        r={r.r}
+        e={r.e}
+        checksOpen={checks.isOpen(r.key)}
+        onToggleChecks={() => checks.toggle(r.key)}
+        onAdd={(purpose) => edit(r.r).attach(r.e, purpose)}
+        act={edit(r.r)}
+        actions
+        end={r.r.can.edit ? undefined : null}
+      />
+    ) : (
+      <ExpenseLine r={r} onOpen={onOpen} checks={filter === 'yellow'} />
+    )
   const names = new Map<string, string>([
     ...(data?.engagements ?? []).map((e) => [e.id, e.name] as [string, string]),
     ...(months ?? []).map((m) => [m.engagement.id, m.engagement.name] as [string, string]),
@@ -991,22 +1025,18 @@ export function ExpensesGrid({
                     columns={7}
                     narrowed={f.narrowed}
                     foldWords={(g) => (g === NO_ENGAGEMENT ? 'settled' : 'fully proved')}
-                    row={(r) =>
-                      r.kind === 'month' ? (
-                        <MonthExpenseRow
-                          r={r.r}
-                          e={r.e}
-                          checksOpen={checks.isOpen(r.key)}
-                          onToggleChecks={() => checks.toggle(r.key)}
-                          onAdd={(purpose) => edit(r.r).attach(r.e, purpose)}
-                          act={edit(r.r)}
-                          actions
-                          end={r.r.can.edit ? undefined : null}
-                        />
-                      ) : (
-                        <ExpenseLine r={r} onOpen={onOpen} checks={filter === 'yellow'} />
-                      )
-                    }
+                    row={expenseRow}
+                    inner={(_g, shown, mine) => (
+                      <LineSections
+                        groups={lineGroups(monthOf(mine), shown, mine, expenseLine)}
+                        columns={7}
+                        noun={['expense', 'expenses']}
+                        amountOf={(r) => (r.kind === 'month' ? r.e.allocatedAmount : 0)}
+                        provedOf={(r) => r.kind === 'month' && r.missing.length === 0}
+                        rowKey={(r) => r.key}
+                        render={expenseRow}
+                      />
+                    )}
                   />
                 </table>
               </div>
@@ -1083,9 +1113,7 @@ function ExpenseLine({
           <Chip tone="muted">{BOOKS_LINE_STATUS_LABELS[l.status]}</Chip>
         )}
       </td>
-      <td className="ad-num whitespace-nowrap">
-        <span className="ad-table-sub">from the books</span>
-      </td>
+      <td></td>
     </tr>
   )
 }
@@ -1123,6 +1151,27 @@ export function PayrollGrid({
     r.kind === 'month' ? r.missing : []
   )
   const checks = useRowChecks(filter)
+  const payLine = (r: PayRow) =>
+    r.kind !== 'month'
+      ? OTHER_LINE
+      : r.row.kind === 'wex'
+        ? WEX_LINE
+        : (r.row.e.budgetLineId ?? NO_LINE)
+  const payrollRow = (r: PayRow) =>
+    r.kind === 'month' ? (
+      <MonthPayrollRow
+        r={r.r}
+        row={r.row}
+        checksOpen={checks.isOpen(r.key)}
+        onToggleChecks={() => checks.toggle(r.key)}
+        onAdd={(purpose) => addPayrollProof(r.r, edit(r.r), r.row, purpose)}
+        act={edit(r.r)}
+        actions
+        end={r.r.can.edit ? undefined : null}
+      />
+    ) : (
+      <PayrollLine r={r} workspaceId={workspaceId} action={action} checks={filter === 'yellow'} />
+    )
   const names = new Map<string, string>()
   for (const i of data.items) names.set(i.item.engagementId, i.item.engagementName)
   for (const r of data.books) names.set(r.engagementId, r.engagementName)
@@ -1184,27 +1233,24 @@ export function PayrollGrid({
                 columns={5}
                 narrowed={f.narrowed}
                 foldWords={(g) => (g === NO_ENGAGEMENT ? 'settled' : 'fully proved')}
-                row={(r) =>
-                  r.kind === 'month' ? (
-                    <MonthPayrollRow
-                      r={r.r}
-                      row={r.row}
-                      checksOpen={checks.isOpen(r.key)}
-                      onToggleChecks={() => checks.toggle(r.key)}
-                      onAdd={(purpose) => addPayrollProof(r.r, edit(r.r), r.row, purpose)}
-                      act={edit(r.r)}
-                      actions
-                      end={r.r.can.edit ? undefined : null}
-                    />
-                  ) : (
-                    <PayrollLine
-                      r={r}
-                      workspaceId={workspaceId}
-                      action={action}
-                      checks={filter === 'yellow'}
-                    />
-                  )
-                }
+                inner={(_g, shown, mine) => (
+                  <LineSections
+                    groups={lineGroups(monthOf(mine), shown, mine, payLine)}
+                    columns={5}
+                    noun={['payroll row', 'payroll rows']}
+                    amountOf={(r) =>
+                      r.kind !== 'month'
+                        ? 0
+                        : r.row.kind === 'expense'
+                          ? r.row.e.allocatedAmount
+                          : r.row.w.grossAmount
+                    }
+                    provedOf={(r) => r.kind === 'month' && r.missing.length === 0}
+                    rowKey={(r) => r.key}
+                    render={payrollRow}
+                  />
+                )}
+                row={payrollRow}
               />
             </table>
           </div>
