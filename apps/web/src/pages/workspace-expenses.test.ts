@@ -188,6 +188,8 @@ describe("the month's expenses from the books, on screen", () => {
       date: null,
       vendor: null,
       transactionIds,
+      cannotMove: null,
+      cannotRename: null,
     })
     expect(
       unmatchedReceipts({ receipts: [r('a', ['1']), r('b', [])] }).map((x) => x.documentId)
@@ -382,6 +384,8 @@ describe("the Expense matching step and the Summary (owner's decisions, 2026-11-
           date: null,
           vendor: null,
           transactionIds: [],
+          cannotMove: null,
+          cannotRename: null,
         },
       ],
     })
@@ -447,6 +451,8 @@ describe("the month's expense to-dos on the Actions card (owner's decision, 2026
           date: null,
           vendor: null,
           transactionIds: [],
+          cannotMove: null,
+          cannotRename: null,
         },
       ],
     })

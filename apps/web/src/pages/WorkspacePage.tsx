@@ -322,11 +322,11 @@ export function WorkspacePage() {
         </div>
       </div>
 
-      {/* Row 3: emailed receipts */}
+      {/* Row 3: emailed documents */}
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
         {/* min-w-0: a grid item is otherwise as wide as its table, and the page scrolls sideways. */}
         <section id="receipts" className="ad-section min-w-0 lg:col-span-3">
-          <SectionHead icon="mail" title="Reconcile emailed receipts" />
+          <SectionHead icon="mail" title="Reconcile emailed documents" />
           <ReceiptsInbox
             workspaceId={w.id}
             address={w.receiptsEmail}

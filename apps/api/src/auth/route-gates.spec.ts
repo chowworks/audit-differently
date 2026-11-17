@@ -264,6 +264,11 @@ const GATED = [
   'POST /api/workspaces/:id/expenses/:period/receipts',
   'GET /api/workspaces/:id/expenses/:period/receipts/:documentId/file',
   'DELETE /api/workspaces/:id/expenses/:period/receipts/:documentId',
+  'POST /api/workspaces/:id/payroll/:period/files/:documentId/move',
+  'POST /api/workspaces/:id/payroll/:period/files/:documentId/rename',
+  // The emailed documents inbox's Move to… (owner's decision, 2026-11-17).
+  'GET /api/workspaces/:id/emailed/:inboundId/files',
+  'POST /api/workspaces/:id/emailed/:inboundId/files/:documentId/move',
   'PUT /api/workspaces/:id/expenses/bills',
   'PUT /api/workspaces/:id/expenses/payments',
 ]

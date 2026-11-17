@@ -65,7 +65,22 @@ describe('SenderCheck', () => {
       toHeaders: 1,
       subjectHeaders: 1,
       signedRecipients: ['bright-path@receipts.example.org', 'lee@example.org'],
+      autoSubmitted: [],
+      messageId: '<fictional-1@bright-path.example.org>',
+      references: [],
     })
+  })
+
+  it("reads an Auto-Submitted header's value, so a machine's reply is known", async () => {
+    const raw = await sign(
+      message([
+        'To: bright-path@receipts.example.org',
+        'Subject: Automatic reply: CP26',
+        'Auto-Submitted: Auto-Replied',
+      ])
+    )
+    const v = await check.verify(raw, 'receipts.example.org', resolver)
+    expect(v.autoSubmitted).toEqual(['auto-replied'])
   })
 
   it('names no recipient a signature does not cover', async () => {

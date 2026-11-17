@@ -1,16 +1,18 @@
 import { Module } from '@nestjs/common'
+import { DocumentsModule } from '../documents/documents.module'
 import { EngagementsModule } from '../engagements/engagements.module'
 import { ReceiptsModule } from '../receipts/receipts.module'
+import { InboundConfirmation } from './confirmation'
 import { InboundWebhookController, ReceiptsInboxController } from './inbound.controller'
 import { InboundService } from './inbound.service'
 import { InboundWorker } from './inbound.worker'
 import { ResendInbound } from './resend'
 import { SenderCheck } from './sender-check'
 
-/** Email in receipts: the provider's webhook, the queue's worker, and the receipts inbox. */
+/** Emailed documents: the provider's webhook, the queue's worker, the confirmations and the emailed documents inbox. */
 @Module({
-  imports: [EngagementsModule, ReceiptsModule],
+  imports: [DocumentsModule, EngagementsModule, ReceiptsModule],
   controllers: [InboundWebhookController, ReceiptsInboxController],
-  providers: [InboundService, InboundWorker, ResendInbound, SenderCheck],
+  providers: [InboundService, InboundWorker, ResendInbound, SenderCheck, InboundConfirmation],
 })
 export class InboundModule {}

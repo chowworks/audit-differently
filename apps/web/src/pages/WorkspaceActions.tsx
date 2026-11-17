@@ -20,7 +20,7 @@ export interface OwnerAction {
 const thisMonth = () => new Date().toISOString().slice(0, 7)
 
 /**
- * What waits on the workspace's owners: emailed receipts to file, engagements with nobody tagged, and (when
+ * What waits on the workspace's owners: emailed documents to file, engagements with nobody tagged, and (when
  * bookkeepers don't see staff payroll) a finished month whose payroll files aren't in yet. Nothing when all is done.
  */
 export function useOwnerActions(workspaceId: string, bookkeepersSeeStaffPayroll: boolean) {
@@ -35,10 +35,10 @@ export function useOwnerActions(workspaceId: string, bookkeepersSeeStaffPayroll:
     actions.push({
       key: 'receipts',
       icon: '✉️',
-      title: `${toFile.length} emailed ${toFile.length === 1 ? 'receipt' : 'receipts'} to file`,
-      line: 'Receipts sent to the workspace address that need an engagement and a month.',
+      title: `${toFile.length} emailed ${toFile.length === 1 ? 'document' : 'documents'} to file`,
+      line: "Sent to the workspace's address; say what each is and where it goes.",
       count: toFile.length,
-      action: 'File receipts',
+      action: 'File them',
       href: '#receipts',
     })
   const failed = (inbox?.items ?? []).filter((r) => r.status === 'failed')
@@ -46,7 +46,7 @@ export function useOwnerActions(workspaceId: string, bookkeepersSeeStaffPayroll:
     actions.push({
       key: 'receipts-failed',
       icon: '🔄',
-      title: `${failed.length} emailed ${failed.length === 1 ? "receipt didn't" : "receipts didn't"} go through`,
+      title: `${failed.length} emailed ${failed.length === 1 ? "document didn't" : "documents didn't"} go through`,
       line: "The email provider didn't answer. Run it again, or dismiss it if it's not needed.",
       count: failed.length,
       action: 'Run again or dismiss',

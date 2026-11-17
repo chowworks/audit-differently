@@ -125,9 +125,15 @@ export function PayrollActions({
   onBudget,
   programs,
   expenses,
+  added,
 }: {
   period: string
   matched: boolean
+  /**
+   * The month's payroll files emailed in or moved in File Management since it was last matched (issue #82): they count
+   * once the owner matches it again, which `onMatch` starts. Owners only.
+   */
+  added?: { count: number; onMatch: () => void } | null
   /**
    * The month's expense to-dos (owner's decision, 2026-11-13), with what their buttons do: open Expense matching, and
    * upload receipts right here (owners only).
@@ -154,6 +160,10 @@ export function PayrollActions({
   /** Filters the reconciliation's grid to one kind and scrolls to it. */
   onShow: (k: ResolveKind) => void
 }) {
+  // One press starts one re-match: pressed again only once the count it answered has changed.
+  const [rematching, setRematching] = useState(false)
+  const addedCount = added?.count ?? 0
+  useEffect(() => setRematching(false), [addedCount])
   const rows: {
     key: string
     sign: string
@@ -178,9 +188,11 @@ export function PayrollActions({
       sign: '🧾',
       who: `${all.length} ${all.length === 1 ? 'engagement' : 'engagements'}`,
       text: `Match ${periodLabel(period)}'s payroll`,
-      sub: parts.length
-        ? `${parts.join(' and ')} on the months, with no payroll files to prove ${parts.length > 1 || wex > 1 ? 'them' : 'it'}. Upload the month's zip once.`
-        : "No payroll on the months yet, and no payroll files. Upload the month's zip once.",
+      sub: added?.count
+        ? `${added.count} ${added.count === 1 ? 'file is' : 'files are'} in File Management waiting to be matched. Upload the month's zip once; they are matched with it.`
+        : parts.length
+          ? `${parts.join(' and ')} on the months, with no payroll files to prove ${parts.length > 1 || wex > 1 ? 'them' : 'it'}. Upload the month's zip once.`
+          : "No payroll on the months yet, and no payroll files. Upload the month's zip once.",
       go: onMatch ? (
         <Button kind="navy" onClick={onMatch}>
           Match payroll &amp; timecards
@@ -188,6 +200,26 @@ export function PayrollActions({
       ) : null,
     })
   }
+  if (matched && added?.count)
+    rows.push({
+      key: 'added',
+      sign: '📥',
+      who: 'File Management',
+      text: `${added.count} ${added.count === 1 ? 'file' : 'files'} added since the last match`,
+      sub: 'Emailed in or moved there: they count once the month is matched again.',
+      go: (
+        <Button
+          kind="navy"
+          disabled={rematching}
+          onClick={() => {
+            setRematching(true)
+            added.onMatch()
+          }}
+        >
+          Re-match with same files
+        </Button>
+      ),
+    })
   for (const name of programs?.engagements ?? [])
     rows.push({
       key: `no-program-${name}`,

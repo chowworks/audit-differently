@@ -94,26 +94,30 @@ model ImportMapping {
 // The queue of emailed receipts (migration 20261015001000): written by the webhook before anyone knows whose it is
 // (workspaceId null, trusted work only), then processed by the worker in the API. Holds the envelope, never a file.
 model InboundReceipt {
-  id               String      @id @default(uuid())
-  emailId          String      @unique // the email provider's id
-  status           String      @default("received") // INBOUND_RECEIPT_STATUSES in packages/types
-  attempts         Int         @default(0)
-  nextAttemptAt    DateTime    @default(now())
-  error            String? // why the last attempt failed, or which attachments were skipped
-  fromAddress      String?
-  toAddress        String?
-  subject          String?
-  receivedAt       DateTime
-  workspaceId      String? // set by trusted work with the verified sender; never changes after
-  senderUserId     String? // the member who sent it, once verified
-  engagementId     String? // where it was filed; cleared when the engagement is deleted (migration 20261015001200)
-  documentIds      String[]    @default([])
-  filedAttachments String[]    @default([]) // the provider's attachment ids already filed, so a retry files none twice
-  rejectReason     String?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @default(now()) @updatedAt
-  workspace        Workspace?  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  engagement       Engagement? @relation(fields: [engagementId], references: [id], onDelete: SetNull)
+  id                 String      @id @default(uuid())
+  emailId            String      @unique // the email provider's id
+  status             String      @default("received") // INBOUND_RECEIPT_STATUSES in packages/types
+  attempts           Int         @default(0)
+  nextAttemptAt      DateTime    @default(now())
+  error              String? // why the last attempt failed, or which attachments were skipped
+  fromAddress        String?
+  toAddress          String?
+  subject            String?
+  receivedAt         DateTime
+  workspaceId        String? // set by trusted work with the verified sender; never changes after
+  senderUserId       String? // the member who sent it, once verified
+  engagementId       String? // where it was filed; cleared when the engagement is deleted (migration 20261015001200)
+  documentIds        String[]    @default([])
+  filedAttachments   String[]    @default([]) // the provider's attachment ids already filed, so a retry files none twice
+  rejectReason       String?
+  intendedKind       String? // EMAILED_KINDS: what the subject (or a person filing it) says it is; null: a receipt
+  period             String? // YYYY-MM it is filed in: from the subject, else the month it arrived
+  confirmationSentAt DateTime? // the confirmation to its verified sender, claimed once per filing
+  messageId          String? // the email's own Message-ID, so the confirmation threads under it
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @default(now()) @updatedAt
+  workspace          Workspace?  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  engagement         Engagement? @relation(fields: [engagementId], references: [id], onDelete: SetNull)
 
   @@index([status, nextAttemptAt])
   @@index([workspaceId, receivedAt])
@@ -455,6 +459,7 @@ model Document {
   receiptVendor    String?
   receiptReadBy    String?
   receiptDismissed Boolean               @default(false)
+  addedSinceMatch  Boolean               @default(false) // a workspace payroll file emailed or moved in, not matched yet
   workspace        Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   engagement       Engagement?           @relation(fields: [engagementId], references: [id], onDelete: SetNull)
   expenses         ExpenseDocument[]

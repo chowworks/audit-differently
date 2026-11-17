@@ -12,6 +12,15 @@ export interface SenderVerdict {
   subjectHeaders: number
   /** The addresses in the To and Cc headers that a passing DKIM signature aligned with From covers (its h= tag). */
   signedRecipients: string[]
+  /**
+   * Its Auto-Submitted headers' values, lowercased (RFC 3834: "no" for a person's own message; anything else, such as
+   * "auto-replied" or "auto-generated", is a machine's), so an out-of-office reply is never filed or answered.
+   */
+  autoSubmitted: string[]
+  /** Its Message-ID (`<…>`), when it has exactly one well-formed one: what the confirmation answers. */
+  messageId: string | null
+  /** The message ids its In-Reply-To and References headers name: an answer to one of our confirmations names ours. */
+  references: string[]
 }
 
 const NOT_PASSED: SenderVerdict = {
@@ -20,12 +29,29 @@ const NOT_PASSED: SenderVerdict = {
   toHeaders: 0,
   subjectHeaders: 0,
   signedRecipients: [],
+  autoSubmitted: [],
+  messageId: null,
+  references: [],
 }
 
 /** The addresses in a header line such as `To: Pat <pat@example.org>, lee@example.org`, lowercased. */
 export function addressesIn(line: string): string[] {
   const value = line.slice(line.indexOf(':') + 1)
   return (value.match(/[^\s<>,;:"()[\]]+@[^\s<>,;:"()[\]]+/g) ?? []).map((a) => a.toLowerCase())
+}
+
+/** The value of a raw header line (`Key: value`, possibly folded), unfolded and trimmed. */
+const headerValue = (line: string) =>
+  line
+    .slice(line.indexOf(':') + 1)
+    .replace(/\r?\n[ \t]+/g, ' ')
+    .trim()
+
+/** The one Message-ID of a message, as `<…>`: none, or more than one, is null. */
+export function oneMessageId(values: string[]): string | null {
+  if (values.length !== 1) return null
+  const v = values[0]!.trim()
+  return /^<[^<>\s]{1,250}>$/.test(v) ? v : null
 }
 
 /** A DKIM result as mailauth returns it at runtime: the header lines a signature covers are not in its types. */
@@ -64,6 +90,15 @@ export class SenderCheck {
         toHeaders: parsed.filter((h) => h.key === 'to').length,
         subjectHeaders: parsed.filter((h) => h.key === 'subject').length,
         signedRecipients: [...new Set(signed)].sort(),
+        autoSubmitted: parsed
+          .filter((h) => h.key === 'auto-submitted')
+          .map((h) => headerValue(String(h.line)).toLowerCase()),
+        messageId: oneMessageId(
+          parsed.filter((h) => h.key === 'message-id').map((h) => headerValue(String(h.line)))
+        ),
+        references: parsed
+          .filter((h) => h.key === 'in-reply-to' || h.key === 'references')
+          .flatMap((h) => headerValue(String(h.line)).match(/<[^<>\s]+>/g) ?? []),
       }
     } catch {
       return NOT_PASSED

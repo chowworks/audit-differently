@@ -15,7 +15,8 @@ import { frontendOrigins } from './cors'
  *   - docs/terms/index.html, with its #terms section, is there: the version everyone accepts is the fingerprint of
  *     that wording, computed from it at startup;
  *   - on Railway, email in receipts is all set up or not at all: RESEND_RECEIVING_API_KEY, RESEND_WEBHOOK_SECRET and
- *     RECEIPTS_DOMAIN together (the contact form's RESEND_API_KEY is a separate, sending-only key);
+ *     RECEIPTS_DOMAIN together (the contact form's RESEND_API_KEY is a separate, sending-only key), and the
+ *     confirmations' RECEIPTS_REPLY_FROM only with RESEND_API_KEY;
  *   - DEMO_AUTH no longer exists; a leftover value is refused so nobody believes it still works.
  */
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
@@ -73,6 +74,10 @@ export function configProblems(
       if (!env[name]?.trim())
         problems.push(`${name} is not set: email in receipts needs all three of its settings`)
   }
+  if (railway && env.RECEIPTS_REPLY_FROM?.trim() && !env.RESEND_API_KEY?.trim())
+    problems.push(
+      'RECEIPTS_REPLY_FROM is set but RESEND_API_KEY is not: the confirmations of emailed documents need both'
+    )
   try {
     const patterned = frontendOrigins(env.FRONTEND_URL).some((o) => typeof o !== 'string')
     if (production && patterned)

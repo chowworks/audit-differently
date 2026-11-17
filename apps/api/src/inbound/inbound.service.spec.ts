@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common'
 import type { InboundReceipt } from '@prisma/client'
 import type { Role } from '@ad/types'
@@ -7,6 +8,7 @@ import { fakeLog } from '../core/testing/log'
 import {
   BACKOFF_MINUTES,
   CLAIM_SQL,
+  CONFIRM_CLAIM_SQL,
   InboundService,
   MAX_ATTEMPTS,
   NO_ADDRESS,
@@ -14,6 +16,7 @@ import {
   STOPPED,
   namesCode,
 } from './inbound.service'
+import { StagedFile } from '../documents/staged-file'
 import { ProviderError, type ReceivedAttachment, type ReceivedEmail } from './resend'
 
 // What was read from each fictional receipt: its date is in the bytes, so a test says where each one goes.
@@ -79,6 +82,8 @@ const callerOf = (userId: string): Caller => {
 function setup() {
   /** The workspace's owners' setting: off unless a test turns it on. */
   const settings = { readEmailedReceiptsWithAi: false }
+  /** Whether an expense was ever saved from the books: not unless a test says so. */
+  const books = { saved: false }
   const rows: Row[] = []
   const months: Month[] = []
   let self: () => unknown = () => undefined
@@ -157,6 +162,9 @@ function setup() {
             documentIds: [],
             filedAttachments: [],
             rejectReason: null,
+            intendedKind: null,
+            period: null,
+            confirmationSentAt: null,
             createdAt: new Date(),
             updatedAt: new Date(),
             fromAddress: null,
@@ -191,10 +199,21 @@ function setup() {
           where,
           data,
         }: {
-          where: { id: string; status: string }
+          where: {
+            id: string
+            status?: string
+            confirmationSentAt?: null
+            senderUserId?: { not: null }
+          }
           data: Record<string, unknown>
         }) => {
-          const r = rows.find((x) => x.id === where.id && x.status === where.status)
+          const r = rows.find(
+            (x) =>
+              x.id === where.id &&
+              (where.status === undefined || x.status === where.status) &&
+              (where.confirmationSentAt === undefined || !x.confirmationSentAt) &&
+              (where.senderUserId === undefined || !!x.senderUserId)
+          )
           if (!r || !visible(r.workspaceId)) return { count: 0 }
           apply(r, data)
           return { count: 1 }
@@ -223,10 +242,20 @@ function setup() {
     ),
     $queryRawUnsafe: jest.fn(
       async (sql: string, limit: string | number, max?: number, domain?: string) => {
+        // The confirmation's claim, as trusted work: once, and only for a row with its verified sender.
+        if (sql === CONFIRM_CLAIM_SQL) {
+          seen('confirm-claim')
+          const r = rows.find((x) => x.id === limit)
+          if (!r || r.confirmationSentAt || !r.senderUserId || !r.workspaceId) return []
+          r.confirmationSentAt = new Date()
+          return [{ senderUserId: r.senderUserId }]
+        }
         // The filing transaction's locked read of the row.
         if (sql !== CLAIM_SQL) {
           const r = rows.find((x) => x.id === limit)
-          return r ? [{ filedAttachments: [...r.filedAttachments] }] : []
+          return r
+            ? [{ filedAttachments: [...r.filedAttachments], documentIds: [...r.documentIds] }]
+            : []
         }
         seen('claim')
         const due = rows
@@ -263,6 +292,50 @@ function setup() {
           )
           return r ? { id: r.id, firstUsedAt: r.firstUsedAt } : null
         }
+      ),
+    },
+    // The month's payroll lock: a no-op here.
+    $queryRaw: jest.fn(async () => []),
+    // The month's workspace payroll files (issue #82), as the staging below makes them.
+    // Asked two ways: the same contents in a month's folder, and whether the workspace has a books export (issue #82).
+    document: {
+      findFirst: jest.fn(async ({ where }: { where: Record<string, unknown> }) => {
+        const w = (Array.isArray(where.AND) ? where.AND[0] : where) as {
+          kind: string | { in: string[] }
+          period?: string
+          sha256?: string
+          contentType?: { in: string[] }
+        }
+        const kinds = typeof w.kind === 'string' ? [w.kind] : w.kind.in
+        return (
+          workspaceDocs.find(
+            (d) =>
+              kinds.includes(d.kind) &&
+              (w.period === undefined || d.period === w.period) &&
+              (w.sha256 === undefined || d.sha256 === w.sha256) &&
+              (!w.contentType || w.contentType.in.includes(d.contentType!))
+          ) ?? null
+        )
+      }),
+      findMany: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) => {
+        seen('documents')
+        return [...workspaceDocs, ...receiptDocs]
+          .filter((d) => where.id.in.includes(d.id))
+          .map((d) => ({
+            id: d.id,
+            period: d.period,
+            uploadedById: d.userId,
+            uploadedAt: d.uploadedAt ?? new Date(),
+          }))
+      }),
+    },
+    // An expense saved from the books (booksKey): one is enough for the workspace to work from its books.
+    expense: {
+      findFirst: jest.fn(async () => (books.saved ? { id: 'x-books' } : null)),
+    },
+    membership: {
+      findFirst: jest.fn(async ({ where }: { where: { userId: string } }) =>
+        people[where.userId] ? { role: people[where.userId]!.role } : null
       ),
     },
     // An interactive transaction runs on the same fakes.
@@ -304,6 +377,10 @@ function setup() {
       ),
     },
     engagement: {
+      findFirst: jest.fn(
+        async ({ where }: { where: { id: string } }) =>
+          engagements.find((e) => e.id === where.id) ?? null
+      ),
       findMany: jest.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
         engagements.filter(
           (e) => visible(e.workspaceId) && (!where.id || where.id.in.includes(e.id))
@@ -311,6 +388,11 @@ function setup() {
       ),
     },
     monthlyReport: {
+      findFirst: jest.fn(
+        async ({ where }: { where: { engagementId: string; period: string } }) =>
+          months.find((m) => m.engagementId === where.engagementId && m.period === where.period) ??
+          null
+      ),
       findMany: jest.fn(
         async ({ where }: { where: { engagementId: string; period: { in: string[] } } }) =>
           months.filter(
@@ -325,6 +407,18 @@ function setup() {
   const clerk = {
     verifiedEmails: jest.fn(async (id: string) => (people[id] ? [people[id]!.email] : [])),
   }
+  const workspaceDocs: {
+    id: string
+    kind: string
+    period: string
+    sha256: string
+    fileName: string
+    contentType?: string
+    addedSinceMatch?: boolean
+    userId?: string
+    uploadedAt?: Date
+  }[] = []
+  const receiptDocs: { id: string; period: string; userId?: string; uploadedAt?: Date }[] = []
   const filed: {
     reportId: string
     name: string
@@ -348,6 +442,7 @@ function setup() {
         if (m.status !== 'draft') throw new ConflictException('locked')
         const id = `doc-${++docs}`
         await alsoInTx(prisma, id)
+        receiptDocs.push({ id, period: m.period, userId: ctx?.userId })
         filed.push({
           reportId,
           name: file.originalname,
@@ -380,6 +475,47 @@ function setup() {
   const senders = {
     verify: jest.fn(async () => ({ ...VERDICT })),
   }
+  // The month's workspace payroll files, staged and stored as the documents service does (issue #82).
+  const documents = {
+    stage: jest.fn(
+      async (
+        _caller: Caller,
+        file: { originalname: string; mimetype: string; buffer: Buffer },
+        body: { workspaceId: string; period: string; kind: string }
+      ) => {
+        const data: Record<string, unknown> = {
+          ...body,
+          fileName: file.originalname,
+          contentType: file.mimetype,
+          sensitivity: body.kind === 'paystub' ? 'personal' : 'financial',
+          sha256: createHash('sha256').update(file.buffer).digest('hex'),
+        }
+        return {
+          data,
+          create: async () => {
+            const d = {
+              id: `doc-${++docs}`,
+              ...data,
+              userId: tenantContext()?.userId,
+              uploadedAt: new Date(),
+            }
+            workspaceDocs.push(d as never)
+            return d
+          },
+          commit: async <T>(save: () => Promise<T>) => save(),
+        }
+      }
+    ),
+  }
+  // The confirmations sent back, as the sender would read them.
+  const confirmations = {
+    on: true,
+    sent: [] as Record<string, unknown>[],
+    enabled: () => confirmations.on,
+    send: jest.fn(async (c: Record<string, unknown>) => {
+      confirmations.sent.push(c)
+    }),
+  }
   // Matching statistics: each row with the context it was written in.
   const statRows: { row: Record<string, unknown>; userId?: string; system?: boolean }[] = []
   const stats = {
@@ -397,7 +533,9 @@ function setup() {
     engagementsService as never,
     resend as never,
     senders as never,
-    stats as never
+    stats as never,
+    documents as never,
+    confirmations as never
   )
   const attach = (id: string, filename: string, buffer: Buffer, size = buffer.length) => {
     blobs.set(`https://inbound.example.org/${id}`, buffer)
@@ -429,9 +567,11 @@ function setup() {
   }
   return {
     s,
+    prisma,
     rows,
     history,
     settings,
+    books,
     get attachments() {
       return attachments
     },
@@ -445,6 +585,9 @@ function setup() {
     receipts,
     engagementsService,
     filed,
+    workspaceDocs,
+    documents,
+    confirmations,
     attach,
     set,
     receive,
@@ -466,6 +609,9 @@ const VERDICT = {
   toHeaders: 1,
   subjectHeaders: 1,
   signedRecipients: ['bright-path@receipts.example.org'],
+  autoSubmitted: [] as string[],
+  messageId: '<m-1@bright-path.example.org>' as string | null,
+  references: [] as string[],
 }
 
 const GOOD: Partial<ReceivedEmail> = {
@@ -1015,6 +1161,466 @@ describe('emailed receipts', () => {
     })
   })
 
+  describe('emailed documents (issue #82)', () => {
+    const csv = () => Buffer.from('Employee,Hours\nAlex Rivera,40\n')
+
+    it("files payroll files into the month's File Management folder the subject names, as the member, with the folder's types", async () => {
+      const t = setup()
+      t.set.email(GOOD)
+      t.attach('att-1', 'timesheet-oct.pdf', pdf())
+      t.attach('att-2', 'timesheet-oct.csv', csv())
+      t.attach('att-3', 'notes.txt', Buffer.from('plain text'))
+      const row = await t.receive('Timesheets October 2026')
+      expect(row).toMatchObject({
+        status: 'filed',
+        intendedKind: 'timesheet',
+        period: '2026-10',
+        engagementId: null,
+        documentIds: ['doc-1', 'doc-2'],
+      })
+      expect(row.error).toMatch(/notes\.txt \(not a PDF, PNG, JPG, XLSX, DOCX or CSV\)/)
+      expect(t.workspaceDocs).toEqual([
+        expect.objectContaining({
+          kind: 'timesheet',
+          period: '2026-10',
+          userId: 'u-book',
+        }),
+        expect.objectContaining({ kind: 'timesheet', period: '2026-10', contentType: 'text/csv' }),
+      ])
+      for (const d of t.documents.stage.mock.results) {
+        const staged = (await d.value) as { data: Record<string, unknown> }
+        expect(staged.data.addedSinceMatch).toBe(true)
+      }
+      // No engagement, no month started, nothing filed as a receipt.
+      expect(t.engagementsService.createReport).not.toHaveBeenCalled()
+      expect(t.receipts.fileOne).not.toHaveBeenCalled()
+      expect(t.log.entries.map((e) => e.description)).toEqual([
+        'Emailed in a timesheet for October 2026 to Timesheets in File Management',
+        'Emailed in a timesheet for October 2026 to Timesheets in File Management',
+      ])
+    })
+
+    it('puts payroll files with no month in the month the email arrived, East Coast time', async () => {
+      const t = setup()
+      t.set.email(GOOD)
+      t.attach('att-1', 'register.pdf', pdf())
+      // 10 PM on September 30 in New York.
+      const row = await t.receive('payroll register', undefined, undefined, '2026-10-01T02:00:00Z')
+      expect(row).toMatchObject({
+        status: 'filed',
+        intendedKind: 'payroll-register',
+        period: '2026-09',
+      })
+    })
+
+    it('keeps no file twice in a folder: the email points at the one on file', async () => {
+      const t = setup()
+      t.set.email(GOOD)
+      t.attach('att-1', 'stub.pdf', pdf())
+      await t.receive('pay stubs October 2026')
+      const again = await t.receive('paystubs October 2026')
+      expect(t.workspaceDocs).toHaveLength(1)
+      expect(again).toMatchObject({ status: 'filed', documentIds: ['doc-1'] })
+    })
+
+    it('leaves a subject naming two kinds of file for a person, unread', async () => {
+      const t = ready()
+      const row = await t.receive('timesheets and receipts CP26')
+      expect(row).toMatchObject({
+        status: 'unmatched',
+        rejectReason: 'The subject names more than one kind of file',
+        intendedKind: null,
+      })
+      expect(t.resend.attachments).not.toHaveBeenCalled()
+    })
+
+    it('files a receipt into the month the subject names, over the date read from it', async () => {
+      const t = ready()
+      const row = await t.receive('Receipt CP26 August')
+      expect(row).toMatchObject({ status: 'filed', intendedKind: 'receipt', period: '2026-08' })
+      expect(t.filed[0]).toMatchObject({ reportId: 'r-2026-08' })
+    })
+
+    it('sends the verified sender one confirmation of where it went, never twice, and none to a refused sender', async () => {
+      const t = setup()
+      t.set.email(GOOD)
+      t.attach('att-1', 'statement.pdf', pdf())
+      const row = await t.receive('bank statement Oct 2026')
+      expect(t.confirmations.sent).toEqual([
+        expect.objectContaining({
+          to: 'bookkeeper@bright-path.example.org',
+          outcome: 'filed',
+          kind: 'bank-statement',
+          period: '2026-10',
+          owner: false,
+          filed: 1,
+        }),
+      ])
+      expect(row.confirmationSentAt).toBeInstanceOf(Date)
+      // The same outcome again (a second worker) sends nothing.
+      await (t.s as unknown as { confirm: (id: string, o: string) => Promise<void> }).confirm(
+        row.id,
+        'filed'
+      )
+      expect(t.confirmations.sent).toHaveLength(1)
+      // A stranger is never answered.
+      const u = setup()
+      u.set.email(GOOD)
+      await u.receive('timesheets', 'stranger@elsewhere.example.org')
+      expect(u.confirmations.sent).toEqual([])
+    })
+
+    it('tells the sender when it needs filing, and when nothing in it could be filed', async () => {
+      const t = ready()
+      t.engagements[1]!.status = 'active'
+      await t.receive('Lunch receipt')
+      expect(t.confirmations.sent.at(-1)).toMatchObject({
+        outcome: 'unmatched',
+        reason: expect.stringMatching(/2 engagements are active/),
+      })
+      const u = setup()
+      u.set.email(GOOD)
+      u.attach('att-1', 'notes.txt', Buffer.from('plain text'))
+      await u.receive('timesheets')
+      expect(u.confirmations.sent.at(-1)).toMatchObject({
+        outcome: 'nothing',
+        reason: REJECT.noPayrollFiles,
+      })
+    })
+
+    it('counts in the confirmation only the files kept new, says which were on file, and lists no file twice', async () => {
+      const t = setup()
+      t.set.email(GOOD)
+      t.attach('att-1', 'stub.pdf', pdf())
+      await t.receive('pay stubs October 2026')
+      // On file well before the next email.
+      t.workspaceDocs[0]!.uploadedAt = new Date('2026-01-01T00:00:00Z')
+      // The same file again, twice, and one new one.
+      t.attach('att-2', 'stub-copy.pdf', pdf())
+      t.attach('att-3', 'stub-two.pdf', pdf('2026-10-15'))
+      const again = await t.receive('paystubs October 2026')
+      expect(t.workspaceDocs).toHaveLength(2)
+      expect(again).toMatchObject({
+        status: 'filed',
+        documentIds: ['doc-1', 'doc-2'],
+        filedAttachments: ['att-1', 'att-2', 'att-3'],
+      })
+      expect(t.confirmations.sent.at(-1)).toMatchObject({ filed: 1, alreadyOnFile: 1 })
+    })
+
+    it('points at a file kept by someone else while this one was stored, deletes the object, and counts no failure', async () => {
+      const t = setup()
+      t.set.email(GOOD)
+      t.attach('att-1', 'register.pdf', pdf())
+      const storage = {
+        upload: jest.fn(async () => undefined),
+        delete: jest.fn(async () => undefined),
+      }
+      const onFailure = jest.fn()
+      t.documents.stage.mockImplementationOnce(
+        async (_c: Caller, file: { buffer: Buffer }, body: Record<string, unknown>) =>
+          new StagedFile(
+            storage as never,
+            { ...body, storageKey: `${W}/workspace/2026-10/x.pdf` } as never,
+            file.buffer,
+            onFailure
+          ) as never
+      )
+      // Not on file when looked at first; on file once the month's lock is held.
+      t.prisma.document.findFirst
+        .mockImplementationOnce(async () => null)
+        .mockImplementationOnce(async () => ({ id: 'doc-theirs' }) as never)
+      const row = await t.receive('payroll registers October 2026')
+      expect(row).toMatchObject({
+        status: 'filed',
+        documentIds: ['doc-theirs'],
+        filedAttachments: ['att-1'],
+      })
+      expect(storage.upload).toHaveBeenCalledTimes(1)
+      expect(storage.delete).toHaveBeenCalledTimes(1)
+      expect(onFailure).not.toHaveBeenCalled()
+      expect(t.log.entries).toEqual([])
+    })
+
+    it('stores nothing for a payroll file another worker filed while its lease overlapped', async () => {
+      const t = setup()
+      t.set.email(GOOD)
+      t.attach('att-1', 'timesheet.pdf', pdf())
+      t.resend.attachments.mockImplementationOnce(async () => {
+        t.rows[0]!.filedAttachments = [...t.rows[0]!.filedAttachments, 'att-1']
+        return t.attachments
+      })
+      const row = await t.receive('timesheets October 2026')
+      expect(row).toMatchObject({ status: 'filed', filedAttachments: ['att-1'] })
+      expect(t.documents.stage).not.toHaveBeenCalled()
+    })
+
+    it('refuses quietly an automatic reply, or one of our own confirmations come back', async () => {
+      const t = ready()
+      t.senders.verify.mockImplementationOnce(async () => ({
+        ...VERDICT,
+        autoSubmitted: ['auto-replied'],
+      }))
+      const auto = await t.receive('Out of office: receipts CP26')
+      expect(auto).toMatchObject({
+        status: 'rejected',
+        rejectReason: REJECT.automatic,
+        workspaceId: null,
+      })
+      const own = await t.receive('Automatic reply: Filed: 2 timesheets for October 2026')
+      expect(own).toMatchObject({ status: 'rejected', rejectReason: REJECT.automatic })
+      expect(t.resend.email).toHaveBeenCalledTimes(1)
+      expect(t.resend.attachments).not.toHaveBeenCalled()
+      expect(t.confirmations.sent).toEqual([])
+      // A person's own message ("no") is filed as ever.
+      t.senders.verify.mockImplementationOnce(async () => ({ ...VERDICT, autoSubmitted: ['no'] }))
+      expect((await t.receive()).status).toBe('filed')
+    })
+
+    it('refuses quietly a reply to one of our confirmations, and threads ours under their email', async () => {
+      const t = ready()
+      t.senders.verify.mockImplementationOnce(async () => ({
+        ...VERDICT,
+        references: ['<ad-confirmation.ir-0@mail.example.org>'],
+      }))
+      const reply = await t.receive('Re: timesheets October 2026')
+      expect(reply).toMatchObject({ status: 'rejected', rejectReason: REJECT.automatic })
+      expect(t.confirmations.sent).toEqual([])
+      await t.receive('timesheets October 2026')
+      expect(t.confirmations.sent).toEqual([
+        expect.objectContaining({
+          inReplyTo: '<m-1@bright-path.example.org>',
+          subject: 'timesheets October 2026',
+        }),
+      ])
+    })
+
+    it('claims the confirmation as trusted work and reads what it says as the sender', async () => {
+      const t = ready()
+      await t.receive()
+      expect(t.confirmations.sent).toHaveLength(1)
+      const claim = t.contexts.find((c) => c.what === 'confirm-claim')
+      expect(claim?.ctx?.allWorkspaces).toBe(true)
+      const reads = t.contexts.filter((c) => c.what === 'documents')
+      expect(reads.length).toBeGreaterThan(0)
+      for (const r of reads) expect(r.ctx).toMatchObject({ userId: 'u-book', allWorkspaces: false })
+    })
+
+    it('files a receipt by its own date when the subject names a month but not the word', async () => {
+      const t = ready()
+      const row = await t.receive('Fwd: Staples order CP26 October')
+      expect(row).toMatchObject({ status: 'filed', intendedKind: 'receipt', period: null })
+      expect(t.filed[0]).toMatchObject({ reportId: 'r-2026-09' })
+    })
+
+    it('leaves a subject naming payroll files but no folder for a person', async () => {
+      const t = ready()
+      const row = await t.receive('Payroll for October CP26')
+      expect(row).toMatchObject({
+        status: 'unmatched',
+        rejectReason: 'The subject names payroll files but not which folder',
+      })
+      expect(t.receipts.fileOne).not.toHaveBeenCalled()
+    })
+
+    it('names no engagement once a document left against one is filed by hand as a payroll file', async () => {
+      const t = ready()
+      t.engagements[1]!.status = 'active'
+      const row = await t.receive('Lunch receipt')
+      row.engagementId = 'e-cp'
+      await asRequest('u-book', (c) =>
+        t.s.fileByHand(c, row.id, { kind: 'timesheet', period: '2026-10' })
+      )
+      expect(row).toMatchObject({ status: 'filed', engagementId: null, documentIds: ['doc-1'] })
+    })
+
+    it('files an emailed document by hand as a payroll file, with no engagement', async () => {
+      const t = ready()
+      t.engagements[1]!.status = 'active'
+      const row = await t.receive('Lunch receipt')
+      await expect(
+        asRequest('u-owner', (c) => t.s.fileByHand(c, row.id, { kind: 'receipt', period: 'Oct' }))
+      ).rejects.toThrow('Choose the engagement. Choose the month, YYYY-MM')
+      const inbox = await asRequest('u-book', (c) =>
+        t.s.fileByHand(c, row.id, { kind: 'timesheet', period: '2026-10' })
+      )
+      expect(inbox.items[0]).toMatchObject({
+        status: 'filed',
+        kind: 'timesheet',
+        period: '2026-10',
+        engagementId: null,
+      })
+      expect(t.log.entries.at(-1)?.description).toBe(
+        'Filed a timesheet for October 2026 to Timesheets in File Management from the emailed documents inbox'
+      )
+    })
+  })
+
+  describe("receipts to the workspace's month (owner's decision, 2026-11-17)", () => {
+    /** A workspace that works from its books: an expense was saved from them once, in some month. */
+    const withBooks = () => {
+      const t = ready()
+      t.books.saved = true
+      return t
+    }
+
+    it("files a receipt naming no engagement into the workspace's Receipts for its month, as the member, unmatched", async () => {
+      const t = withBooks()
+      const row = await t.receive('Lunch receipt')
+      expect(row).toMatchObject({
+        status: 'filed',
+        intendedKind: 'receipt',
+        engagementId: null,
+        documentIds: ['doc-1'],
+        filedAttachments: ['att-1'],
+      })
+      // Its own date's month, filed to no engagement, kind receipt, with what was read from it.
+      expect(t.documents.stage).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+        workspaceId: W,
+        period: '2026-09',
+        kind: 'receipt',
+      })
+      expect(t.workspaceDocs).toEqual([
+        expect.objectContaining({
+          kind: 'receipt',
+          period: '2026-09',
+          userId: 'u-book',
+          receiptAmount: '12.50',
+          receiptVendor: 'Bright Path Office Supply',
+          receiptReadBy: 'text',
+        }),
+      ])
+      // No engagement month started, nothing matched on arrival.
+      expect(t.receipts.fileOne).not.toHaveBeenCalled()
+      expect(t.engagementsService.createReport).not.toHaveBeenCalled()
+      expect(t.log.entries.map((e) => e.description)).toEqual([
+        'Emailed in a receipt for September 2026 to Receipts in Month End Close',
+      ])
+      expect(t.log.entries[0]).toMatchObject({ resource: 'document', subjectId: 'doc-1' })
+      expect(t.confirmations.sent.at(-1)).toMatchObject({
+        outcome: 'filed',
+        kind: 'receipt',
+        engagementName: null,
+        reportId: null,
+        periods: ['2026-09'],
+        filed: 1,
+        alreadyOnFile: 0,
+      })
+    })
+
+    it('counts a QuickBooks export filed in any month as the books, but not a pay register in that folder', async () => {
+      const t = ready()
+      t.workspaceDocs.push({
+        id: 'doc-pdf',
+        kind: 'payroll-details',
+        period: '2026-06',
+        sha256: 'a',
+        fileName: 'register.pdf',
+        contentType: 'application/pdf',
+      })
+      // A PDF is payroll's: the old way, the only active engagement.
+      expect(await t.receive('Lunch receipt')).toMatchObject({ engagementId: 'e-cp' })
+      t.workspaceDocs.push({
+        id: 'doc-qb',
+        kind: 'payroll-details',
+        period: '2026-06',
+        sha256: 'b',
+        fileName: 'quickbooks.csv',
+        contentType: 'text/csv',
+      })
+      t.attach('att-2', 'another-receipt.pdf', pdf('2026-09-03'))
+      expect(await t.receive('Lunch receipt')).toMatchObject({
+        status: 'filed',
+        engagementId: null,
+      })
+    })
+
+    it("still files a receipt whose subject names a code into that engagement's month", async () => {
+      const t = withBooks()
+      const row = await t.receive('Receipt cp26')
+      expect(row).toMatchObject({ status: 'filed', engagementId: 'e-cp' })
+      expect(t.filed).toEqual([expect.objectContaining({ reportId: 'r-2026-09' })])
+      expect(t.workspaceDocs).toEqual([])
+    })
+
+    it('leaves it for a person, as before, in a workspace that never brought in its books', async () => {
+      const t = ready()
+      t.engagements[1]!.status = 'active'
+      const row = await t.receive('Lunch receipt')
+      expect(row).toMatchObject({
+        status: 'unmatched',
+        rejectReason: 'No engagement code in the subject, and 2 engagements are active',
+      })
+      expect(t.documents.stage).not.toHaveBeenCalled()
+    })
+
+    it('files into the month the subject names, and reads with AI only when the owners turned it on', async () => {
+      const t = withBooks()
+      t.settings.readEmailedReceiptsWithAi = true
+      const row = await t.receive('receipts October 2026')
+      expect(row).toMatchObject({ status: 'filed', period: '2026-10', engagementId: null })
+      expect(t.workspaceDocs[0]).toMatchObject({ period: '2026-10', receiptReadBy: 'ai' })
+      expect(t.log.entries.at(-1)?.description).toBe(
+        'Emailed in a receipt for October 2026 to Receipts in Month End Close, read with AI'
+      )
+    })
+
+    it("keeps no receipt twice in the month's Receipts: the email points at the one on file", async () => {
+      const t = withBooks()
+      await t.receive('Lunch receipt')
+      t.workspaceDocs[0]!.uploadedAt = new Date('2026-01-01T00:00:00Z')
+      const again = await t.receive('Lunch receipt again')
+      expect(t.workspaceDocs).toHaveLength(1)
+      expect(again).toMatchObject({
+        status: 'filed',
+        documentIds: ['doc-1'],
+        filedAttachments: ['att-1'],
+      })
+      expect(t.log.entries).toHaveLength(1)
+      expect(t.confirmations.sent.at(-1)).toMatchObject({ filed: 0, alreadyOnFile: 1 })
+    })
+
+    it('files one by hand to the Receipts with no engagement chosen, only in a workspace that works from its books', async () => {
+      const t = ready()
+      t.engagements[1]!.status = 'active'
+      const row = await t.receive('Lunch receipt')
+      row.engagementId = 'e-cp'
+      await expect(
+        asRequest('u-book', (c) =>
+          t.s.fileByHand(c, row.id, { kind: 'receipt', period: '2026-10' })
+        )
+      ).rejects.toThrow('Choose the engagement')
+      t.books.saved = true
+      const inbox = await asRequest('u-book', (c) =>
+        t.s.fileByHand(c, row.id, { kind: 'receipt', period: '2026-10' })
+      )
+      expect(row).toMatchObject({ status: 'filed', engagementId: null, documentIds: ['doc-1'] })
+      expect(inbox.items[0]).toMatchObject({
+        status: 'filed',
+        kind: 'receipt',
+        period: '2026-10',
+        engagementId: null,
+        engagementName: null,
+        documentCount: 1,
+      })
+      expect(t.log.entries.at(-1)?.description).toBe(
+        'Filed a receipt for October 2026 to Receipts in Month End Close from the emailed documents inbox'
+      )
+    })
+
+    it('shows in the inbox the month a receipt filed by its own date went into', async () => {
+      const t = withBooks()
+      await t.receive('Lunch receipt')
+      const inbox = await asRequest('u-aud', (c) => t.s.inbox(c, W))
+      expect(inbox.items[0]).toMatchObject({
+        status: 'filed',
+        kind: 'receipt',
+        period: '2026-09',
+        engagementId: null,
+      })
+    })
+  })
+
   describe('the receipts inbox', () => {
     // Failed after the sender was verified, so the row is the workspace's.
     const failed = async () => {
@@ -1060,7 +1666,7 @@ describe('emailed receipts', () => {
       expect(row).toMatchObject({ status: 'received', attempts: 0, error: null })
       expect(t.log.entries.at(-1)).toMatchObject({
         workspaceId: W,
-        description: 'Ran an emailed receipt again from the receipts inbox',
+        description: 'Ran an emailed document again from the emailed documents inbox',
         changes: [{ field: 'Status', before: 'failed', after: 'received' }],
       })
       await t.s.runDue()
@@ -1089,7 +1695,7 @@ describe('emailed receipts', () => {
       expect(t.log.entries.at(-1)).toMatchObject({
         workspaceId: W,
         description:
-          'Dismissed an emailed receipt from the receipts inbox: not applicable to this workspace',
+          'Dismissed an emailed document from the emailed documents inbox: not applicable to this workspace',
         changes: [{ field: 'Status', before: 'unmatched', after: 'dismissed' }],
       })
       // Dealt with: it is not dismissed twice, nor run again.
@@ -1143,7 +1749,8 @@ describe('emailed receipts', () => {
       expect(t.filed).toEqual([
         expect.objectContaining({
           reportId: 'r-2026-08',
-          description: 'Filed a receipt for August 2026 of Coding Pathway from the receipts inbox',
+          description:
+            'Filed a receipt for August 2026 of Coding Pathway from the emailed documents inbox',
         }),
       ])
       await expect(

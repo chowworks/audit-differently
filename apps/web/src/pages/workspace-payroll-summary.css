@@ -156,6 +156,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.wpc-leaf-new {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ad-warn, #8a5a00);
+  white-space: nowrap;
+}
 .wpc-leaf-date {
   font-size: 12px;
   opacity: 0.65;
@@ -426,4 +432,17 @@
   display: inline-block;
   width: 14px;
   color: var(--muted);
+}
+/* A file's "…" menu in File Management (issue #82): the More menu's list, drawn over the tree. */
+.wpc-menu > summary {
+  padding: 0 6px;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.wpc-menu ul {
+  min-width: 160px;
+}
+.rl-more li > button.wpc-menu-danger {
+  color: var(--danger);
+  font-weight: 600;
 }

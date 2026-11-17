@@ -1,6 +1,10 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
+  ALLOWED_UPLOAD_TYPES,
   DOCUMENT_KIND_LABELS,
+  DOCUMENT_SENSITIVITY,
+  emailedFolder,
+  type EmailedKind,
   MAX_WORKSPACE_PAYROLL_FILES,
   ZIP_FOLDER_LIST,
   andList,
@@ -11,7 +15,7 @@ import {
 import { periodLabel, shortDate } from '@/lib/format'
 import { PAYROLL_FOLDERS, RECEIPTS_FOLDER, type PayrollFolderKind } from '@/lib/zip-files'
 import { FILE_MAX_BYTES, RECEIPT_MAX_BYTES } from '@/components/PayrollProof'
-import { Button, Card, Empty, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
+import { Button, Card, Empty, ErrorNote, Field, Modal, Notice, inputClass } from '@/components/ui'
 import { useApi } from '@/hooks/useApi'
 import { DocumentViewer, canView } from '@/components/DocumentViewer'
 
@@ -119,6 +123,300 @@ function RemoveReceipt({
           </Button>
           <Button kind="navy" disabled={busy} onClick={() => void go()}>
             {busy ? 'Removing…' : 'Remove receipt'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * Move and Rename in File Management (issue #82): owners only. Each resolves with the line saying what happened,
+ * shown in File Management itself, and rejects with the server's reason.
+ */
+export interface FileChanges {
+  onMove: (documentId: string, to: EmailedKind) => Promise<string>
+  onRename: (documentId: string, name: string) => Promise<string>
+}
+
+/** One file of the tree, as its menu and dialogs need it: a payroll file or a receipt. */
+interface Managed {
+  id: string
+  fileName: string
+  /** Its folder now. */
+  kind: EmailedKind
+  contentType: string
+  personal: boolean
+  /** Why it cannot move; null: it can. */
+  cannotMove: string | null
+  /** Why it cannot be renamed; null: it can. */
+  cannotRename: string | null
+  /** A receipt's bills, which a move drops. */
+  bills: string[]
+}
+
+export interface FileMenuItem {
+  label: string
+  onClick: () => void
+  /** A removal: red, as a removal link is. */
+  danger?: boolean
+}
+
+/**
+ * A file's "…" menu (issue #82): the month page's More menu, made small, opened below its button and drawn over the
+ * tree (fixed, so the tree's own scrolling never cuts it off). Each item opens its dialog.
+ */
+export function FileMenu({ label, items }: { label: string; items: FileMenuItem[] }) {
+  const ref = useRef<HTMLDetailsElement>(null)
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null)
+  // Drawn at fixed coordinates, so it closes the moment the page or the tree scrolls, the window resizes, a click
+  // lands outside it, or Escape is pressed: it never floats over another file's row.
+  useEffect(() => {
+    if (!at) return
+    const shut = () => ref.current?.removeAttribute('open')
+    const outside = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) shut()
+    }
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        shut()
+        ref.current?.querySelector('summary')?.focus()
+      }
+    }
+    window.addEventListener('scroll', shut, true)
+    window.addEventListener('resize', shut)
+    document.addEventListener('pointerdown', outside)
+    document.addEventListener('keydown', key)
+    ref.current?.querySelector<HTMLButtonElement>('ul button')?.focus()
+    return () => {
+      window.removeEventListener('scroll', shut, true)
+      window.removeEventListener('resize', shut)
+      document.removeEventListener('pointerdown', outside)
+      document.removeEventListener('keydown', key)
+    }
+  }, [at])
+  if (!items.length) return null
+  const close = () => ref.current?.removeAttribute('open')
+  return (
+    <details
+      className="rl-more wpc-menu"
+      ref={ref}
+      onToggle={(e) => {
+        const d = e.currentTarget
+        if (!d.open) return setAt(null)
+        const r = d.querySelector('summary')!.getBoundingClientRect()
+        setAt({ top: r.bottom + 4, right: Math.max(16, window.innerWidth - r.right) })
+      }}
+    >
+      <summary className="wpc-open" aria-label={label} title="More">
+        …
+      </summary>
+      <ul
+        style={at ? { position: 'fixed', top: at.top, right: at.right, left: 'auto' } : undefined}
+      >
+        {items.map((i) => (
+          <li key={i.label}>
+            <button
+              type="button"
+              className={i.danger ? 'wpc-menu-danger' : undefined}
+              onClick={() => {
+                close()
+                i.onClick()
+              }}
+            >
+              {i.label}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </details>
+  )
+}
+
+/** The extension a stored file has, from its type: what its new folder must take. */
+const extOf = (contentType: string) => ALLOWED_UPLOAD_TYPES[contentType] ?? ''
+
+/**
+ * Move to…: the folders it may go to, the same as Add files' in its order, less its own, those that don't take its type
+ * and, for a personal file (a pay stub, payroll details), Receipts. After the move the page says what happened.
+ */
+function MoveFile({
+  file,
+  onMove,
+  onDone,
+  onClose,
+}: {
+  file: Managed
+  onMove: FileChanges['onMove']
+  onDone: (note: string) => void
+  onClose: () => void
+}) {
+  const ext = extOf(file.contentType)
+  const options = STORED.map((f) => valueOf(f) as EmailedKind).filter(
+    (k) =>
+      k !== file.kind &&
+      emailedFolder(k).extensions.includes(ext) &&
+      !(file.personal && DOCUMENT_SENSITIVITY[k] !== 'personal')
+  )
+  const [to, setTo] = useState<EmailedKind | ''>(options.length === 1 ? options[0]! : '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const go = async (ev: React.FormEvent) => {
+    ev.preventDefault()
+    if (!to) return
+    setBusy(true)
+    setError(null)
+    try {
+      onDone(await onMove(file.id, to))
+    } catch (e) {
+      setError((e as Error).message)
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal title={`Move ${file.fileName}`} onClose={onClose}>
+      <form onSubmit={go} className="grid gap-4">
+        <ErrorNote message={error} />
+        <Field
+          label="Move it to"
+          required
+          hint={
+            to === 'receipt'
+              ? "It joins the month's receipts and is matched to the books' bills."
+              : to
+                ? `${file.bills.length ? `It proves bill ${file.bills.join(', ')}; that match is dropped. ` : ''}It counts once you Re-match with same files.`
+                : undefined
+          }
+        >
+          <select
+            className={inputClass}
+            value={to}
+            onChange={(e) => setTo(e.target.value as EmailedKind)}
+            required
+          >
+            <option value="">Choose a folder…</option>
+            {options.map((k) => (
+              <option key={k} value={k}>
+                {emailedFolder(k).name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button kind="ghost" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button kind="navy" type="submit" disabled={busy || !to}>
+            {busy ? 'Moving…' : 'Move'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+/** Rename: the name it is shown and downloaded by; its extension stays. */
+function RenameFile({
+  file,
+  onRename,
+  onDone,
+  onClose,
+}: {
+  file: Managed
+  onRename: FileChanges['onRename']
+  onDone: (note: string) => void
+  onClose: () => void
+}) {
+  const ext = /\.\w{1,5}$/.exec(file.fileName)?.[0] ?? ''
+  const current = ext ? file.fileName.slice(0, -ext.length) : file.fileName
+  const [name, setName] = useState(current)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const blank = !name.trim()
+  const same = name.trim() === current
+  const go = async (ev: React.FormEvent) => {
+    ev.preventDefault()
+    if (blank || same) return
+    setBusy(true)
+    setError(null)
+    try {
+      onDone(await onRename(file.id, name.trim()))
+    } catch (e) {
+      setError((e as Error).message)
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal title={`Rename ${file.fileName}`} onClose={onClose}>
+      <form onSubmit={go} className="grid gap-4">
+        <Field label="New name" required error={error ?? (blank ? 'Type the new name' : null)}>
+          <span className="flex items-center gap-2">
+            <input
+              className={inputClass}
+              value={name}
+              maxLength={150}
+              autoFocus
+              onChange={(e) => {
+                setName(e.target.value)
+                setError(null)
+              }}
+            />
+            {ext && <span className="ad-mono text-sm text-soft">{ext}</span>}
+          </span>
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button kind="ghost" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button kind="navy" type="submit" disabled={busy || blank || same}>
+            {busy ? 'Renaming…' : 'Rename'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+/** Confirm a payroll file's removal: it leaves the set, the month is matched again from the rest, and Save decides. */
+function RemovePayrollFile({
+  file,
+  onRemove,
+  onClose,
+}: {
+  file: WorkspacePayrollFileDto
+  onRemove: (f: WorkspacePayrollFileDto) => Promise<boolean>
+  onClose: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <Modal title="Remove this file?" onClose={onClose}>
+      <div className="grid gap-4">
+        <ErrorNote message={error} />
+        <p className="text-sm">
+          <strong>{file.fileName} is taken out of the month's payroll files.</strong>
+        </p>
+        <p className="text-sm">
+          The month is matched again from the rest. Nothing changes until you Save that match.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button kind="ghost" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            kind="navy"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true)
+              setError(null)
+              void onRemove(file).then((ok) => {
+                if (ok) return onClose()
+                setBusy(false)
+                setError('It was not removed. The reason is shown above the files.')
+              })
+            }}
+          >
+            {busy ? 'Removing…' : 'Remove and re-match'}
           </Button>
         </div>
       </div>
@@ -277,9 +575,12 @@ export function PayrollFilesCard({
   note,
   first,
   receipts,
+  manage,
 }: {
   /** The month's receipts, as one more folder after the payroll files. */
   receipts?: MonthReceipts
+  /** Move and Rename (issue #82): owners only. */
+  manage?: FileChanges
   period: string
   files: WorkspacePayrollFilesDto | null
   error: string | null
@@ -296,6 +597,45 @@ export function PayrollFilesCard({
   const [viewing, setViewing] = useState<WorkspacePayrollFileDto | null>(null)
   const [viewingReceipt, setViewingReceipt] = useState<BooksReceiptDto | null>(null)
   const [removingReceipt, setRemovingReceipt] = useState<BooksReceiptDto | null>(null)
+  const [removingFile, setRemovingFile] = useState<WorkspacePayrollFileDto | null>(null)
+  const [moving, setMoving] = useState<Managed | null>(null)
+  const [renaming, setRenaming] = useState<Managed | null>(null)
+  /** What the last move or rename did, said here where the owner did it, with its next step. */
+  const [changed, setChanged] = useState<string | null>(null)
+  const changeDone = (setOpen: (m: null) => void) => (line: string) => {
+    setOpen(null)
+    setChanged(line)
+  }
+  const ofFile = (f: WorkspacePayrollFileDto): Managed => ({
+    id: f.id,
+    fileName: f.fileName,
+    kind: f.kind,
+    contentType: f.contentType,
+    personal: f.personal,
+    cannotMove: f.cannotMove,
+    cannotRename: f.cannotRename,
+    bills: [],
+  })
+  const ofReceipt = (r: BooksReceiptDto): Managed => ({
+    id: r.documentId,
+    fileName: r.fileName,
+    kind: 'receipt',
+    contentType: /\.png$/i.test(r.fileName)
+      ? 'image/png'
+      : /\.jpe?g$/i.test(r.fileName)
+        ? 'image/jpeg'
+        : 'application/pdf',
+    personal: false,
+    cannotMove: r.cannotMove,
+    cannotRename: r.cannotRename,
+    bills: r.transactionIds,
+  })
+  /** A file's menu: Move to… and Rename (each only when the server says it can), then Remove (issue #82). */
+  const menuOf = (m: Managed, remove: (() => void) | null): FileMenuItem[] => [
+    ...(manage && !m.cannotMove ? [{ label: 'Move to…', onClick: () => setMoving(m) }] : []),
+    ...(manage && !m.cannotRename ? [{ label: 'Rename', onClick: () => setRenaming(m) }] : []),
+    ...(remove ? [{ label: 'Remove', onClick: remove, danger: true }] : []),
+  ]
   const [fileError, setFileError] = useState<string | null>(null)
   const api = useApi()
   const list = files?.files ?? []
@@ -367,6 +707,11 @@ export function PayrollFilesCard({
     >
       <div className="grid gap-4">
         {note}
+        {changed && (
+          <Notice key={changed} tone="ok" fade={!/Re-match/.test(changed)}>
+            {changed}
+          </Notice>
+        )}
         <ErrorNote message={error ?? actions?.error ?? fileError} />
         {actions?.changeOpen && (
           <p className="text-sm text-soft">
@@ -445,7 +790,11 @@ export function PayrollFilesCard({
                           <span className="wpc-leaf-name" title={f.fileName}>
                             {f.fileName}
                           </span>
-                          <span className="wpc-leaf-date">{shortDate(f.uploadedAt)}</span>
+                          {f.notMatchedYet ? (
+                            <span className="wpc-leaf-new">Not matched yet</span>
+                          ) : (
+                            <span className="wpc-leaf-date">{shortDate(f.uploadedAt)}</span>
+                          )}
                           {canView(f) && (
                             <button
                               type="button"
@@ -464,16 +813,11 @@ export function PayrollFilesCard({
                           >
                             download
                           </button>
-                          {can && (
-                            <button
-                              type="button"
-                              className="wpc-remove"
-                              disabled={!!actions.busy}
-                              aria-label={`Remove ${f.fileName} from the month's payroll files`}
-                              onClick={() => void actions.onRemove(f)}
-                            >
-                              remove
-                            </button>
+                          {can && !actions.busy && (
+                            <FileMenu
+                              label={`More for ${f.fileName}`}
+                              items={menuOf(ofFile(f), () => setRemovingFile(f))}
+                            />
                           )}
                         </li>
                       ))}
@@ -568,16 +912,11 @@ export function PayrollFilesCard({
                           >
                             download
                           </button>
-                          {receipts.onRemove && (
-                            <button
-                              type="button"
-                              className="wpc-remove"
-                              disabled={receipts.busy}
-                              aria-label={`Remove ${r.fileName} from the month's receipts`}
-                              onClick={() => setRemovingReceipt(r)}
-                            >
-                              remove
-                            </button>
+                          {receipts.onRemove && !receipts.busy && !actions?.changeOpen && (
+                            <FileMenu
+                              label={`More for ${r.fileName}`}
+                              items={menuOf(ofReceipt(r), () => setRemovingReceipt(r))}
+                            />
                           )}
                         </li>
                       ))}
@@ -588,6 +927,29 @@ export function PayrollFilesCard({
           </ul>
         )}
       </div>
+      {removingFile && actions && (
+        <RemovePayrollFile
+          file={removingFile}
+          onRemove={actions.onRemove}
+          onClose={() => setRemovingFile(null)}
+        />
+      )}
+      {moving && manage && (
+        <MoveFile
+          file={moving}
+          onMove={manage.onMove}
+          onDone={changeDone(setMoving)}
+          onClose={() => setMoving(null)}
+        />
+      )}
+      {renaming && manage && (
+        <RenameFile
+          file={renaming}
+          onRename={manage.onRename}
+          onDone={changeDone(setRenaming)}
+          onClose={() => setRenaming(null)}
+        />
+      )}
       {removingReceipt && receipts?.onRemove && (
         <RemoveReceipt
           receipt={removingReceipt}

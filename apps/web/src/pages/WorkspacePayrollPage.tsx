@@ -28,6 +28,7 @@ import {
   type BooksReceiptDto,
   type ProgramNamesDto,
   type ReportDetail,
+  type FileManagementChangeDto,
   engagementsWithoutProgram,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
@@ -76,6 +77,7 @@ import {
 import { expenseRows, payrollRows, toneCounts, type Tone } from '@/pages/workspace-reconcile'
 import {
   PayrollFilesCard,
+  type FileChanges,
   type MonthReceipts,
   type PayrollUpload,
 } from '@/pages/WorkspacePayrollFiles'
@@ -339,6 +341,32 @@ export function WorkspacePayrollPage() {
     )
     setSavedNote(`Removed ${r.fileName}.`)
   }
+  /** A file moved or renamed in File Management (issue #82): its files and receipts as they now are, and a line. */
+  const fileChanged = (r: FileManagementChangeDto) => {
+    files.setData(r.files)
+    expenses.setData(r.expenses)
+    setCardsVersion((n) => n + 1)
+    return r.note
+  }
+  const manage: FileChanges | undefined =
+    owner && period
+      ? {
+          onMove: async (documentId, to) =>
+            fileChanged(
+              await api.post<FileManagementChangeDto>(
+                `/workspaces/${id}/payroll/${period}/files/${documentId}/move`,
+                { to }
+              )
+            ),
+          onRename: async (documentId, name) =>
+            fileChanged(
+              await api.post<FileManagementChangeDto>(
+                `/workspaces/${id}/payroll/${period}/files/${documentId}/rename`,
+                { name }
+              )
+            ),
+        }
+      : undefined
   const monthReceipts: MonthReceipts | undefined =
     period && shownExpenses && shownExpenses.file
       ? {
@@ -626,7 +654,19 @@ export function WorkspacePayrollPage() {
                     : null
                 }
                 period={period}
-                matched={saved}
+                matched={
+                  !!shownRecon?.pays.length ||
+                  (shownFiles?.files ?? []).some((f) => !f.notMatchedYet) ||
+                  cardsVersion > 0
+                }
+                added={
+                  owner
+                    ? {
+                        count: (shownFiles?.files ?? []).filter((f) => f.notMatchedYet).length,
+                        onMatch: () => setAgain((n) => n + 1),
+                      }
+                    : null
+                }
                 cards={d.cards}
                 recon={shownRecon}
                 colors={colorsOf(
@@ -743,6 +783,7 @@ export function WorkspacePayrollPage() {
                   window.scrollTo({ top: 0 })
                 }}
                 receipts={monthReceipts}
+                manage={manage}
                 onOpen={() => {
                   show('match')
                   window.scrollTo({ top: 0 })
@@ -809,9 +850,12 @@ function WorkspaceMatch({
   alone = false,
   again = 0,
   receipts,
+  manage,
   resumeReview = false,
   onCancel,
 }: {
+  /** Move and rename in File Management: owners only. */
+  manage?: FileChanges
   /** Cancel dropped the upload: the page closes the wizard. */
   onCancel?: () => void
   /** Opened by the stepper's Back from Find missing bank lines: match the saved files again, at participant pay. */
@@ -1448,6 +1492,7 @@ function WorkspaceMatch({
         files={files}
         error={filesError}
         receipts={receipts}
+        manage={manage}
         title="File Management"
         note={
           <>
@@ -1634,6 +1679,7 @@ function WorkspaceMatch({
           files={files}
           error={filesError}
           receipts={receipts}
+          manage={manage}
           actions={{
             busy,
             error: fileError,
