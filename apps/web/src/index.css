@@ -1776,6 +1776,17 @@
   .ad-hand-address + .ad-hand-address {
     margin-top: 6px !important;
   }
+  .ad-hand-word {
+    display: inline-block;
+    margin: 2px 0;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16);
+    color: var(--brand);
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 14px;
+    font-weight: 700;
+  }
   .ad-hand-address .ad-mono {
     padding: 4px 10px;
     border-radius: 999px;

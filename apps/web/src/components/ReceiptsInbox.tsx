@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   ALLOWED_UPLOAD_TYPES,
   DISMISS_REASONS,
@@ -39,8 +39,8 @@ import {
   type Tone,
 } from '@/components/ui'
 
-/** The words a subject takes, from the folder list: "receipts, timesheets, …" (issue #82). */
-const SUBJECT_WORDS = EMAILED_KINDS.map((k) => EMAILED_KIND_WORDS[k][0]).join(', ')
+/** The words a subject takes, from the folder list: receipts, timesheets, … (issue #82). */
+const SUBJECT_WORDS = EMAILED_KINDS.map((k) => EMAILED_KIND_WORDS[k][0]!)
 
 /** A month as the screens say it: 2026-10 is October 2026. */
 const monthLabel = (period: string) =>
@@ -402,8 +402,14 @@ export function ReceiptsInbox({
             <ol className="ad-hand-steps">
               <li>Send from the email you sign in with, up to 10 files per email.</li>
               <li>
-                Subject word: {SUBJECT_WORDS}. No word: they're receipts. Add an engagement's code
-                to file them on its month.
+                Subject word:{' '}
+                {SUBJECT_WORDS.map((w, i) => (
+                  <Fragment key={w}>
+                    {i > 0 && ' '}
+                    <code className="ad-hand-word">{w}</code>
+                  </Fragment>
+                ))}
+                . No word: they're receipts. Add an engagement's code to file them on its month.
               </li>
               <li>Name the month, or they go in this month. We email you where they went.</li>
               <li>Never email eligibility records or contracts: upload those on the engagement.</li>
