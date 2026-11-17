@@ -356,12 +356,9 @@ export function ExpenseRow({
       {actions && (
         <td className="ad-num whitespace-nowrap">
           {/* A line from the books is changed in the books or on the month's expenses, never here
-              (review fix, 2026-11-12); its proofs are still attached in the Proof column. */}
-          {e.fromBooks ? (
-            <span className="ad-table-sub" data-testid={`from-books-${e.itemNumber}`}>
-              from the books
-            </span>
-          ) : end !== undefined ? (
+              (review fix, 2026-11-12), so it has no edit or remove; its proofs are still attached in the Proof
+              column. No label in their place (owner's decision, 2026-11-17). */}
+          {e.fromBooks ? null : end !== undefined ? (
             end
           ) : (
             <>
