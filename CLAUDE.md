@@ -169,7 +169,8 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   open in the app's viewer like any other document (owner's decision, 2026-11-17, replacing the forced download), never
   marked. **Every document opens in the app's viewer** (`DocumentViewer`: PDF, picture, CSV, spreadsheet, Word file),
   from its bytes through the API (`GET /documents/:id/file`, the link's gates, every open logged), with Download under
-  its own name; a Word file is turned into a page in the browser and drawn in a sandboxed frame that runs no script.
+  its own name; a Word file is laid out in the browser (docx-preview) as pages in the PDF viewer's frames, each page drawn
+  in a sandboxed frame that runs no script.
   Documents may be read to match them: a receipt's amount, date and vendor, a line on a
   bank statement, a pay stub's pay period and pay (owner's decisions, 2026-10-15 and 2026-10-16). A bank's downloaded PDF has a text layer; a scanned one does not, and the screen says so
   rather than running OCR. Financial receipts and invoices are read for amount, date and vendor (PDF text
