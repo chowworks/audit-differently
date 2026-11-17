@@ -610,6 +610,8 @@ const VERDICT = {
   subjectHeaders: 1,
   signedRecipients: ['bright-path@receipts.example.org'],
   autoSubmitted: [] as string[],
+  messageId: '<m-1@bright-path.example.org>' as string | null,
+  references: [] as string[],
 }
 
 const GOOD: Partial<ReceivedEmail> = {
@@ -1373,6 +1375,24 @@ describe('emailed receipts', () => {
       // A person's own message ("no") is filed as ever.
       t.senders.verify.mockImplementationOnce(async () => ({ ...VERDICT, autoSubmitted: ['no'] }))
       expect((await t.receive()).status).toBe('filed')
+    })
+
+    it('refuses quietly a reply to one of our confirmations, and threads ours under their email', async () => {
+      const t = ready()
+      t.senders.verify.mockImplementationOnce(async () => ({
+        ...VERDICT,
+        references: ['<ad-confirmation.ir-0@mail.example.org>'],
+      }))
+      const reply = await t.receive('Re: timesheets October 2026')
+      expect(reply).toMatchObject({ status: 'rejected', rejectReason: REJECT.automatic })
+      expect(t.confirmations.sent).toEqual([])
+      await t.receive('timesheets October 2026')
+      expect(t.confirmations.sent).toEqual([
+        expect.objectContaining({
+          inReplyTo: '<m-1@bright-path.example.org>',
+          subject: 'timesheets October 2026',
+        }),
+      ])
     })
 
     it('claims the confirmation as trusted work and reads what it says as the sender', async () => {

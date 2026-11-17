@@ -3,12 +3,16 @@ import {
   confirmationConfig,
   confirmationEmail,
   isOwnConfirmation,
+  isOwnConfirmationId,
   type Confirmation,
 } from './confirmation'
 
 /** Issue #82: the confirmation says where the files went and links to fix it, and carries nothing of the files. */
 const APP = 'https://app.example.org'
 const base: Confirmation = {
+  id: 'ir-1',
+  inReplyTo: null,
+  subject: null,
   to: 'bookkeeper@bright-path.example.org',
   outcome: 'filed',
   receivedAt: new Date('2026-11-17T01:40:00Z'),
@@ -164,6 +168,48 @@ describe('InboundConfirmation.send', () => {
       headers: { 'Auto-Submitted': 'auto-generated' },
     })
     expect(body).not.toHaveProperty('attachments')
+  })
+
+  it('answers as a reply: Re: their subject, threaded under their email, with what happened first', async () => {
+    process.env.RESEND_API_KEY = 're_test_fictional'
+    process.env.RECEIPTS_REPLY_FROM = 'Audit <no-reply@mail.example.org>'
+    process.env.FRONTEND_URL = APP
+    const fetch = jest.spyOn(global, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
+    await new InboundConfirmation().send({
+      ...base,
+      inReplyTo: '<abc123@bright-path.example.org>',
+      subject: 'timesheets October 2026',
+    })
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body)) as {
+      subject: string
+      text: string
+      headers: Record<string, string>
+    }
+    expect(body.subject).toBe('Re: timesheets October 2026')
+    expect(body.text.split('\n')[0]).toBe('Filed: 2 timesheets for October 2026.')
+    expect(body.headers).toEqual({
+      'Auto-Submitted': 'auto-generated',
+      'Message-ID': '<ad-confirmation.ir-1@mail.example.org>',
+      'In-Reply-To': '<abc123@bright-path.example.org>',
+      References: '<abc123@bright-path.example.org>',
+    })
+    expect(isOwnConfirmationId(body.headers['Message-ID']!)).toBe(true)
+    expect(isOwnConfirmationId('<abc123@bright-path.example.org>')).toBe(false)
+  })
+
+  it('keeps "Re:" once, and with no subject sends the status line as the subject, unthreaded', async () => {
+    process.env.RESEND_API_KEY = 're_test_fictional'
+    process.env.RECEIPTS_REPLY_FROM = 'no-reply@mail.example.org'
+    process.env.FRONTEND_URL = APP
+    const fetch = jest.spyOn(global, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
+    await new InboundConfirmation().send({ ...base, subject: 'RE: paystubs' })
+    await new InboundConfirmation().send(base)
+    const [a, b] = fetch.mock.calls.map(
+      (c) => JSON.parse(String(c[1]!.body)) as { subject: string; headers: Record<string, string> }
+    )
+    expect(a!.subject).toBe('RE: paystubs')
+    expect(b!.subject).toBe('Filed: 2 timesheets for October 2026')
+    expect(b!.headers).not.toHaveProperty('In-Reply-To')
   })
 })
 

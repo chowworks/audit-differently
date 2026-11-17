@@ -57,7 +57,12 @@ import {
 } from '../receipts/receipts.service'
 import { inboundConfig, receiptsDomain } from './config'
 import { MAX_RAW_BYTES, ProviderError, ResendInbound, type ReceivedAttachment } from './resend'
-import { InboundConfirmation, isOwnConfirmation, type Outcome } from './confirmation'
+import {
+  InboundConfirmation,
+  isOwnConfirmation,
+  isOwnConfirmationId,
+  type Outcome,
+} from './confirmation'
 import { SenderCheck } from './sender-check'
 import { monthIn, readSubject } from './subject'
 
@@ -463,6 +468,21 @@ export class InboundService {
           where: { id, ...tenantWhere(caller) },
         })
         if (!r?.workspaceId || r.senderUserId !== senderId || !r.fromAddress) return null
+        // "Nothing was filed" at most once in ten minutes per sender: a mail rule that sends our answer straight back
+        // stops after one round, whatever its headers say.
+        if (
+          outcome === 'nothing' &&
+          (await this.prisma.inboundReceipt.findFirst({
+            where: {
+              id: { not: id },
+              senderUserId: senderId,
+              confirmationSentAt: { gte: new Date(Date.now() - 10 * 60_000) },
+              ...tenantWhere(caller),
+            },
+            select: { id: true },
+          }))
+        )
+          return null
         const [engagement, docs] = await Promise.all([
           r.engagementId
             ? this.prisma.engagement.findFirst({
@@ -503,7 +523,10 @@ export class InboundService {
       if (!facts) return
       const { r } = facts
       await this.confirmations.send({
+        id: r.id,
         to: r.fromAddress!,
+        inReplyTo: r.messageId,
+        subject: r.subject,
         outcome,
         receivedAt: r.receivedAt,
         workspaceId: r.workspaceId!,
@@ -602,6 +625,11 @@ export class InboundService {
     // the raw message itself. Refused quietly: never filed, never answered.
     if (verdict.autoSubmitted.some((v) => v.split(';')[0]!.trim() !== 'no'))
       throw new Rejected(REJECT.automatic)
+    // An answer to one of our confirmations (a reply or a forward that names it): quietly refused, never answered.
+    if (verdict.references.some(isOwnConfirmationId)) throw new Rejected(REJECT.automatic)
+    // Its Message-ID, so the confirmation threads under it.
+    if (verdict.messageId && verdict.messageId !== row.messageId)
+      await this.settle(row.id, { messageId: verdict.messageId })
 
     // d. Whose it is, said once: the workspace together with its verified sender.
     if (!row.workspaceId) await this.settle(row.id, { workspaceId, senderUserId: senderId })

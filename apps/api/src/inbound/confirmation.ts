@@ -12,7 +12,13 @@ import { INBOUND_TIME_ZONE } from './subject'
 export type Outcome = 'filed' | 'unmatched' | 'nothing'
 
 export interface Confirmation {
+  /** The inbound row's id: our own Message-ID is made from it. */
+  id: string
   to: string
+  /** The email's own Message-ID, so the confirmation threads under it; null: sent as a new message. */
+  inReplyTo: string | null
+  /** The email's own subject, as the sender wrote it: the reply is "Re: <it>", and goes to that sender alone. */
+  subject: string | null
   outcome: Outcome
   receivedAt: Date
   workspaceId: string
@@ -63,6 +69,29 @@ const OWN_SUBJECTS = [
   /Nothing was filed from your email/i,
 ]
 
+/** Our own Message-ID for a row's confirmation: an email that names it (a reply, a forward) is never filed or answered. */
+export const confirmationMessageId = (id: string, from: string) =>
+  `<ad-confirmation.${id}@${/@([^>\s]+)>?\s*$/.exec(from)?.[1] ?? 'auditdifferently.invalid'}>`
+export const isOwnConfirmationId = (messageId: string) =>
+  /^<ad-confirmation\.[^@>]+@/i.test(messageId)
+
+/**
+ * The confirmation as a reply to the email it answers (owner's decision, 2026-11-17): "Re: <their subject>" with what
+ * happened as its first line, so it threads under their own email in Gmail and Outlook. With no subject, the status line
+ * is the subject.
+ */
+export function asReply(c: Confirmation, mail: { subject: string; text: string }) {
+  const theirs = (c.subject ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .trim()
+    .slice(0, 200)
+  if (!theirs) return mail
+  return {
+    subject: /^re:/i.test(theirs) ? theirs : `Re: ${theirs}`,
+    text: `${mail.subject}.\n\n${mail.text}`,
+  }
+}
+
 /**
  * Whether a subject is one of our confirmations' (also under "Re:", "Fwd:" or "Automatic reply:"): an auto-reply or a
  * forward of a confirmation sent back to the receipts address is never filed or answered, so the two never loop.
@@ -80,7 +109,8 @@ const WORDS = (Object.values(EMAILED_KIND_WORDS) as (readonly string[])[])
 
 /**
  * The confirmation's subject and text (issue #82): where the files went (folder, month, engagement), how many, and a
- * link to fix it. Never a file name (a pay stub's is often a person's name), never the email's own subject, never an
+ * link to fix it. Never a file name (a pay stub's is often a person's name), never the email's own subject (the reply's
+ * subject alone carries it, `asReply`), never an
  * amount or a vendor read from a receipt, and never a document or a link to one: the link opens a page that asks the
  * person to sign in (CLAUDE.md: no document leaves by email; notifications carry links).
  */
@@ -228,7 +258,7 @@ export class InboundConfirmation {
   async send(c: Confirmation): Promise<void> {
     const cfg = confirmationConfig()
     if (!cfg) return
-    const { subject, text } = confirmationEmail(c, cfg.app)
+    const { subject, text } = asReply(c, confirmationEmail(c, cfg.app))
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${cfg.key}`, 'Content-Type': 'application/json' },
@@ -237,7 +267,11 @@ export class InboundConfirmation {
         to: [c.to],
         subject,
         text,
-        headers: { 'Auto-Submitted': 'auto-generated' },
+        headers: {
+          'Auto-Submitted': 'auto-generated',
+          'Message-ID': confirmationMessageId(c.id, cfg.from),
+          ...(c.inReplyTo && { 'In-Reply-To': c.inReplyTo, References: c.inReplyTo }),
+        },
       }),
     }).catch(() => null)
     // Never the address or the words: the status alone.

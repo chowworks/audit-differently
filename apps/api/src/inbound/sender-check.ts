@@ -17,6 +17,10 @@ export interface SenderVerdict {
    * "auto-replied" or "auto-generated", is a machine's), so an out-of-office reply is never filed or answered.
    */
   autoSubmitted: string[]
+  /** Its Message-ID (`<…>`), when it has exactly one well-formed one: what the confirmation answers. */
+  messageId: string | null
+  /** The message ids its In-Reply-To and References headers name: an answer to one of our confirmations names ours. */
+  references: string[]
 }
 
 const NOT_PASSED: SenderVerdict = {
@@ -26,6 +30,8 @@ const NOT_PASSED: SenderVerdict = {
   subjectHeaders: 0,
   signedRecipients: [],
   autoSubmitted: [],
+  messageId: null,
+  references: [],
 }
 
 /** The addresses in a header line such as `To: Pat <pat@example.org>, lee@example.org`, lowercased. */
@@ -40,6 +46,13 @@ const headerValue = (line: string) =>
     .slice(line.indexOf(':') + 1)
     .replace(/\r?\n[ \t]+/g, ' ')
     .trim()
+
+/** The one Message-ID of a message, as `<…>`: none, or more than one, is null. */
+export function oneMessageId(values: string[]): string | null {
+  if (values.length !== 1) return null
+  const v = values[0]!.trim()
+  return /^<[^<>\s]{1,250}>$/.test(v) ? v : null
+}
 
 /** A DKIM result as mailauth returns it at runtime: the header lines a signature covers are not in its types. */
 type SignatureResult = {
@@ -80,6 +93,12 @@ export class SenderCheck {
         autoSubmitted: parsed
           .filter((h) => h.key === 'auto-submitted')
           .map((h) => headerValue(String(h.line)).toLowerCase()),
+        messageId: oneMessageId(
+          parsed.filter((h) => h.key === 'message-id').map((h) => headerValue(String(h.line)))
+        ),
+        references: parsed
+          .filter((h) => h.key === 'in-reply-to' || h.key === 'references')
+          .flatMap((h) => headerValue(String(h.line)).match(/<[^<>\s]+>/g) ?? []),
       }
     } catch {
       return NOT_PASSED

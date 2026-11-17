@@ -66,6 +66,8 @@ describe('SenderCheck', () => {
       subjectHeaders: 1,
       signedRecipients: ['bright-path@receipts.example.org', 'lee@example.org'],
       autoSubmitted: [],
+      messageId: '<fictional-1@bright-path.example.org>',
+      references: [],
     })
   })
 
