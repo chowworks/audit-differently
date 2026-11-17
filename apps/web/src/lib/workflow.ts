@@ -93,7 +93,7 @@ const STEP_TEXT: Record<StepKey, { title: string; blurb: string; help: string }>
     title: 'Participants and eligibility',
     blurb:
       'Each person the program serves, with the eligibility data required for the audit. Satisfy it the day they enroll.',
-    help: 'Add each participant the day they enroll and attach each eligibility item as it arrives. The review reads this file beside the payroll proof of step 6. Personal records: download only, every read logged.',
+    help: 'Add each participant the day they enroll and attach each eligibility item as it arrives. The review reads this file beside the payroll proof of step 6. Personal records: owners and auditors open them, every read logged.',
   },
   ledger: {
     title: 'Monthly ledger and proof',

@@ -17,3 +17,9 @@
 .ad-csv tr:nth-child(even) td {
   background: var(--surface-alt);
 }
+/* A spreadsheet's highlighted cells (SheetViewer.tsx): the yellow its copy fills them with. */
+.ad-csv td.ad-sheet-filled,
+.ad-csv tr:nth-child(even) td.ad-sheet-filled {
+  background: #fff176;
+  color: #1a1a1a;
+}

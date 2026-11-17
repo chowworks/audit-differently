@@ -20,6 +20,7 @@ import {
   type StatementMark,
 } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
+import { DocumentViewer } from '@/components/DocumentViewer'
 import { ApiError } from '@/services/api'
 import {
   PAYROLL_FOLDERS,
@@ -1368,11 +1369,11 @@ export function PayrollProof({
             )}
             {viewing.fileName}
           </p>
-          <StatementViewer
+          <DocumentViewer
+            file={{ fileName: viewing.fileName }}
             doc={viewing.doc}
             src={viewing.src}
             page={viewing.page}
-            downloadName={viewing.fileName}
           />
         </Modal>
       )}

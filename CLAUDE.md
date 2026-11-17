@@ -164,9 +164,13 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   Personal documents: signed URLs that expire in 60 seconds, every read logged, and never part of an export the funder
   did not ask for by name. **Pay stubs are payroll files** (owner's decision, 2026-10-16): owners, bookkeepers and
   auditors open them (`personalRolesFor`), they show on the page with their matched line highlighted like a timesheet
-  or a bank statement, and their mark keeps the line's text. **Eligibility records and enrollment forms** stay
-  strict: owners and auditors only (`PERSONAL_DOCUMENT_ROLES`; a bookkeeper attaches them and does not read them
-  back), always a forced download, never an inline preview or thumbnail, never marked.
+  or a bank statement, and their mark keeps the line's text. **Eligibility records and enrollment forms** are
+  owners and auditors only (`PERSONAL_DOCUMENT_ROLES`; a bookkeeper attaches them and does not read them back), and
+  open in the app's viewer like any other document (owner's decision, 2026-11-17, replacing the forced download), never
+  marked. **Every document opens in the app's viewer** (`DocumentViewer`: PDF, picture, CSV, spreadsheet, Word file),
+  from its bytes through the API (`GET /documents/:id/file`, the link's gates, every open logged), with Download under
+  its own name; a Word file is laid out in the browser (docx-preview) as pages in the PDF viewer's frames, each page drawn
+  in a sandboxed frame that runs no script.
   Documents may be read to match them: a receipt's amount, date and vendor, a line on a
   bank statement, a pay stub's pay period and pay (owner's decisions, 2026-10-15 and 2026-10-16). A bank's downloaded PDF has a text layer; a scanned one does not, and the screen says so
   rather than running OCR. Financial receipts and invoices are read for amount, date and vendor (PDF text
