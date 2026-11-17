@@ -22,6 +22,7 @@ import { CallerService, UserId } from '../core/caller'
 import { runAsSystem } from '../core/tenant-context'
 import { PrismaService } from '../prisma/prisma.service'
 import { LocalDiskStorage } from '../storage/local-disk-storage'
+import { disposition } from '../storage/r2-storage'
 import type { UploadResult } from './document.dto'
 import { DocumentsService, MAX_UPLOAD_BYTES, type UploadBody } from './documents.service'
 
@@ -80,6 +81,22 @@ export class DocumentsController {
     @Param('id') id: string
   ): Promise<{ url: string; expiresInSeconds: number }> {
     return this.documents.url(await this.callers.load(userId), id)
+  }
+
+  /** A document's bytes for the in-app viewer, gated and logged as the link is. */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Get(':id/file')
+  @UseGuards(AuthenticatedGuard)
+  async file(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Res() res: Response
+  ): Promise<void> {
+    const f = await this.documents.file(await this.callers.load(userId), id)
+    res.setHeader('Content-Type', f.contentType)
+    res.setHeader('Content-Disposition', disposition('inline', f.fileName))
+    res.setHeader('Cache-Control', 'no-store')
+    res.end(Buffer.from(f.bytes))
   }
 
   /** Local development only: the file behind a token that /documents/:id/url issued (and logged). */

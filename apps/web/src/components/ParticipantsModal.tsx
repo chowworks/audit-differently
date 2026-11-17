@@ -305,8 +305,8 @@ function ParticipantFile({
         )}
       </div>
       <p className="mb-3 text-xs text-soft">
-        Required items are marked *. Each upload saves at once. Personal records: download only,
-        every read logged.
+        Required items are marked *. Each upload saves at once. Personal records: owners and
+        auditors open them, every read logged.
       </p>
       <table className="ad-table">
         <thead>

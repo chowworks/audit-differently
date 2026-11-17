@@ -585,10 +585,48 @@ export class DocumentsService {
   }
 
   /**
-   * A short-lived link to the file. Personal documents: shorter, fewer roles, download only and logged as such, except
-   * a pay stub, which opens in the browser like the other payroll files (owner's decision, 2026-10-16).
+   * A short-lived link to the file, opened in the browser. Personal documents: shorter and fewer roles (pay stubs open to
+   * every member like the other payroll files, owner's decision, 2026-10-16); every open logged. They open like any
+   * other document (owner's decision, 2026-11-17: no forced download).
    */
   async url(caller: Caller, id: string): Promise<{ url: string; expiresInSeconds: number }> {
+    const { doc, personal } = await this.openable(caller, id)
+    const expiresInSeconds = personal ? 60 : 120
+    const url = await this.storage.getSignedUrl(doc.storageKey, expiresInSeconds, {
+      inlineName: doc.fileName,
+    })
+    await this.log.log(caller, {
+      workspaceId: doc.workspaceId,
+      resource: 'document',
+      subjectId: doc.id,
+      action: 'read',
+      description: `Opened ${describe(doc)}`,
+    })
+    return { url, expiresInSeconds }
+  }
+
+  /**
+   * A document's bytes, through the API, for the in-app viewer (PDF, image, CSV, spreadsheet or Word file): a browser
+   * shows only some of these from a link and downloads the rest. Same gates as the link, logged as opened.
+   */
+  async file(
+    caller: Caller,
+    id: string
+  ): Promise<{ bytes: Uint8Array; contentType: string; fileName: string }> {
+    const { doc } = await this.openable(caller, id)
+    const bytes = await this.storage.read(doc.storageKey)
+    await this.log.log(caller, {
+      workspaceId: doc.workspaceId,
+      resource: 'document',
+      subjectId: doc.id,
+      action: 'read',
+      description: `Opened ${describe(doc)}`,
+    })
+    return { bytes, contentType: doc.contentType, fileName: doc.fileName }
+  }
+
+  /** The document, if the caller may open it: a personal record only by the roles its kind allows. */
+  private async openable(caller: Caller, id: string) {
     const doc = await this.prisma.document.findFirst({ where: { id, ...tenantWhere(caller) } })
     if (!doc) throw new NotFoundException()
     const personal = doc.sensitivity === 'personal'
@@ -599,21 +637,7 @@ export class DocumentsService {
           'Personal documents are open to owners and auditors only (pay stubs to bookkeepers too)'
         )
     }
-    const expiresInSeconds = personal ? 60 : 120
-    const download = personal && doc.kind !== 'paystub'
     if (!keyInWorkspace(doc)) throw new NotFoundException()
-    const url = await this.storage.getSignedUrl(
-      doc.storageKey,
-      expiresInSeconds,
-      download ? { downloadName: doc.fileName } : { inlineName: doc.fileName }
-    )
-    await this.log.log(caller, {
-      workspaceId: doc.workspaceId,
-      resource: 'document',
-      subjectId: doc.id,
-      action: 'read',
-      description: `${download ? 'Downloaded' : 'Opened'} ${describe(doc)}`,
-    })
-    return { url, expiresInSeconds }
+    return { doc, personal }
   }
 }

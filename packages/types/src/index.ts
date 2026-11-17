@@ -179,8 +179,8 @@ export const DOCUMENT_KIND_LABELS: Record<DocumentKind, string> = {
 
 /**
  * How a document may be served (CLAUDE.md, "Data rules"). 'personal' documents identify a participant: they
- * get the shortest signed URLs, always download, are never previewed, and are visible to agency roles and
- * provider admins only.
+ * get the shortest signed URLs, open in the app's viewer, every read logged, and are visible to fewer roles
+ * (`personalRolesFor`).
  */
 export type DocumentSensitivity = 'financial' | 'personal'
 

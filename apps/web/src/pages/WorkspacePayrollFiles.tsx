@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ALLOWED_UPLOAD_TYPES,
   DOCUMENT_KIND_LABELS,
@@ -12,19 +12,12 @@ import {
   type WorkspacePayrollFileDto,
   type WorkspacePayrollFilesDto,
 } from '@ad/types'
-import { isCsv, periodLabel, shortDate } from '@/lib/format'
+import { periodLabel, shortDate } from '@/lib/format'
 import { PAYROLL_FOLDERS, RECEIPTS_FOLDER, type PayrollFolderKind } from '@/lib/zip-files'
 import { FILE_MAX_BYTES, RECEIPT_MAX_BYTES } from '@/components/PayrollProof'
 import { Button, Card, Empty, ErrorNote, Field, Modal, Notice, inputClass } from '@/components/ui'
 import { useApi } from '@/hooks/useApi'
-
-/** pdf.js is large: it loads when a file is first viewed. */
-const StatementViewer = lazy(() =>
-  import('@/components/StatementViewer').then((m) => ({ default: m.StatementViewer }))
-)
-const CsvViewer = lazy(() =>
-  import('@/components/CsvViewer').then((m) => ({ default: m.CsvViewer }))
-)
+import { DocumentViewer, canView } from '@/components/DocumentViewer'
 
 export type PayrollUpload = { file: File; kind: PayrollFolderKind }[]
 
@@ -802,7 +795,7 @@ export function PayrollFilesCard({
                           ) : (
                             <span className="wpc-leaf-date">{shortDate(f.uploadedAt)}</span>
                           )}
-                          {(f.contentType === 'application/pdf' || isCsv(f)) && (
+                          {canView(f) && (
                             <button
                               type="button"
                               className="wpc-open"
@@ -901,7 +894,7 @@ export function PayrollFilesCard({
                               ? `Proves bill ${r.transactionIds.join(', ')}`
                               : 'Matched to no bill'}
                           </span>
-                          {/\.pdf$/i.test(r.fileName) && (
+                          {canView(r) && (
                             <button
                               type="button"
                               className="wpc-open"
@@ -966,34 +959,26 @@ export function PayrollFilesCard({
       )}
       {viewingReceipt && receipts && (
         <Modal title={viewingReceipt.fileName} onClose={() => setViewingReceipt(null)} wide>
-          <Suspense fallback={<p className="text-sm text-soft">Opening the receipt…</p>}>
-            <StatementViewer
-              doc={{ id: viewingReceipt.documentId, sensitivity: 'financial', kind: 'receipt' }}
-              src={receiptUrl(viewingReceipt)}
-              downloadName={viewingReceipt.fileName}
-            />
-          </Suspense>
+          <DocumentViewer
+            file={viewingReceipt}
+            doc={{ id: viewingReceipt.documentId, sensitivity: 'financial', kind: 'receipt' }}
+            src={receiptUrl(viewingReceipt)}
+          />
         </Modal>
       )}
       {viewing && files && (
         <Modal title={viewing.fileName} onClose={() => setViewing(null)} wide>
-          <Suspense fallback={<p className="text-sm text-soft">Opening the file…</p>}>
-            {isCsv(viewing) ? (
-              <CsvViewer src={fileUrl(viewing)} downloadName={viewing.fileName} />
-            ) : (
-              <StatementViewer
-                doc={{
-                  id: viewing.id,
-                  sensitivity: viewing.personal ? 'personal' : 'financial',
-                  // The month's payroll files open like the other payroll files, pay stubs too (owner's decision,
-                  // 2026-10-16).
-                  kind: viewing.personal ? 'paystub' : viewing.kind,
-                }}
-                src={fileUrl(viewing)}
-                downloadName={viewing.fileName}
-              />
-            )}
-          </Suspense>
+          <DocumentViewer
+            file={viewing}
+            doc={{
+              id: viewing.id,
+              sensitivity: viewing.personal ? 'personal' : 'financial',
+              // The month's payroll files open like the other payroll files, pay stubs too (owner's decision,
+              // 2026-10-16).
+              kind: viewing.personal ? 'paystub' : viewing.kind,
+            }}
+            src={fileUrl(viewing)}
+          />
         </Modal>
       )}
     </Card>
