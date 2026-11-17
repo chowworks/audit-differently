@@ -80,6 +80,7 @@ import { highlightsFor } from './highlights'
 import type { ZipSource } from '../engagements/zip-stream'
 import { monthReceiptsWhere } from '../expenses/month-receipts'
 import { HighlightSettingsService } from './highlight-settings.service'
+import { setFileDtos, workspaceSetOf } from './workspace-set'
 import {
   computeBudgetLines,
   countedTwice,
@@ -156,6 +157,8 @@ const sha256Of = (f: Uploaded) =>
 /** Said when a file of an upload was removed, or the upload itself went, before Save. */
 export const UPLOAD_CHANGED = 'A file in this upload was removed; start the upload again'
 /** Said when the month's set changed (another owner saved a change) after this change was started. */
+/** The month's set changed between reading it and starting a run on it (a move or an emailed file a moment ago). */
+const SET_CHANGED_NOW = "The month's payroll files changed a moment ago: start again"
 export const SET_CHANGED =
   "The month's payroll files changed since this was started: discard it and start again"
 const RUN_MS = RUN_HOURS * 3_600_000
@@ -190,6 +193,17 @@ const monthsWords = (ms: { engagementName: string; period: string }[]) => {
 
 type RunFile = RunRow['files'][number]
 type WorkspaceRun = RunRow & { workspaceId: string; period: string }
+/**
+ * A file emailed in after the run started and not yet matched (issue #82): not the run's, so it neither leaves the set
+ * at Save nor counts as the set changing; it keeps its "not matched yet" mark for the next match.
+ */
+const lateArrival = (
+  run: { createdAt: Date; setDocumentIds: string[] },
+  d: { id: string; addedSinceMatch: boolean; uploadedAt: Date }
+) =>
+  d.addedSinceMatch &&
+  d.uploadedAt.getTime() > run.createdAt.getTime() &&
+  !run.setDocumentIds.includes(d.id)
 const modeOf = (run: { mode: string | null }): WorkspacePayrollMode =>
   (run.mode as WorkspacePayrollMode | null) ?? 'add'
 const linkKey = (target: string, itemId: string, documentId: string) =>
@@ -310,16 +324,7 @@ export class WorkspacePayrollService {
 
   /** The month's set: its workspace payroll documents, each under its workspace's own folder. */
   private async setOf(workspaceId: string, period: string): Promise<Document[]> {
-    const docs = await this.prisma.document.findMany({
-      where: {
-        workspaceId,
-        engagementId: null,
-        period,
-        kind: { in: [...PAYROLL_DOCUMENT_KINDS] },
-      },
-      orderBy: [{ kind: 'asc' }, { fileName: 'asc' }],
-    })
-    return docs.filter((d) => keyInWorkspace(d))
+    return workspaceSetOf(this.prisma, workspaceId, period)
   }
 
   /** The month's set as the page lists it, for Remove a file. Owners only; one list line. */
@@ -330,26 +335,17 @@ export class WorkspacePayrollService {
   ): Promise<WorkspacePayrollFilesDto> {
     this.reader(caller, workspaceId)
     const p = this.period(period)
-    const docs = await this.setOf(workspaceId, p)
+    const files = await setFileDtos(this.prisma, workspaceId, p)
     await this.log.log(caller, {
       workspaceId,
       resource: 'document',
       action: 'list',
-      description: `Listed the workspace's payroll files for ${monthName(p)} (${howMany(docs.length, 'file')})`,
+      description: `Listed the workspace's payroll files for ${monthName(p)} (${howMany(files.length, 'file')})`,
     })
     return {
       workspaceId,
       period: p,
-      files: docs.map((d) => ({
-        id: d.id,
-        kind: d.kind as PayrollDocumentKind,
-        fileName: d.fileName,
-        size: d.size,
-        sha256: d.sha256,
-        uploadedAt: d.uploadedAt.toISOString(),
-        personal: d.sensitivity === 'personal',
-        contentType: d.contentType,
-      })),
+      files,
       can: { change: workspaceRole(caller, workspaceId, ['owner']) },
     }
   }
@@ -444,7 +440,8 @@ export class WorkspacePayrollService {
    * (one a staged file takes the place of, by the same contents or the same name and kind, has `changed`; one simply no
    * longer there has `left`), and the files that join. `stale` when the set is not what it was when the run started.
    */
-  private setChange(run: WorkspaceRun, set: Document[]) {
+  private setChange(run: WorkspaceRun, all: Document[]) {
+    const set = all.filter((d) => !lateArrival(run, d))
     const staged = run.files.filter((f) => !f.documentId)
     const held = new Set(run.files.map((f) => f.documentId).filter((d): d is string => !!d))
     const supersededBy = (d: Document) =>
@@ -1272,6 +1269,9 @@ export class WorkspacePayrollService {
     opts: { expected?: number | null; removeId?: string }
   ): Promise<WorkspacePayrollRunDto> {
     const open = await this.openRunOf(caller, workspaceId, period)
+    // The set's size first: a refusal changes nothing, the caller's unsaved uploads included.
+    const set = await this.setOf(workspaceId, period)
+    const ids = (xs: string[]) => [...xs].sort().join(',')
     if (open && modeOf(open) === mode) {
       const removed = open.setDocumentIds.filter(
         (id) => !open.files.some((f) => f.documentId === id)
@@ -1281,11 +1281,12 @@ export class WorkspacePayrollService {
           ? open.expectedFiles === (opts.expected ?? null)
           : mode === 'remove'
             ? removed.length === 1 && removed[0] === opts.removeId
-            : true
+            : mode === 'match'
+              ? // A set that changed since (a file moved or emailed in): that run is discarded below, started afresh.
+                ids(open.setDocumentIds) === ids(set.map((d) => d.id))
+              : true
       if (same) return this.get(caller, open.id)
     }
-    // The set's size first: a refusal changes nothing, the caller's unsaved uploads included.
-    const set = await this.setOf(workspaceId, period)
     if (set.length > MAX) throw new BadRequestException(TOO_MANY(set.length))
     await this.startMonths(caller, workspaceId, period)
     const mine = await this.prisma.payrollMatchRun.findMany({
@@ -1315,6 +1316,13 @@ export class WorkspacePayrollService {
     await this.log.change(
       caller,
       async (tx) => {
+        // The month's lock, as Save and File Management's moves take it: the set the run starts from is the set as it is.
+        await tx.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext(${`payroll-set:${workspaceId}:${period}`}))`
+        if (
+          ids((await workspaceSetOf(tx, workspaceId, period)).map((d) => d.id)) !==
+          ids(set.map((d) => d.id))
+        )
+          throw new ConflictException(SET_CHANGED_NOW)
         const run = await tx.payrollMatchRun.create({
           data: {
             id: runId,
@@ -1803,11 +1811,18 @@ export class WorkspacePayrollService {
             period: run.period,
             kind: { in: [...PAYROLL_DOCUMENT_KINDS] },
           },
-          select: { id: true, workspaceId: true, engagementId: true, storageKey: true },
+          select: {
+            id: true,
+            workspaceId: true,
+            engagementId: true,
+            storageKey: true,
+            addedSinceMatch: true,
+            uploadedAt: true,
+          },
         })
         if (
           setNow
-            .filter((d) => keyInWorkspace(d))
+            .filter((d) => keyInWorkspace(d) && !lateArrival(run, d))
             .map((d) => d.id)
             .sort()
             .join(',') !== [...run.setDocumentIds].sort().join(',')
@@ -1868,6 +1883,18 @@ export class WorkspacePayrollService {
             })),
           })
         await tx.payrollMatchRun.delete({ where: { id: run.id } })
+        // The files this run read are matched now (issue #82); one emailed in after it started keeps its mark.
+        await tx.document.updateMany({
+          where: {
+            id: { in: run.setDocumentIds },
+            workspaceId: run.workspaceId,
+            engagementId: null,
+            period: run.period,
+            kind: { in: [...PAYROLL_DOCUMENT_KINDS] },
+            addedSinceMatch: true,
+          },
+          data: { addedSinceMatch: false },
+        })
         // Each draft month the match covered is matched as of now: one started after this shows it is not yet.
         if (months.length)
           await tx.monthlyReport.updateMany({

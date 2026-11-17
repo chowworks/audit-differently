@@ -127,6 +127,7 @@ async function setup(opts: { statusB?: string; links?: Record<string, Link[]> } 
       create: jest.fn(async ({ data }) => ({ id: `d-${++n}`, ...data })),
       createMany: jest.fn(),
       deleteMany: jest.fn(),
+      updateMany: jest.fn(),
       findMany: jest.fn(async () => setDocs),
       count: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) => where.id.in.length),
     },
@@ -606,6 +607,48 @@ describe('WorkspacePayrollService', () => {
         where: { id: { in: ['r-a', 'r-b'] }, status: 'draft' },
         data: { payrollMatchedAt: expect.any(Date) },
       })
+      // The files this run read are matched now (issue #82), never one that arrived after it started.
+      expect(s.tx.document.updateMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          id: { in: s.run.setDocumentIds },
+          workspaceId: W,
+          period: '2026-09',
+          addedSinceMatch: true,
+        }),
+        data: { addedSinceMatch: false },
+      })
+    })
+  })
+
+  describe('Match again (issue #82)', () => {
+    it('answers the open run while the set is as it started, and starts afresh once a file came in', async () => {
+      const s = await setup()
+      s.run.mode = 'match'
+      s.run.setDocumentIds = ['d-1']
+      s.setDocs.push(onFile('d-1'))
+      expect((await s.service.matchAgain(owner, W, '2026-09')).id).toBe('run-ws')
+      expect(s.tx.payrollMatchRun.create).not.toHaveBeenCalled()
+      // A timesheet moved in (or emailed in) since: that run is discarded, and the new one reads the set as it is.
+      s.setDocs.push({ ...onFile('d-2', { kind: 'timesheet' }), addedSinceMatch: true })
+      s.prisma.payrollMatchRun.findMany.mockResolvedValueOnce([s.run])
+      await s.service.matchAgain(owner, W, '2026-09')
+      expect(s.match.remove).toHaveBeenCalledWith(owner, s.run, 'Removed an unsaved', 'discarded')
+      expect(s.tx.payrollMatchRun.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ mode: 'match', setDocumentIds: ['d-1', 'd-2'] }),
+      })
+      // Under the month's payroll lock, as Save and File Management's moves take it.
+      expect(s.tx.$queryRaw).toHaveBeenCalled()
+    })
+
+    it('refuses to start on a set that changed between reading it and starting', async () => {
+      const s = await setup()
+      s.prisma.payrollMatchRun.findFirst.mockResolvedValueOnce(null)
+      s.setDocs.push(onFile('d-1'))
+      s.tx.document.findMany.mockResolvedValueOnce([...s.setDocs, onFile('d-3')])
+      await expect(s.service.matchAgain(owner, W, '2026-09')).rejects.toThrow(
+        "The month's payroll files changed a moment ago: start again"
+      )
+      expect(s.tx.payrollMatchRun.create).not.toHaveBeenCalled()
     })
   })
 
@@ -684,6 +727,45 @@ describe('WorkspacePayrollService', () => {
       expect(s.tx.wexPaymentDocument.upsert).not.toHaveBeenCalled()
       expect(s.tx.payrollMatchRun.delete).not.toHaveBeenCalled()
       expect(s.checks.refresh).not.toHaveBeenCalled()
+    })
+
+    it('saves past a file emailed in after it started: kept in the set, still not matched yet (issue #82)', async () => {
+      const s = await setup()
+      s.run.setDocumentIds = ['d-read']
+      s.setDocs.push(onFile('d-read'), {
+        ...onFile('d-late', { kind: 'timesheet' }),
+        addedSinceMatch: true,
+        uploadedAt: new Date(s.run.createdAt.getTime() + 60_000),
+      })
+      ;(s.run.files as Record<string, unknown>[]).push({
+        ...s.run.files[0]!,
+        id: 'f-read',
+        documentId: 'd-read',
+        sha256: 'sha-d-read',
+      })
+      s.tx.payrollMatchRun.findFirst.mockResolvedValue({
+        files: s.run.files.map((f) => ({ id: f.id })),
+      } as never)
+      await s.service.save(owner, 'run-ws', { links: [] })
+      // Not a file that left: nothing removed.
+      for (const c of s.tx.document.deleteMany.mock.calls)
+        expect(JSON.stringify(c[0])).not.toContain('d-late')
+      expect(s.tx.document.updateMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({ id: { in: ['d-read'] }, addedSinceMatch: true }),
+        data: { addedSinceMatch: false },
+      })
+    })
+
+    it('still refuses a file marked not matched yet that was in the month before it started', async () => {
+      const s = await setup()
+      s.setDocs.push({
+        ...onFile('d-moved'),
+        addedSinceMatch: true,
+        uploadedAt: new Date(s.run.createdAt.getTime() - 60_000),
+      })
+      await expect(s.service.save(owner, 'run-ws', { links })).rejects.toThrow(
+        "The month's payroll files changed since this was started"
+      )
     })
 
     it("upserts the owner's own choice of a document already in the set, as theirs", async () => {

@@ -1,15 +1,29 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
+  ALLOWED_UPLOAD_TYPES,
+  DOCUMENT_KIND_LABELS,
+  DOCUMENT_SENSITIVITY,
+  EMAILED_KINDS,
+  PAYROLL_DOCUMENT_KINDS,
   RECEIPT_KINDS,
+  WRITE_ROLES,
+  emailedFolder,
+  type DocumentKind,
+  type EmailedFileDto,
+  type EmailedFilesDto,
+  type EmailedKind,
+  type EmailedMoveDto,
+  type FileManagementChangeDto,
   type AccountMappingDto,
   type BooksBillInput,
   type BooksBillSaved,
@@ -27,7 +41,21 @@ import { dueDate } from '../checks/rules'
 import { AccessLogService } from '../core/access-log.service'
 import { allow, workspaceRole, type Caller } from '../core/caller'
 import { changesOf, dollars, howMany, monthName, type Fields } from '../core/changes'
-import { DocumentsService, keyInWorkspace, type Uploaded } from '../documents/documents.service'
+import {
+  DocumentsService,
+  keyInWorkspace,
+  objectFolder,
+  storedFileName,
+  type Uploaded,
+} from '../documents/documents.service'
+import {
+  CANNOT_MOVE,
+  CANNOT_RENAME_HELD,
+  LINKED_MONTH,
+  filedOnLocked,
+  proofInLocked,
+  setFileDtos,
+} from '../payroll/workspace-set'
 import { describe } from '../documents/staged-file'
 import { readReceipt } from '../receipts/read-receipt'
 import { monthReceiptsWhere } from './month-receipts'
@@ -78,6 +106,26 @@ const RECEIPT_FIELDS: Fields = {
   receiptDate: { label: 'Date', show: 'date' },
   receiptVendor: { label: 'Vendor', show: 'text' },
 }
+
+/** Why a file of File Management cannot move, and why it cannot be renamed; null: it can (issue #82). */
+interface Blocks {
+  move: string | null
+  rename: string | null
+}
+
+/**
+ * Why a file emailed in cannot move from the emailed documents inbox (owner's decision, 2026-11-17): whoever emailed it,
+ * or an owner, moves it until an owner has matched it; after that, an owner moves it in Month End Close.
+ */
+const EMAILED = {
+  notYours: 'Only the person who emailed it, or an owner, moves it',
+  gone: "It is no longer among the month's files: ask an owner to move it in Month End Close",
+  matched: 'An owner has matched it already: ask an owner to move it in Month End Close',
+  matching: (period: string) =>
+    `An owner is matching ${monthName(period)} now: ask an owner to move it in Month End Close`,
+  books:
+    "The month's books are in, so an owner may have matched it to a bill: ask an owner to move it in Month End Close",
+} as const
 
 /** A check the database keeps (a trigger's or a constraint's, SQLSTATE 23514) refused the change. */
 const isCheckViolation = (e: unknown) =>
@@ -421,7 +469,8 @@ export class ExpensesService {
     return { files, unread }
   }
 
-  private async planOf(workspaceId: string, period: string) {
+  /** `blocks`: also why each receipt cannot move or be renamed, for the page (File Management's Receipts folder). */
+  private async planOf(workspaceId: string, period: string, blocks = false) {
     const [
       { files, unread },
       engagements,
@@ -517,7 +566,25 @@ export class ExpensesService {
       statements,
       matching,
     })
-    return { files, unread, engagements, mappings, lines, existing, receipts, statements }
+    const receiptBlocks = blocks
+      ? await this.receiptBlocks(
+          this.prisma,
+          workspaceId,
+          period,
+          receipts.map((r) => r.id)
+        )
+      : new Map<string, Blocks>()
+    return {
+      files,
+      unread,
+      engagements,
+      mappings,
+      lines,
+      existing,
+      receipts,
+      statements,
+      receiptBlocks,
+    }
   }
 
   /**
@@ -613,6 +680,8 @@ export class ExpensesService {
         amount: d.receiptAmount == null ? null : Number(d.receiptAmount),
         date: day(d.receiptDate),
         vendor: d.receiptVendor,
+        cannotMove: plan.receiptBlocks.get(d.id)?.move ?? null,
+        cannotRename: plan.receiptBlocks.get(d.id)?.rename ?? null,
         transactionIds: [
           ...new Set(
             plan.lines.flatMap((l) =>
@@ -640,7 +709,7 @@ export class ExpensesService {
   ): Promise<WorkspaceExpensesDto> {
     this.reader(caller, workspaceId)
     const period = this.period(given)
-    const plan = await this.planOf(workspaceId, period)
+    const plan = await this.planOf(workspaceId, period, true)
     await this.log.log(caller, {
       workspaceId,
       resource: 'expense',
@@ -971,7 +1040,7 @@ export class ExpensesService {
       created: added.length,
       updated: changed.length,
       removed: toRemove.length,
-      expenses: this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period)),
+      expenses: this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period, true)),
     }
   }
 
@@ -1072,7 +1141,7 @@ export class ExpensesService {
     }
     if (bill !== null)
       await this.choose(caller, workspaceId, period, bill, { documentId: ids[0]!, dropped: false })
-    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period))
+    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period, true))
   }
 
   /**
@@ -1101,7 +1170,7 @@ export class ExpensesService {
     if (documentId && !plan.receipts.some((d) => d.id === documentId))
       throw new BadRequestException('Choose one of the month’s receipts')
     await this.choose(caller, workspaceId, period, bill, { documentId, dropped })
-    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period))
+    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period, true))
   }
 
   /**
@@ -1175,13 +1244,14 @@ export class ExpensesService {
       )
     if (await this.prisma.payrollMatchFile.count({ where: { documentId } }))
       throw new ConflictException(
-        `${doc.fileName} is in a payroll upload that is not saved yet: save or discard that upload first`
+        `An upload that isn't saved yet holds ${doc.fileName}: it can be removed once that upload is saved or discarded`
       )
     const own = doc.engagement?.monthlyReports[0]
     if (own && own.status !== 'draft')
       throw new ConflictException(
         `${doc.fileName} is filed on ${own.engagement.name}'s ${monthName(own.period)}, which is ${own.status}: reopen that month first to remove it`
       )
+    const touched = new Set<string>()
     await this.log.change(
       caller,
       async (tx) => {
@@ -1193,18 +1263,30 @@ export class ExpensesService {
           where: { documentId },
           select: { wexPayment: { select: { monthlyReport: month } } },
         })
+        const named = await this.billsNaming(tx, workspaceId, documentId)
         const locked = [
           ...links.map((l) => l.expense.monthlyReport),
           ...wex.map((w) => w.wexPayment.monthlyReport),
+          ...named.map((x) => x.monthlyReport),
         ].find((r) => r.status !== 'draft')
         if (locked)
           throw new ConflictException(
             `${doc.fileName} is proof in ${locked.engagement.name}'s ${monthName(locked.period)}, which is ${locked.status}: reopen that month first to remove it`
           )
-        // The links and bill choices go with the row (Cascade, SetNull); the month lock (month_is_draft) is checked
-        // above, for the database checks it on a link's insert and update only.
+        // The links and bill choices go with the row (Cascade, SetNull). The database's month lock lets a link go with
+        // its document (migration 20261016001700), so a month that is not a draft is checked above. A saved bill's
+        // receipt is in its line's JSON, so it is cleared here.
+        await this.clearBills(tx, documentId, named)
         await tx.document.delete({ where: { id: documentId } })
-        return { items: [...new Set(links.map((l) => l.expense.itemNumber))].sort() }
+        for (const x of named) touched.add(x.monthlyReport.id)
+        return {
+          items: [
+            ...new Set([
+              ...links.map((l) => l.expense.itemNumber),
+              ...named.map((x) => x.itemNumber),
+            ]),
+          ].sort(),
+        }
       },
       (done) => ({
         workspaceId,
@@ -1219,7 +1301,753 @@ export class ExpensesService {
       })
     )
     await this.documents.dropStored(caller, doc)
-    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period))
+    for (const id of touched) await this.checks.refresh(id)
+    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period, true))
+  }
+
+  /**
+   * Why each of the given receipts cannot move to a payroll folder, and why it cannot be renamed (issue #82). It moves
+   * only while the month's bills alone use it: not a participant's record or payroll proof, not held by an unsaved
+   * payroll upload, not filed on or proof in a month that is not a draft, and not filed twice (the month's receipts show
+   * the same file once, so moving one would leave its copy behind). It keeps its name while an unsaved upload holds it or
+   * a month it is filed on or proves is not a draft. Given a transaction's client inside a change, it reads as it stands.
+   */
+  private async receiptBlocks(
+    db: Pick<Prisma.TransactionClient, 'document' | 'payrollMatchFile'>,
+    workspaceId: string,
+    period: string,
+    ids: string[]
+  ): Promise<Map<string, Blocks>> {
+    const out = new Map<string, Blocks>()
+    if (!ids.length) return out
+    const [docs, held] = await Promise.all([
+      db.document.findMany({
+        where: { id: { in: ids }, workspaceId },
+        select: {
+          id: true,
+          sha256: true,
+          engagement: {
+            select: {
+              name: true,
+              monthlyReports: { where: { period }, select: { status: true, period: true } },
+            },
+          },
+          _count: { select: { participants: true, staffPayProofs: true, payLines: true } },
+          expenses: { select: { expense: { select: { monthlyReport: LINKED_MONTH } } } },
+          wexPayments: { select: { wexPayment: { select: { monthlyReport: LINKED_MONTH } } } },
+        },
+      }),
+      db.payrollMatchFile.findMany({
+        where: { documentId: { in: ids } },
+        select: { documentId: true },
+      }),
+    ])
+    const copies = (
+      await db.document.findMany({
+        where: {
+          AND: [
+            monthReceiptsWhere(workspaceId, period),
+            { sha256: { in: [...new Set(docs.map((d) => d.sha256))] } },
+          ],
+        },
+        select: {
+          id: true,
+          sha256: true,
+          workspaceId: true,
+          engagementId: true,
+          storageKey: true,
+          engagement: { select: { name: true } },
+        },
+        orderBy: { id: 'asc' },
+      })
+    ).filter((c) => keyInWorkspace(c))
+    const holding = new Set(held.map((h) => h.documentId))
+    for (const d of docs) {
+      const own = d.engagement?.monthlyReports.find((m) => m.status !== 'draft')
+      const ownLocked = own && filedOnLocked({ ...own, engagement: { name: d.engagement!.name } })
+      const linked = [
+        ...d.expenses.map((x) => x.expense.monthlyReport),
+        ...d.wexPayments.map((x) => x.wexPayment.monthlyReport),
+      ].find((m) => m.status !== 'draft')
+      const copy = copies.find((c) => c.sha256 === d.sha256 && c.id !== d.id)
+      const move =
+        d._count.participants + d._count.staffPayProofs + d._count.payLines > 0
+          ? CANNOT_MOVE.record
+          : holding.has(d.id)
+            ? CANNOT_MOVE.held
+            : ownLocked
+              ? ownLocked
+              : linked
+                ? proofInLocked(linked)
+                : copy
+                  ? `A copy is also filed on ${copy.engagement ? `${copy.engagement.name}'s ${monthName(period)}` : `the workspace's ${monthName(period)}`}: remove that copy first`
+                  : null
+      const rename = holding.has(d.id)
+        ? CANNOT_RENAME_HELD
+        : (ownLocked ?? (linked ? proofInLocked(linked) : null))
+      out.set(d.id, { move, rename })
+    }
+    return out
+  }
+
+  /** Why one file of File Management cannot move or be renamed, as File Management shows it. */
+  private async blocksOf(
+    db: Pick<Prisma.TransactionClient, 'document' | 'payrollMatchFile'>,
+    workspaceId: string,
+    period: string,
+    documentId: string,
+    receipt: boolean
+  ): Promise<Blocks> {
+    if (receipt)
+      return (
+        (await this.receiptBlocks(db, workspaceId, period, [documentId])).get(documentId) ?? {
+          move: null,
+          rename: null,
+        }
+      )
+    const f = (await setFileDtos(db, workspaceId, period)).find((x) => x.id === documentId)
+    return { move: f?.cannotMove ?? null, rename: f?.cannotRename ?? null }
+  }
+
+  /** The month's files and receipts as File Management shows them, after a change on it, with what happened. */
+  private async fileManagement(
+    caller: Caller,
+    workspaceId: string,
+    period: string,
+    note: string
+  ): Promise<FileManagementChangeDto> {
+    const [files, plan] = await Promise.all([
+      setFileDtos(this.prisma, workspaceId, period),
+      this.planOf(workspaceId, period, true),
+    ])
+    return {
+      files: {
+        workspaceId,
+        period,
+        files,
+        can: { change: !!workspaceRole(caller, workspaceId, ['owner']) },
+      },
+      expenses: this.dto(caller, workspaceId, period, plan),
+      note,
+    }
+  }
+
+  /**
+   * A file of File Management: one of the month's workspace payroll files, or one of its receipts as the bills see them
+   * (`monthReceiptsWhere`: never one dismissed or another line's invoice). Owners only.
+   */
+  private async managedFile(
+    caller: Caller,
+    workspaceId: string,
+    given: unknown,
+    documentId: string
+  ) {
+    this.owner(caller, workspaceId)
+    const period = this.period(given)
+    const found = await this.findManaged(this.prisma, workspaceId, period, documentId)
+    if (!found) throw new NotFoundException()
+    return { ...found, period }
+  }
+
+  /** The file of File Management for the month, with why it cannot move or be renamed; null: it is not one. */
+  private async findManaged(
+    db: Pick<Prisma.TransactionClient, 'document' | 'payrollMatchFile'>,
+    workspaceId: string,
+    period: string,
+    documentId: string
+  ) {
+    const doc = await db.document.findFirst({
+      where: {
+        id: documentId,
+        OR: [
+          { workspaceId, period, engagementId: null, kind: { in: [...PAYROLL_DOCUMENT_KINDS] } },
+          monthReceiptsWhere(workspaceId, period),
+        ],
+      },
+    })
+    if (!doc || !keyInWorkspace(doc)) return null
+    const receipt = (RECEIPT_KINDS as readonly string[]).includes(doc.kind)
+    const blocks = await this.blocksOf(db, workspaceId, period, documentId, receipt)
+    return { doc, receipt, blocks }
+  }
+
+  /**
+   * Inside a move's or a rename's transaction, under the month's payroll lock: the file's own engagement month share-
+   * locked until the change commits (a closing approved meanwhile waits for it), and why it cannot move or be renamed
+   * read again as it stands now, so an upload started or a month closed a moment ago is not missed.
+   */
+  private async lockedBlocks(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    period: string,
+    doc: { id: string; engagementId: string | null },
+    receipt: boolean
+  ): Promise<Blocks> {
+    await tx.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext(${`payroll-set:${workspaceId}:${period}`}))`
+    if (doc.engagementId)
+      await tx.$queryRaw`SELECT "status" FROM "MonthlyReport" WHERE "engagementId" = ${doc.engagementId} AND "period" = ${period} FOR SHARE`
+    return this.blocksOf(tx, workspaceId, period, doc.id, receipt)
+  }
+
+  /**
+   * The month's expenses whose saved bills name this receipt (`Expense.booksBills`), each bill's receipt cleared, so the
+   * month's checks count those bills as without one. Inside the change's transaction.
+   */
+  private async billsNaming(tx: Prisma.TransactionClient, workspaceId: string, documentId: string) {
+    return tx.expense.findMany({
+      where: { workspaceId, booksBills: { array_contains: [{ documentId }] } },
+      select: {
+        id: true,
+        itemNumber: true,
+        booksBills: true,
+        monthlyReport: {
+          select: { id: true, status: true, period: true, engagement: { select: { name: true } } },
+        },
+      },
+    })
+  }
+
+  private async clearBills(
+    tx: Prisma.TransactionClient,
+    documentId: string,
+    named: Awaited<ReturnType<ExpensesService['billsNaming']>>
+  ) {
+    for (const x of named)
+      await tx.expense.update({
+        where: { id: x.id },
+        data: {
+          booksBills: ((x.booksBills ?? []) as unknown as BooksBillSaved[]).map((b) =>
+            b.documentId === documentId ? { ...b, documentId: null } : b
+          ) as unknown as Prisma.InputJsonValue,
+        },
+      })
+  }
+
+  /**
+   * Moves a file of File Management to another of its folders (issue #82): between payroll folders, from Receipts to a
+   * payroll folder, or from a payroll folder to Receipts. Owners only; one transaction with its line, under the month's
+   * payroll lock, where why it cannot move is read again. A payroll file that proves anything stays (it moves by being
+   * removed and matched again), and so does a receipt that is a participant's record or payroll proof, is held by an
+   * unsaved upload, is filed twice, or is filed on or proves a month that is not a draft. A receipt moved away no longer
+   * proves its lines (they are listed in the line) and is no longer a bill's choice or a saved bill's receipt; a file
+   * moved into a payroll folder waits for the month to be matched again, and never joins a folder that has the same
+   * file. Its sensitivity follows its new kind, so a personal file (a pay stub, payroll details) moves only to a folder
+   * that keeps it personal. A receipt filed on an engagement's month is stored again under the workspace's month, as
+   * every payroll file is.
+   */
+  async moveFile(
+    caller: Caller,
+    workspaceId: string,
+    given: unknown,
+    documentId: string,
+    to: unknown
+  ): Promise<FileManagementChangeDto> {
+    const into = this.folderOf(to)
+    const found = await this.managedFile(caller, workspaceId, given, documentId)
+    const { doc, period } = found
+    const folder = emailedFolder(into)
+    const done = await this.moveManaged(caller, workspaceId, period, found, into, {
+      description: (items) =>
+        `Moved ${describe(doc)} to ${folder.name} in File Management${
+          items.length
+            ? `; ${items.length === 1 ? 'expense' : 'expenses'} ${items.join(', ')} no longer ${items.length === 1 ? 'has' : 'have'} it as proof`
+            : ''
+        }`,
+    })
+    const proved = done.items.length
+      ? ` ${done.items.length === 1 ? 'Expense' : 'Expenses'} ${done.items.join(', ')} no longer ${done.items.length === 1 ? 'has' : 'have'} it as proof.`
+      : ''
+    return this.fileManagement(
+      caller,
+      workspaceId,
+      period,
+      into === 'receipt'
+        ? `Moved ${doc.fileName} to Receipts: it is matched to the month's bills.${proved}`
+        : `Moved ${doc.fileName} to ${folder.name}. It counts once you Re-match with same files.${proved}`
+    )
+  }
+
+  /** The folder a move names: one of the emailed kinds. */
+  private folderOf(to: unknown): EmailedKind {
+    if (typeof to !== 'string' || !(EMAILED_KINDS as readonly string[]).includes(to))
+      throw new BadRequestException('Choose the folder it goes to')
+    return to as EmailedKind
+  }
+
+  /**
+   * The move itself, for File Management's Move to… and the emailed documents inbox's: every check (its folder, its
+   * type, its tier, the same file there already), the locks and the checks read again, the new key, and the change
+   * with its line in one transaction. `refusal`, when given, replaces File Management's reason it cannot move, read
+   * before and again inside the transaction; the caller's role was checked before.
+   */
+  private async moveManaged(
+    caller: Caller,
+    workspaceId: string,
+    period: string,
+    found: NonNullable<Awaited<ReturnType<ExpensesService['findManaged']>>>,
+    into: EmailedKind,
+    opts: {
+      description: (items: string[]) => string
+      refusal?: (db: Prisma.TransactionClient, blocks: Blocks) => Promise<string | null>
+    }
+  ): Promise<{ items: string[] }> {
+    const { doc, receipt, blocks } = found
+    const documentId = doc.id
+    const from: EmailedKind = receipt ? 'receipt' : (doc.kind as EmailedKind)
+    const folder = emailedFolder(into)
+    if (from === into) throw new BadRequestException(`It is in ${folder.name} already`)
+    const why = opts.refusal
+      ? await opts.refusal(this.prisma as unknown as Prisma.TransactionClient, blocks)
+      : blocks.move
+    if (why) throw new ConflictException(why)
+    const kind = into === 'receipt' ? 'receipt' : into
+    if (doc.sensitivity === 'personal' && DOCUMENT_SENSITIVITY[kind] !== 'personal')
+      throw new ConflictException(
+        `A ${doc.kind === 'paystub' ? 'pay stub' : 'payroll details file'} holds personal pay, so it is not moved to ${folder.name}: remove it and upload the right file there instead`
+      )
+    const ext = ALLOWED_UPLOAD_TYPES[doc.contentType] ?? ''
+    if (!folder.extensions.includes(ext))
+      throw new BadRequestException(
+        `${folder.name} takes ${folder.extensions
+          .filter((e) => e !== 'jpeg')
+          .map((e) => e.toUpperCase())
+          .join(', ')} files, and this is ${ext.toUpperCase() || 'another type'}`
+      )
+    // A payroll folder holds each file once: the same contents there already is that file.
+    const sameIn = async (db: Pick<Prisma.TransactionClient, 'document'>) =>
+      into !== 'receipt' &&
+      (
+        await db.document.findMany({
+          where: {
+            workspaceId,
+            engagementId: null,
+            period,
+            kind: into,
+            sha256: doc.sha256,
+            id: { not: documentId },
+          },
+          select: { id: true, workspaceId: true, engagementId: true, storageKey: true },
+        })
+      ).some((d) => keyInWorkspace(d))
+    const already = `That file is in ${folder.name} already; remove this copy`
+    if (await sameIn(this.prisma)) throw new ConflictException(already)
+    // Stored again under the workspace's month when it leaves an engagement's month (the key names the engagement).
+    const newKey = doc.engagementId
+      ? `${objectFolder({ workspaceId, period })}${randomUUID()}.${ext}`
+      : null
+    const read =
+      into === 'receipt'
+        ? await readReceipt(
+            {
+              buffer: Buffer.from(await this.storage.read(doc.storageKey)),
+              contentType: doc.contentType,
+              sensitivity: 'financial',
+            },
+            false
+          )
+        : null
+    if (newKey)
+      await this.storage.upload(
+        newKey,
+        Buffer.from(await this.storage.read(doc.storageKey)),
+        doc.contentType
+      )
+    const touched = new Set<string>()
+    if (doc.engagementId) {
+      const own = await this.prisma.monthlyReport.findFirst({
+        where: { engagementId: doc.engagementId, period },
+        select: { id: true },
+      })
+      if (own) touched.add(own.id)
+    }
+    let done: { items: string[] }
+    try {
+      done = await this.log.change(
+        caller,
+        async (tx) => {
+          const again = await this.lockedBlocks(tx, workspaceId, period, doc, receipt)
+          const whyNow = opts.refusal ? await opts.refusal(tx, again) : again.move
+          if (whyNow) throw new ConflictException(whyNow)
+          if (await sameIn(tx)) throw new ConflictException(already)
+          const month = {
+            select: {
+              id: true,
+              status: true,
+              period: true,
+              engagement: { select: { name: true } },
+            },
+          }
+          const links = await tx.expenseDocument.findMany({
+            where: { documentId },
+            select: { expense: { select: { itemNumber: true, monthlyReport: month } } },
+          })
+          const wex = await tx.wexPaymentDocument.findMany({
+            where: { documentId },
+            select: { wexPayment: { select: { monthlyReport: month } } },
+          })
+          const named = await this.billsNaming(tx, workspaceId, documentId)
+          const months = [
+            ...links.map((l) => l.expense.monthlyReport),
+            ...wex.map((w) => w.wexPayment.monthlyReport),
+            ...named.map((x) => x.monthlyReport),
+          ]
+          const locked = months.find((r) => r.status !== 'draft')
+          if (locked) throw new ConflictException(proofInLocked(locked))
+          for (const m of months) touched.add(m.id)
+          // The database refuses a link's removal in a month that is not a draft too (migration 20261016001700).
+          await tx.expenseDocument.deleteMany({ where: { documentId } })
+          await tx.wexPaymentDocument.deleteMany({ where: { documentId } })
+          await tx.booksBill.updateMany({ where: { documentId }, data: { documentId: null } })
+          await this.clearBills(tx, documentId, named)
+          await tx.document.update({
+            where: { id: documentId },
+            data: {
+              kind,
+              sensitivity: DOCUMENT_SENSITIVITY[kind],
+              ...(newKey && { storageKey: newKey, engagementId: null }),
+              addedSinceMatch: into !== 'receipt',
+              // What was read from a receipt goes with it; a file moved to Receipts is read as any receipt is.
+              receiptAmount: read?.amount == null ? null : read.amount.toFixed(2),
+              receiptDate: read?.date ? new Date(`${read.date}T00:00:00Z`) : null,
+              receiptVendor: read?.vendor ?? null,
+              receiptReadBy: read?.readBy ?? null,
+              receiptDismissed: false,
+            },
+          })
+          return {
+            items: [
+              ...new Set([
+                ...links.map((l) => l.expense.itemNumber),
+                ...named.map((x) => x.itemNumber),
+              ]),
+            ].sort(),
+          }
+        },
+        (d) => ({
+          workspaceId,
+          resource: 'document',
+          subjectId: documentId,
+          action: 'update',
+          description: opts.description(d.items),
+          changes: [{ field: 'Folder', before: emailedFolder(from).name, after: folder.name }],
+        })
+      )
+    } catch (e) {
+      if (newKey)
+        await this.storage
+          .delete(newKey)
+          .catch((err: unknown) =>
+            this.logger.error(
+              `Could not delete ${newKey} after a move failed: ${(err as Error).message}`
+            )
+          )
+      // A payroll file with saved pays keeps its kind and place (Document_5_keep_pay_lines): pays saved a moment ago.
+      if (isCheckViolation(e) && /saved pays/.test((e as Error).message))
+        throw new ConflictException(CANNOT_MOVE.proves)
+      throw e
+    }
+    if (newKey) await this.dropMovedCopy(caller, doc)
+    for (const id of touched) await this.checks.refresh(id)
+    return done
+  }
+
+  // ── The emailed documents inbox's Move to… (owner's decision, 2026-11-17) ─────────────────────────────
+
+  /**
+   * An emailed document of the workspace, for a member who may write (owners and bookkeepers; an auditor never moves
+   * anything). Another workspace's row, or one of no workspace the caller is in, is a 404.
+   */
+  private async emailedRow(caller: Caller, workspaceId: string, inboundId: string) {
+    if (!caller.workspaceIds.includes(workspaceId)) throw new NotFoundException()
+    allow(
+      workspaceRole(caller, workspaceId, WRITE_ROLES),
+      'Only owners and bookkeepers move emailed files'
+    )
+    const row = await this.prisma.inboundReceipt.findFirst({
+      where: { id: inboundId, workspaceId },
+      select: { id: true, senderUserId: true, documentIds: true },
+    })
+    if (!row) throw new NotFoundException()
+    return row
+  }
+
+  /** Whoever emailed it moves it; an owner moves any. */
+  private notSender(caller: Caller, workspaceId: string, row: { senderUserId: string | null }) {
+    return workspaceRole(caller, workspaceId, ['owner']) ||
+      (!!row.senderUserId && row.senderUserId === caller.userId)
+      ? null
+      : EMAILED.notYours
+  }
+
+  /**
+   * Why a file emailed in cannot move from the inbox, read on `db` (a transaction's client inside the move): File
+   * Management's reasons, and it must not be matched yet. A payroll file is matched once a Save of the month's match
+   * read it (`addedSinceMatch` cleared) or once it proves anything; a receipt once it proves a line, is a saved bill's
+   * receipt, or is an owner's choice for a bill. Two of those an owner sees and a bookkeeper does not (BooksBill and
+   * StaffPayProof are read by owners and auditors only, migrations 20261112000100 and 20261018000100), so for anyone
+   * but an owner the move also waits while an owner's match of the month is open, and a receipt or bank statement
+   * stays once the month's books are in (a bill's receipt or payment can be chosen only then).
+   */
+  private async emailedBlock(
+    db: Prisma.TransactionClient,
+    caller: Caller,
+    workspaceId: string,
+    period: string,
+    receipt: boolean,
+    documentId: string,
+    blocks: Blocks
+  ): Promise<string | null> {
+    const owner = workspaceRole(caller, workspaceId, ['owner'])
+    const now = await db.document.findFirst({
+      where: { id: documentId, workspaceId },
+      select: { addedSinceMatch: true, kind: true },
+    })
+    if (!now) return EMAILED.gone
+    if (!receipt && !now.addedSinceMatch) return EMAILED.matched
+    if (blocks.move) return blocks.move === CANNOT_MOVE.proves ? EMAILED.matched : blocks.move
+    const nameable = receipt || now.kind === 'bank-statement'
+    const [links, wex, saved, chosen, run, books] = await Promise.all([
+      db.expenseDocument.count({ where: { documentId } }),
+      db.wexPaymentDocument.count({ where: { documentId } }),
+      receipt
+        ? db.expense.count({
+            where: { workspaceId, booksBills: { array_contains: [{ documentId }] } },
+          })
+        : 0,
+      owner
+        ? db.booksBill.count({
+            where: { workspaceId, OR: [{ documentId }, { paymentDocumentId: documentId }] },
+          })
+        : 0,
+      owner
+        ? null
+        : db.payrollMatchRun.findFirst({
+            where: { workspaceId, monthlyReportId: null, period },
+            select: { id: true },
+          }),
+      !owner && nameable ? this.monthHasBooks(db, workspaceId, period) : false,
+    ])
+    if (links + wex + saved + chosen > 0) return EMAILED.matched
+    if (run) return EMAILED.matching(period)
+    if (books) return EMAILED.books
+    return null
+  }
+
+  /** The month's books are in: an accounting export in its payroll details, or an expense saved from its books. */
+  private async monthHasBooks(db: Prisma.TransactionClient, workspaceId: string, period: string) {
+    const [file, line] = await Promise.all([
+      db.document.count({
+        where: {
+          workspaceId,
+          engagementId: null,
+          period,
+          kind: 'payroll-details',
+          contentType: { in: SHEET_TYPES },
+        },
+      }),
+      db.expense.count({ where: { workspaceId, booksKey: { startsWith: `${period}:` } } }),
+    ])
+    return file + line > 0
+  }
+
+  /** The row's files as the inbox's Move to… lists them, each with why the caller cannot move it. */
+  private async emailedFileDtos(
+    caller: Caller,
+    workspaceId: string,
+    row: { senderUserId: string | null; documentIds: string[] }
+  ): Promise<EmailedFileDto[]> {
+    const notYours = this.notSender(caller, workspaceId, row)
+    const docs = (
+      await this.prisma.document.findMany({
+        where: { id: { in: row.documentIds }, workspaceId },
+        select: {
+          id: true,
+          workspaceId: true,
+          engagementId: true,
+          storageKey: true,
+          fileName: true,
+          kind: true,
+          period: true,
+          sensitivity: true,
+          contentType: true,
+        },
+      })
+    ).filter((d) => keyInWorkspace(d))
+    const db = this.prisma as unknown as Prisma.TransactionClient
+    const out: EmailedFileDto[] = []
+    for (const id of row.documentIds) {
+      const d = docs.find((x) => x.id === id)
+      if (!d) continue
+      let cannotMove: string | null = notYours
+      if (!cannotMove) {
+        const found = d.period ? await this.findManaged(db, workspaceId, d.period, d.id) : null
+        cannotMove = found
+          ? await this.emailedBlock(
+              db,
+              caller,
+              workspaceId,
+              d.period!,
+              found.receipt,
+              d.id,
+              found.blocks
+            )
+          : EMAILED.gone
+      }
+      out.push({
+        id: d.id,
+        fileName: d.fileName,
+        kind: (RECEIPT_KINDS as readonly string[]).includes(d.kind)
+          ? 'receipt'
+          : (d.kind as EmailedKind),
+        period: d.period,
+        personal: d.sensitivity === 'personal',
+        contentType: d.contentType,
+        cannotMove,
+      })
+    }
+    return out
+  }
+
+  /** The files an emailed document filed, for its Move to…: owners and bookkeepers. One read line. */
+  async emailedFiles(
+    caller: Caller,
+    workspaceId: string,
+    inboundId: string
+  ): Promise<EmailedFilesDto> {
+    const row = await this.emailedRow(caller, workspaceId, inboundId)
+    const files = await this.emailedFileDtos(caller, workspaceId, row)
+    await this.log.log(caller, {
+      workspaceId,
+      resource: 'document',
+      subjectId: row.id,
+      action: 'list',
+      description: `Opened Move to… on an emailed document in the emailed documents inbox (${howMany(files.length, 'file')})`,
+    })
+    return { inboundId: row.id, files }
+  }
+
+  /**
+   * Moves one file an emailed document filed to another folder, from the emailed documents inbox (owner's decision,
+   * 2026-11-17): whoever emailed it (an owner or a bookkeeper), or an owner, until an owner has matched it
+   * (`emailedBlock`). The same move as File Management's (`moveManaged`); a payroll file moved waits for the month's
+   * next match. Answers with the row's files as they are now, so the inbox needs no new read.
+   */
+  async moveEmailed(
+    caller: Caller,
+    workspaceId: string,
+    inboundId: string,
+    documentId: string,
+    to: unknown
+  ): Promise<EmailedMoveDto> {
+    const into = this.folderOf(to)
+    const row = await this.emailedRow(caller, workspaceId, inboundId)
+    const notYours = this.notSender(caller, workspaceId, row)
+    if (notYours) throw new ForbiddenException(notYours)
+    if (!row.documentIds.includes(documentId)) throw new NotFoundException()
+    const at = await this.prisma.document.findFirst({
+      where: { id: documentId, workspaceId },
+      select: { period: true },
+    })
+    if (!at) throw new NotFoundException()
+    const found = at.period
+      ? await this.findManaged(this.prisma, workspaceId, at.period, documentId)
+      : null
+    if (!found) throw new ConflictException(EMAILED.gone)
+    const period = at.period!
+    const folder = emailedFolder(into)
+    const label = DOCUMENT_KIND_LABELS[found.doc.kind as DocumentKind] ?? 'document'
+    await this.moveManaged(caller, workspaceId, period, found, into, {
+      description: () =>
+        `Moved an emailed ${label} to ${folder.name} from the emailed documents inbox`,
+      refusal: (db, blocks) =>
+        this.emailedBlock(db, caller, workspaceId, period, found.receipt, documentId, blocks),
+    })
+    return {
+      inboundId: row.id,
+      files: await this.emailedFileDtos(caller, workspaceId, row),
+      note:
+        into === 'receipt'
+          ? `Moved ${found.doc.fileName} to Receipts.`
+          : `Moved ${found.doc.fileName} to ${folder.name}. An owner matches it at month end.`,
+    }
+  }
+
+  /**
+   * The old object of a receipt moved off an engagement's month, once the move committed (the row now points at its
+   * copy under the workspace's month). A failure leaves the old object behind: in the API's log and the access log.
+   */
+  private async dropMovedCopy(
+    caller: Caller,
+    doc: { id: string; workspaceId: string; storageKey: string }
+  ): Promise<void> {
+    try {
+      await this.storage.delete(doc.storageKey)
+    } catch (e) {
+      this.logger.error(
+        `Document ${doc.id}: its old file ${doc.storageKey} could not be deleted from storage after a move: ${(e as Error).message}`
+      )
+      await this.log
+        .log(caller, {
+          workspaceId: doc.workspaceId,
+          resource: 'document',
+          subjectId: doc.id,
+          action: 'delete',
+          description:
+            'The old copy of a receipt moved in File Management could not be deleted from storage',
+        })
+        .catch((err: unknown) =>
+          this.logger.error(
+            `Document ${doc.id}: the access log line for its leftover file failed: ${(err as Error).message}`
+          )
+        )
+    }
+  }
+
+  /**
+   * Renames a file of File Management (issue #82): the name it is shown and downloaded by, never the stored object, and
+   * its extension stays. Owners only; logged by the field's name alone (a file name may carry a person's name). Refused
+   * exactly when File Management says it cannot be renamed (`cannotRename`): while an unsaved payroll upload holds it,
+   * or while a month it is filed on or proves is not a draft; read again inside the change, under the month's lock.
+   */
+  async renameFile(
+    caller: Caller,
+    workspaceId: string,
+    given: unknown,
+    documentId: string,
+    name: unknown
+  ): Promise<FileManagementChangeDto> {
+    const stem = typeof name === 'string' ? name.trim() : ''
+    if (!stem) throw new BadRequestException('Type the new name')
+    if (stem.length > 150) throw new BadRequestException('Keep the name to 150 characters')
+    const { doc, period, receipt, blocks } = await this.managedFile(
+      caller,
+      workspaceId,
+      given,
+      documentId
+    )
+    if (blocks.rename) throw new ConflictException(blocks.rename)
+    const ext = /\.\w{1,5}$/.exec(doc.fileName)?.[0] ?? ''
+    const fileName = storedFileName(
+      `${stem.replace(/\.\w{1,5}$/, (e) => (e.toLowerCase() === ext.toLowerCase() ? '' : e))}${ext}`
+    )
+    if (fileName === doc.fileName) throw new BadRequestException('That is its name already')
+    await this.log.change(
+      caller,
+      async (tx) => {
+        const again = await this.lockedBlocks(tx, workspaceId, period, doc, receipt)
+        if (again.rename) throw new ConflictException(again.rename)
+        return tx.document.update({ where: { id: documentId }, data: { fileName } })
+      },
+      {
+        workspaceId,
+        resource: 'document',
+        subjectId: documentId,
+        action: 'update',
+        description: `Renamed ${describe(doc)} in File Management`,
+        changes: [{ field: 'File name' }],
+      }
+    )
+    return this.fileManagement(caller, workspaceId, period, `Renamed it ${fileName}.`)
   }
 
   /**
@@ -1268,7 +2096,7 @@ export class ExpensesService {
     await this.choose(caller, workspaceId, period, bill, {
       payment: given ? { documentId: given.documentId, page: given.page, text: given.text } : null,
     })
-    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period))
+    return this.dto(caller, workspaceId, period, await this.planOf(workspaceId, period, true))
   }
 
   /**

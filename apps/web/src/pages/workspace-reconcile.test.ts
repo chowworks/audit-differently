@@ -130,6 +130,8 @@ describe('Expenses & Proof rows on no engagement', () => {
           date: null,
           vendor: null,
           transactionIds: [],
+          cannotMove: null,
+          cannotRename: null,
         },
         {
           documentId: 'r2',
@@ -138,6 +140,8 @@ describe('Expenses & Proof rows on no engagement', () => {
           date: null,
           vendor: null,
           transactionIds: ['9001'],
+          cannotMove: null,
+          cannotRename: null,
         },
       ],
     },

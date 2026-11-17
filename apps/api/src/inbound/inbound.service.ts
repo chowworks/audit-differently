@@ -7,12 +7,19 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common'
+import { createHash } from 'node:crypto'
 import { Prisma, type InboundReceipt } from '@prisma/client'
 import {
+  ALLOWED_UPLOAD_TYPES,
   DISMISS_REASONS,
   DISMISS_REASON_LABELS,
+  EMAILED_KINDS,
+  RECEIPT_KINDS,
+  RECEIPTS_FOLDER,
   WRITE_ROLES,
+  emailedFolder,
   type DismissReason,
+  type EmailedKind,
   type FileInboundReceiptRequest,
   type InboundReceiptDto,
   type InboundReceiptStatus,
@@ -31,20 +38,28 @@ import {
 import { changesOf, monthName, type Fields } from '../core/changes'
 import { MatchStatsService } from '../core/match-stats.service'
 import { identifyCaller, runAsSystem, withTenantContext } from '../core/tenant-context'
-import { looksLike, type Uploaded } from '../documents/documents.service'
+import {
+  DocumentsService,
+  MAX_UPLOAD_BYTES,
+  looksLike,
+  type Uploaded,
+} from '../documents/documents.service'
 import { describe } from '../documents/staged-file'
 import { EngagementsService } from '../engagements/engagements.service'
 import { PrismaService } from '../prisma/prisma.service'
 import { readReceipt, type ReceiptRead } from '../receipts/read-receipt'
 import {
   MAX_RECEIPT_BYTES,
+  RECEIPT_FIELDS,
   RECEIPT_TYPES,
   ReceiptsService,
   readWithAi,
 } from '../receipts/receipts.service'
 import { inboundConfig, receiptsDomain } from './config'
 import { MAX_RAW_BYTES, ProviderError, ResendInbound, type ReceivedAttachment } from './resend'
+import { InboundConfirmation, isOwnConfirmation, type Outcome } from './confirmation'
 import { SenderCheck } from './sender-check'
+import { monthIn, readSubject } from './subject'
 
 /** Why an emailed receipt was refused, in the inbox's words. */
 export const REJECT = {
@@ -54,6 +69,10 @@ export const REJECT = {
   unverified: 'sender could not be verified',
   notMember: 'not a member',
   noFiles: 'no PDF, PNG or JPG attached',
+  /** A payroll file's email (issue #82): nothing its folder takes. */
+  noPayrollFiles: 'no file of a type this folder takes attached',
+  /** An automatic reply (Auto-Submitted), or one of our own confirmations come back: never filed or answered. */
+  automatic: 'an automatic reply, not a person sending documents',
 } as const
 
 /** At most this many attachments of one email are downloaded and looked at; the rest are listed as skipped. */
@@ -127,13 +146,60 @@ export const PURGE_SQL = `DELETE FROM "InboundReceipt" r
                      WHERE a."address" = split_part(r."toAddress", '@', 1)
                        AND a."removedAt" IS NOT NULL AND a."releasedAt" IS NULL))`
 
-/** The row's filed attachments, read and locked inside a filing transaction: a second worker waits, then sees them. */
-const LOCK_SQL = `SELECT "filedAttachments" FROM "InboundReceipt" WHERE "id" = $1 FOR UPDATE`
+/**
+ * The row's filed attachments and documents, read and locked inside a filing transaction: a second worker waits, then
+ * sees them.
+ */
+const LOCK_SQL = `SELECT "filedAttachments", "documentIds" FROM "InboundReceipt" WHERE "id" = $1 FOR UPDATE`
+type Held = { filedAttachments: string[]; documentIds: string[] }
+
+/**
+ * The month's lock, the one Month End Close's payroll Save and the books' Save take: a file emailed into the month and an
+ * owner's Save never cross.
+ */
+const lockMonth = (tx: Prisma.TransactionClient, workspaceId: string, period: string) =>
+  tx.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext(${`payroll-set:${workspaceId}:${period}`}))`
+
+/** The row, locked; AlreadyFiled when this attachment is on it already (another worker's lease overlapped). */
+async function claimAttachment(tx: Prisma.TransactionClient, rowId: string, attachmentId: string) {
+  const [held] = await tx.$queryRawUnsafe<Held[]>(LOCK_SQL, rowId)
+  if (!held || held.filedAttachments.includes(attachmentId)) throw new AlreadyFiled()
+  return held
+}
+
+/** The books' exports: a QuickBooks transactions file read as the books is a sheet (ExpensesService.booksOf). */
+const SHEET_TYPES = Object.keys(ALLOWED_UPLOAD_TYPES).filter((t) =>
+  ['xlsx', 'csv'].includes(ALLOWED_UPLOAD_TYPES[t]!)
+)
+
+/**
+ * Claims the row's confirmation (issue #82): sets confirmationSentAt where it is still empty and the row names its
+ * workspace and verified sender, and returns that sender, so a retry or a second worker never sends it twice. The one
+ * statement the confirmation runs as trusted work. Parameterized; UTC, as Prisma writes it.
+ */
+export const CONFIRM_CLAIM_SQL = `UPDATE "InboundReceipt"
+   SET "confirmationSentAt" = (now() AT TIME ZONE 'UTC'), "updatedAt" = (now() AT TIME ZONE 'UTC')
+ WHERE "id" = $1 AND "confirmationSentAt" IS NULL
+   AND "senderUserId" IS NOT NULL AND "workspaceId" IS NOT NULL
+RETURNING "senderUserId"`
 
 /** Refused for good: written on the row, never tried again by itself. */
 class Rejected extends Error {}
-/** Filed already, by another worker that held the row a moment ago: this one files nothing. */
-class AlreadyFiled extends Error {}
+/**
+ * Filed already, by another worker that held the row a moment ago: this one files nothing. A 409, so a stored object
+ * this undoes is not counted as an upload failure (StagedFile counts only a 5xx or a non-HTTP error).
+ */
+class AlreadyFiled extends ConflictException {
+  constructor() {
+    super('Filed already')
+  }
+}
+/** The month's folder got the same contents while this file was stored: the email points at that one instead. */
+class OnFileAlready extends ConflictException {
+  constructor(readonly documentId: string) {
+    super('On file already')
+  }
+}
 /** Verified, but where it goes is not clear: kept for a person to file. */
 class Unmatched extends Error {
   constructor(
@@ -164,11 +230,37 @@ export function namesCode(subject: string | null, code: string): boolean {
 
 /** The type the bytes say a receipt is: PDF, PNG or JPG; null for anything else. */
 const sniff = (buffer: Buffer) => RECEIPT_TYPES.find((t) => looksLike(buffer, t)) ?? null
-const EXT: Record<string, string> = {
-  'application/pdf': 'pdf',
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
+const EXT: Record<string, string> = ALLOWED_UPLOAD_TYPES
+
+/**
+ * The type a payroll folder's file is (issue #82), among the types that folder takes (ZIP_FOLDER_LIST's extensions):
+ * a PDF, PNG or JPG by its bytes; a spreadsheet or Word file by its bytes (a zip) and its name (which of the two);
+ * a CSV only when its name says so and its bytes are UTF-8 text, so a calendar invite or a signature's text file is
+ * never taken. Null for anything else.
+ */
+export function sniffFor(
+  buffer: Buffer,
+  name: string,
+  extensions: readonly string[]
+): string | null {
+  const takes = (ext: string) =>
+    extensions.includes(ext) || (ext === 'jpg' && extensions.includes('jpeg'))
+  for (const t of RECEIPT_TYPES) if (takes(EXT[t]!) && looksLike(buffer, t)) return t
+  const ext = /\.(\w{1,5})$/.exec(name)?.[1]?.toLowerCase()
+  const office = Object.keys(EXT).find((t) => EXT[t] === ext && (ext === 'xlsx' || ext === 'docx'))
+  if (office && takes(ext!) && looksLike(buffer, office)) return office
+  if (ext === 'csv' && takes('csv') && looksLike(buffer, 'text/csv')) return 'text/csv'
+  return null
 }
+
+/** The types a folder takes, in the inbox's words: "PDF, PNG, JPG, XLSX, DOCX or CSV". */
+const typesWords = (extensions: readonly string[]) => {
+  const names = [...new Set(extensions.map((e) => (e === 'jpeg' ? 'jpg' : e).toUpperCase()))]
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names.at(-1)}` : names[0]!
+}
+
+const isEmailedKind = (k: unknown): k is EmailedKind =>
+  typeof k === 'string' && (EMAILED_KINDS as readonly string[]).includes(k)
 
 /**
  * The webhook's event, checked: Resend's `email.received` carries the email's id, sender, recipients and subject, and
@@ -194,7 +286,8 @@ export function parseReceived(payload: unknown, domain: string) {
   }
 }
 
-type Target = { engagementId: string; period: string }
+/** Where a person files an email by hand: what it is, the month, and a receipt's engagement. */
+type Target = { kind: EmailedKind; engagementId: string | null; period: string }
 type Words = (
   made: { kind: string; sensitivity: string; period: string | null },
   engagement: string
@@ -207,7 +300,7 @@ type Words = (
  * Trusted work (runAsSystem) is kept to the queue itself, before anyone is known: writing the row, claiming it,
  * finding the workspace from the address, finding the member from the verified sender, and writing what became of
  * it. Everything filed is filed as the member, with no system mark: their roles and row-level security apply as if
- * they had uploaded it. Nothing here sends an email, and the sender gets no reply.
+ * they had uploaded it. The one email sent is the confirmation to a verified sender (confirmation.ts): where it went, never a file or its name.
  */
 @Injectable()
 export class InboundService {
@@ -222,7 +315,9 @@ export class InboundService {
     private readonly engagements: EngagementsService,
     private readonly resend: ResendInbound,
     private readonly senders: SenderCheck,
-    private readonly stats: MatchStatsService
+    private readonly stats: MatchStatsService,
+    private readonly documents: DocumentsService,
+    private readonly confirmations: InboundConfirmation
   ) {}
 
   // ── The queue ─────────────────────────────────────────────────────────────
@@ -312,16 +407,24 @@ export class InboundService {
   async process(row: InboundReceipt): Promise<void> {
     try {
       await this.handle(row)
+      return this.confirm(row.id, 'filed')
     } catch (e) {
-      if (e instanceof Rejected)
-        return this.settle(row.id, { status: 'rejected', rejectReason: e.message, error: null })
-      if (e instanceof Unmatched)
-        return this.settle(row.id, {
+      if (e instanceof Rejected) {
+        await this.settle(row.id, { status: 'rejected', rejectReason: e.message, error: null })
+        // Told only once the sender was verified: "nothing could be filed" (never an unknown or forged sender).
+        if (e.message === REJECT.noFiles || e.message === REJECT.noPayrollFiles)
+          await this.confirm(row.id, 'nothing')
+        return
+      }
+      if (e instanceof Unmatched) {
+        await this.settle(row.id, {
           status: 'unmatched',
           rejectReason: e.message,
           error: null,
           ...(e.engagementId && { engagementId: e.engagementId }),
         })
+        return this.confirm(row.id, 'unmatched')
+      }
       // Never the sender, the subject or a file name: the row's id and what kind of failure it was.
       this.logger.warn(
         `Emailed receipt ${row.id}: attempt ${row.attempts} failed (${(e as Error).name})`
@@ -337,6 +440,92 @@ export class InboundService {
     }
   }
 
+  /**
+   * The confirmation to the row's verified sender, once per filing (issue #82): the row is claimed first (its
+   * confirmationSentAt set where it is still empty), so a retry or a second worker never sends it twice; a crash between
+   * the claim and the send loses one email, never doubles it. Only a row whose sender was verified as a member is ever
+   * answered. Only the claim is trusted work; what the email says is read as that member, as handle() files it. A send
+   * that fails is logged by the row's id and never fails the filing.
+   */
+  private async confirm(id: string, outcome: Outcome): Promise<void> {
+    if (!this.confirmations.enabled()) return
+    try {
+      // Trusted work: the queue's own bookkeeping, as settle is.
+      const [claimed] = await runAsSystem(() =>
+        this.prisma.$queryRawUnsafe<{ senderUserId: string }[]>(CONFIRM_CLAIM_SQL, id)
+      )
+      if (!claimed) return
+      const senderId = claimed.senderUserId
+      const facts = await withTenantContext(async () => {
+        identifyCaller({ userId: senderId })
+        const caller = await this.callers.load(senderId)
+        const r = await this.prisma.inboundReceipt.findFirst({
+          where: { id, ...tenantWhere(caller) },
+        })
+        if (!r?.workspaceId || r.senderUserId !== senderId || !r.fromAddress) return null
+        const [engagement, docs] = await Promise.all([
+          r.engagementId
+            ? this.prisma.engagement.findFirst({
+                where: { id: r.engagementId, ...tenantWhere(caller) },
+                select: { name: true },
+              })
+            : null,
+          this.prisma.document.findMany({
+            where: { id: { in: r.documentIds }, ...tenantWhere(caller) },
+            select: { period: true, uploadedById: true, uploadedAt: true },
+          }),
+        ])
+        // Kept by this email: uploaded by its sender once it was queued. Anything else it points at was on file already.
+        const kept = docs.filter((d) => d.uploadedById === senderId && d.uploadedAt >= r.createdAt)
+        const periods = [...new Set(docs.map((m) => m.period).filter((p): p is string => !!p))]
+        // A receipt filed in one month links to that month's page.
+        const report =
+          r.engagementId && periods.length === 1
+            ? await this.prisma.monthlyReport.findFirst({
+                where: {
+                  engagementId: r.engagementId,
+                  period: periods[0]!,
+                  ...tenantWhere(caller),
+                },
+                select: { id: true },
+              })
+            : null
+        return {
+          r,
+          owner: workspaceRole(caller, r.workspaceId, ['owner']),
+          engagement: engagement?.name ?? null,
+          filed: kept.length,
+          alreadyOnFile: docs.length - kept.length,
+          periods: periods.sort(),
+          reportId: report?.id ?? null,
+        }
+      })
+      if (!facts) return
+      const { r } = facts
+      await this.confirmations.send({
+        to: r.fromAddress!,
+        outcome,
+        receivedAt: r.receivedAt,
+        workspaceId: r.workspaceId!,
+        owner: facts.owner,
+        kind: isEmailedKind(r.intendedKind) ? r.intendedKind : 'receipt',
+        period: r.period,
+        // A receipt filed to no engagement went to the workspace's Receipts in Month End Close: no name, no month page.
+        engagementName: r.engagementId ? (facts.engagement ?? 'your engagement') : null,
+        filed: facts.filed,
+        alreadyOnFile: facts.alreadyOnFile,
+        periods: facts.periods,
+        reportId: facts.reportId,
+        skipped: r.error?.startsWith('Skipped: ') ? r.error.split('; ').length : 0,
+        reason: outcome === 'filed' ? null : r.rejectReason,
+      })
+    } catch (e) {
+      this.logger.warn(
+        `Emailed receipt ${id}: the confirmation was not sent (${(e as Error).name})`
+      )
+    }
+  }
+
   /** What became of a row, written by the worker: the queue's own bookkeeping, as trusted work. */
   private async settle(id: string, data: Prisma.InboundReceiptUncheckedUpdateInput) {
     await runAsSystem(() => this.prisma.inboundReceipt.update({ where: { id }, data }))
@@ -345,6 +534,9 @@ export class InboundService {
   private async handle(row: InboundReceipt): Promise<void> {
     const cfg = inboundConfig()
     if (!cfg) throw new ProviderError('The email provider is not set up')
+    // One of our own confirmations come back (an auto-reply or a forward of it): refused before anything is looked up,
+    // so it stays nobody's, is never answered, and the two never loop.
+    if (isOwnConfirmation(row.subject)) throw new Rejected(REJECT.automatic)
 
     // a. Whose address it is. Only looked up here: the row names its workspace once the sender is verified (d), so
     // junk stays nobody's and is purged.
@@ -406,6 +598,10 @@ export class InboundService {
       !verdict.signedRecipients.includes(row.toAddress)
     )
       throw new Rejected(REJECT.unverified)
+    // An automatic reply (an out-of-office, a mail system's notice): any Auto-Submitted but "no" (RFC 3834), read from
+    // the raw message itself. Refused quietly: never filed, never answered.
+    if (verdict.autoSubmitted.some((v) => v.split(';')[0]!.trim() !== 'no'))
+      throw new Rejected(REJECT.automatic)
 
     // d. Whose it is, said once: the workspace together with its verified sender.
     if (!row.workspaceId) await this.settle(row.id, { workspaceId, senderUserId: senderId })
@@ -447,8 +643,8 @@ export class InboundService {
   }
 
   /**
-   * Files an emailed receipt's attachments as `caller`: into the engagement its subject names by code (or the
-   * workspace's only active engagement, or `target`), each into the draft month of the date read from it (or the date
+   * Files an emailed receipt's attachments as `caller`: into the engagement its subject names by code (or `target`'s;
+   * with no code, the workspace's Receipts for the month when it works from its books, else its only active engagement), each into the draft month of the date read from it (or the date
    * the email arrived), started if it is not yet, matched automatically where it can be. Each file is one transaction
    * with its line and its place on the queue row, which it reads locked first, so neither a retry nor a second worker
    * whose lease overlapped ever files one twice. The lease is renewed before each file.
@@ -471,13 +667,33 @@ export class InboundService {
         periodEnd: true,
       },
     })
+    // What it is and its month (issue #82): the person's choice, else what the subject said, worked out once.
+    const intent = target
+      ? { kind: target.kind, period: target.period }
+      : await this.intentOf(row, engagements)
+    if (intent.kind !== 'receipt')
+      return this.filePayroll(
+        caller,
+        row,
+        intent.kind,
+        intent.period ?? monthIn(row.receivedAt),
+        !!target
+      )
+
+    // A receipt naming no engagement code goes to the workspace's Receipts for the month when the workspace works from
+    // its books (owner's decision, 2026-11-17); a person filing by hand chose that by choosing no engagement.
+    const named = target ? null : namedEngagement(engagements, row.subject)
+    const toWorkspace = target
+      ? !target.engagementId
+      : !named && (await this.hasBooks(caller, workspaceId))
+    if (toWorkspace) return this.fileWorkspaceReceipts(caller, row, intent.period, !!target)
     const e = target
       ? engagements.find((x) => x.id === target.engagementId)
-      : pickEngagement(engagements, row.subject)
+      : (named ?? onlyActive(engagements))
     if (!e) throw new NotFoundException('No such engagement in this workspace')
 
     const metas = await this.resend.attachments(row.emailId)
-    const { accepted, skipped } = await this.pick(metas, row.filedAttachments)
+    const { accepted, skipped } = await this.pick(metas, row.filedAttachments, 'receipt')
     if (!accepted.length && !row.documentIds.length) throw new Rejected(REJECT.noFiles)
 
     // Matching statistics: one row per attempt that files (done) or fails, as this member, written once it ends.
@@ -499,7 +715,7 @@ export class InboundService {
         failed: counts.unread,
       })
     try {
-      await this.fileAccepted(caller, row, target, words, e, accepted, skipped, counts)
+      await this.fileAccepted(caller, row, intent.period, words, e, accepted, skipped, counts)
     } catch (err) {
       // Refused or left for a person: what became of the email, not a failed run.
       if (!(err instanceof Rejected) && !(err instanceof Unmatched)) await stat('failed')
@@ -508,11 +724,308 @@ export class InboundService {
     await stat('done')
   }
 
+  /**
+   * What an email is filed as and the month, from its subject (issue #82): kept on the row the first time, so running it
+   * again files it the same way. A subject that names two kinds or two months, or payroll files but no folder, is left for
+   * a person. A receipt's month is kept only when the subject names the word and a month ("receipts October"; each
+   * receipt's own date decides otherwise, else the month it arrived); a payroll file's is the month named, else the
+   * month it arrived.
+   */
+  private async intentOf(
+    row: InboundReceipt,
+    engagements: { code: string | null }[]
+  ): Promise<{ kind: EmailedKind; period: string | null }> {
+    if (isEmailedKind(row.intendedKind)) return { kind: row.intendedKind, period: row.period }
+    const read = readSubject(
+      row.subject,
+      engagements.map((x) => x.code).filter((c): c is string => !!c),
+      row.receivedAt
+    )
+    if (read.problem) throw new Unmatched(read.problem)
+    const period = read.kind === 'receipt' ? read.period : (read.period ?? monthIn(row.receivedAt))
+    await this.prisma.inboundReceipt.update({
+      where: { id: row.id },
+      data: { intendedKind: read.kind, period },
+    })
+    return { kind: read.kind, period }
+  }
+
+  /**
+   * An email of payroll files (issue #82): each attachment its folder takes goes into the month's workspace payroll
+   * files (Month End Close's File Management), as the sender, whether an owner or a bookkeeper (owner's decision,
+   * 2026-11-16), marked as added since the month was last matched: it counts once an owner matches the month again. No
+   * engagement, no month started, nothing read or matched now. A file the month's folder has already (the same
+   * contents) is not kept twice: the email points at the one on file, checked again under the month's lock. Each file
+   * is one transaction with its line and its place on the queue row, under the same lock as the month's Save, so an
+   * owner's Save and an emailed file never cross.
+   */
+  private async filePayroll(
+    caller: Caller,
+    row: InboundReceipt,
+    kind: Exclude<EmailedKind, 'receipt'>,
+    period: string,
+    byHand: boolean
+  ) {
+    const workspaceId = row.workspaceId!
+    const folder = emailedFolder(kind).name
+    const metas = await this.resend.attachments(row.emailId)
+    const { accepted, skipped } = await this.pick(metas, row.filedAttachments, kind)
+    if (!accepted.length && !row.documentIds.length) throw new Rejected(REJECT.noPayrollFiles)
+    // Left for a person against an engagement, now filed as payroll files: it names none. Cleared before anything is
+    // listed, since clearing it clears the row's documents (trigger inbound_receipt_engagement); kept when receipts were
+    // filed into it already.
+    if (row.engagementId && !row.documentIds.length)
+      await this.prisma.inboundReceipt.update({
+        where: { id: row.id },
+        data: { engagementId: null },
+      })
+    const claim = (tx: Prisma.TransactionClient, attachmentId: string) =>
+      claimAttachment(tx, row.id, attachmentId)
+    const pointAt = (attachmentId: string, documentId: string) =>
+      this.pointAt(row.id, attachmentId, documentId)
+    for (const att of accepted) {
+      await this.renewLease(row.id)
+      const sha = createHash('sha256').update(att.file.buffer).digest('hex')
+      const sameIn = (tx: Prisma.TransactionClient | PrismaService) =>
+        tx.document.findFirst({
+          where: { workspaceId, engagementId: null, period, kind, sha256: sha },
+          select: { id: true },
+        })
+      try {
+        // Filed already by a worker whose lease overlapped: a short locked read, before anything is stored.
+        await this.prisma.$transaction((tx) => claim(tx, att.id))
+        const same = await sameIn(this.prisma)
+        if (same) {
+          await pointAt(att.id, same.id)
+          continue
+        }
+        const s = await this.documents.stage(caller, att.file, { workspaceId, period, kind })
+        s.data.addedSinceMatch = true
+        await s.commit(() =>
+          this.log.change(
+            caller,
+            async (tx) => {
+              await lockMonth(tx, workspaceId, period)
+              await claim(tx, att.id)
+              // Kept a moment ago by someone else (an upload, another email): the stored object goes again.
+              const sameNow = await sameIn(tx)
+              if (sameNow) throw new OnFileAlready(sameNow.id)
+              const made = await s.create(tx)
+              await tx.inboundReceipt.update({
+                where: { id: row.id },
+                data: { documentIds: { push: made.id }, filedAttachments: { push: att.id } },
+              })
+              return made
+            },
+            (made) => ({
+              workspaceId,
+              resource: 'document',
+              subjectId: made.id,
+              action: 'create',
+              description: `${byHand ? 'Filed' : 'Emailed in'} ${describe(made)} to ${folder} in File Management${byHand ? ' from the emailed documents inbox' : ''}`,
+            })
+          )
+        )
+      } catch (err) {
+        if (err instanceof OnFileAlready) {
+          await pointAt(att.id, err.documentId).catch((e: unknown) => {
+            if (!(e instanceof AlreadyFiled)) throw e
+          })
+          continue
+        }
+        if (!(err instanceof AlreadyFiled)) throw err
+      }
+    }
+    await this.prisma.inboundReceipt.update({
+      where: { id: row.id },
+      data: {
+        status: 'filed',
+        intendedKind: kind,
+        period,
+        rejectReason: null,
+        error: skipped.length ? `Skipped: ${skipped.join('; ')}`.slice(0, 2000) : null,
+      },
+    })
+  }
+
+  /** The lease renewed before each attachment, so no other worker claims the row while this one files it. */
+  private renewLease(rowId: string) {
+    return this.prisma.inboundReceipt.update({
+      where: { id: rowId },
+      data: { nextAttemptAt: new Date(Date.now() + LEASE_MS) },
+    })
+  }
+
+  /** The email points at a file on file already: nothing new is stored or logged, and no id is listed twice. */
+  private pointAt(rowId: string, attachmentId: string, documentId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const held = await claimAttachment(tx, rowId, attachmentId)
+      await tx.inboundReceipt.update({
+        where: { id: rowId },
+        data: {
+          filedAttachments: { push: attachmentId },
+          ...(!held.documentIds.includes(documentId) && { documentIds: { push: documentId } }),
+        },
+      })
+    })
+  }
+
+  /**
+   * Whether the workspace works from its books (owner's decision, 2026-11-17), so an emailed receipt naming no
+   * engagement goes to its Receipts in Month End Close, where the books' bills are matched to it. Decided by what lasts,
+   * never by this month: the books' export usually arrives at month end, after the month's receipts, so "this month has
+   * a books file" would send the first receipts of every month the old way. Either is enough: a QuickBooks transactions
+   * export filed to the workspace in any month (the folder's kind, `payroll-details`, as a sheet: a PDF in that folder
+   * is a pay register, payroll's, not the books, as ExpensesService.booksOf reads them), or any expense saved from the
+   * books (`booksKey`), which stays when the export is removed. Read as the sender.
+   */
+  private async hasBooks(caller: Caller, workspaceId: string): Promise<boolean> {
+    const [file, line] = await Promise.all([
+      this.prisma.document.findFirst({
+        where: {
+          AND: [
+            {
+              workspaceId,
+              engagementId: null,
+              kind: 'payroll-details',
+              contentType: { in: SHEET_TYPES },
+            },
+            tenantWhere(caller),
+          ],
+        },
+        select: { id: true },
+      }),
+      this.prisma.expense.findFirst({
+        where: { AND: [{ workspaceId, booksKey: { not: null } }, tenantWhere(caller)] },
+        select: { id: true },
+      }),
+    ])
+    return !!(file || line)
+  }
+
+  /**
+   * An emailed receipt naming no engagement, in a workspace that works from its books (owner's decision, 2026-11-17):
+   * each one a receipt of the workspace's month, filed to no engagement, as an owner's "Add files → Receipts" on Month End
+   * Close keeps it (ExpensesService.addReceipts), whether the sender is an owner or a bookkeeper. Read for its amount, date
+   * and vendor as any emailed receipt is (AI only when the owners turned it on); its month is the one the person chose or
+   * the subject named, else its own date's, else the month it arrived. Nothing is matched now: the books' bills are
+   * matched to it when an owner opens Expense matching. A receipt the month has already (the same contents) is not kept
+   * twice: the email points at the one on file, checked again under the month's lock. Each file is one transaction with
+   * its line and its place on the queue row.
+   */
+  private async fileWorkspaceReceipts(
+    caller: Caller,
+    row: InboundReceipt,
+    forcedPeriod: string | null,
+    byHand: boolean
+  ) {
+    const workspaceId = row.workspaceId!
+    const metas = await this.resend.attachments(row.emailId)
+    const { accepted, skipped } = await this.pick(metas, row.filedAttachments, 'receipt')
+    if (!accepted.length && !row.documentIds.length) throw new Rejected(REJECT.noFiles)
+    // Left for a person against an engagement, now filed to the workspace: it names none (as filePayroll).
+    if (row.engagementId && !row.documentIds.length)
+      await this.prisma.inboundReceipt.update({
+        where: { id: row.id },
+        data: { engagementId: null },
+      })
+    // Nobody is present to say yes, so AI reads them only when the workspace's owners turned it on (as fileAccepted).
+    const ws = await this.prisma.workspace.findFirst({
+      where: { id: workspaceId },
+      select: { readEmailedReceiptsWithAi: true },
+    })
+    const withAi = ws?.readEmailedReceiptsWithAi === true
+    for (const att of accepted) {
+      await this.renewLease(row.id)
+      try {
+        // Filed already by a worker whose lease overlapped: a short locked read, before anything is read or stored.
+        await this.prisma.$transaction((tx) => claimAttachment(tx, row.id, att.id))
+        const read = await readReceipt(
+          { buffer: att.file.buffer, contentType: att.file.mimetype, sensitivity: 'financial' },
+          withAi
+        )
+        const period = forcedPeriod ?? read.date?.slice(0, 7) ?? monthIn(row.receivedAt)
+        const sha = createHash('sha256').update(att.file.buffer).digest('hex')
+        const sameIn = (tx: Prisma.TransactionClient | PrismaService) =>
+          tx.document.findFirst({
+            where: {
+              workspaceId,
+              engagementId: null,
+              period,
+              kind: { in: [...RECEIPT_KINDS] },
+              sha256: sha,
+            },
+            select: { id: true },
+          })
+        const same = await sameIn(this.prisma)
+        if (same) {
+          await this.pointAt(row.id, att.id, same.id)
+          continue
+        }
+        const s = await this.documents.stage(caller, att.file, {
+          workspaceId,
+          period,
+          kind: 'receipt',
+        })
+        Object.assign(s.data, {
+          receiptAmount: read.amount == null ? null : read.amount.toFixed(2),
+          receiptDate: read.date ? new Date(`${read.date}T00:00:00Z`) : null,
+          receiptVendor: read.vendor,
+          receiptReadBy: read.readBy,
+        })
+        await s.commit(() =>
+          this.log.change(
+            caller,
+            async (tx) => {
+              await lockMonth(tx, workspaceId, period)
+              await claimAttachment(tx, row.id, att.id)
+              // Kept a moment ago by someone else (an upload, another email): the stored object goes again.
+              const sameNow = await sameIn(tx)
+              if (sameNow) throw new OnFileAlready(sameNow.id)
+              const made = await s.create(tx)
+              await tx.inboundReceipt.update({
+                where: { id: row.id },
+                data: { documentIds: { push: made.id }, filedAttachments: { push: att.id } },
+              })
+              return made
+            },
+            (made) => ({
+              workspaceId,
+              resource: 'document',
+              subjectId: made.id,
+              action: 'create',
+              description: `${byHand ? 'Filed' : 'Emailed in'} ${describe(made)} to ${RECEIPTS_FOLDER} in Month End Close${byHand ? ' from the emailed documents inbox' : ''}${readWithAi(read)}`,
+              changes: changesOf(null, made, RECEIPT_FIELDS),
+            })
+          )
+        )
+      } catch (err) {
+        if (err instanceof OnFileAlready) {
+          await this.pointAt(row.id, att.id, err.documentId).catch((e: unknown) => {
+            if (!(e instanceof AlreadyFiled)) throw e
+          })
+          continue
+        }
+        if (!(err instanceof AlreadyFiled)) throw err
+      }
+    }
+    await this.prisma.inboundReceipt.update({
+      where: { id: row.id },
+      data: {
+        status: 'filed',
+        intendedKind: 'receipt',
+        ...(forcedPeriod && { period: forcedPeriod }),
+        rejectReason: null,
+        error: skipped.length ? `Skipped: ${skipped.join('; ')}`.slice(0, 2000) : null,
+      },
+    })
+  }
+
   /** The rest of `file`: read each accepted attachment, then file each into its draft month and match it. */
   private async fileAccepted(
     caller: Caller,
     row: InboundReceipt,
-    target: Target | null,
+    forcedPeriod: string | null,
     words: Words,
     e: { id: string; name: string; periodStart: Date | null; periodEnd: Date | null },
     accepted: Awaited<ReturnType<InboundService['pick']>>['accepted'],
@@ -534,7 +1047,8 @@ export class InboundService {
         { buffer: att.file.buffer, contentType: att.file.mimetype, sensitivity: 'financial' },
         withAi
       )
-      const period = target?.period ?? (read.date ?? row.receivedAt.toISOString()).slice(0, 7)
+      // The month the person chose or the subject named, else the receipt's own date, else the month it arrived.
+      const period = forcedPeriod ?? read.date?.slice(0, 7) ?? monthIn(row.receivedAt)
       reads.push({ att, read, period })
     }
     counts.readMs = Date.now() - readFrom
@@ -554,10 +1068,7 @@ export class InboundService {
           read,
           (made) => `${words(made, e.name)}${readWithAi(read)}`,
           async (tx, documentId) => {
-            const [held] = await tx.$queryRawUnsafe<{ filedAttachments: string[] }[]>(
-              LOCK_SQL,
-              row.id
-            )
+            const [held] = await tx.$queryRawUnsafe<Held[]>(LOCK_SQL, row.id)
             if (!held || held.filedAttachments.includes(att.id)) throw new AlreadyFiled()
             return tx.inboundReceipt.update({
               where: { id: row.id },
@@ -580,6 +1091,8 @@ export class InboundService {
       data: {
         status: 'filed',
         engagementId: e.id,
+        intendedKind: 'receipt',
+        ...(forcedPeriod && { period: forcedPeriod }),
         rejectReason: null,
         error: skipped.length ? `Skipped: ${skipped.join('; ')}`.slice(0, 2000) : null,
       },
@@ -633,7 +1146,12 @@ export class InboundService {
    * are listed by name, as skipped, for the inbox. Pictures in the email's body (inline) and images under 10 KB (a
    * logo, a signature picture) are passed over without a word.
    */
-  private async pick(metas: ReceivedAttachment[], filed: string[]) {
+  private async pick(metas: ReceivedAttachment[], filed: string[], kind: EmailedKind) {
+    // A receipt: PDF, PNG or JPG up to 10 MB, as before. A payroll file: the types its folder takes, up to 25 MB.
+    const receipt = kind === 'receipt'
+    const extensions = emailedFolder(kind).extensions
+    const maxBytes = receipt ? MAX_RECEIPT_BYTES : MAX_UPLOAD_BYTES
+    const tooBig = `over ${maxBytes / 1024 / 1024} MB`
     const accepted: { id: string; file: Uploaded }[] = []
     const skipped: string[] = []
     let tried = 0
@@ -646,22 +1164,22 @@ export class InboundService {
         skipped.push(`${name} (more than ${MAX_ATTACHMENTS} attachments)`)
         continue
       }
-      if ((a.size ?? 0) > MAX_RECEIPT_BYTES) {
-        skipped.push(`${name} (over 10 MB)`)
+      if ((a.size ?? 0) > maxBytes) {
+        skipped.push(`${name} (${tooBig})`)
         continue
       }
       tried++
-      const buffer = await this.resend.download(a.download_url, MAX_RECEIPT_BYTES)
+      const buffer = await this.resend.download(a.download_url, maxBytes)
       if (!buffer) {
-        skipped.push(`${name} (over 10 MB)`)
+        skipped.push(`${name} (${tooBig})`)
         continue
       }
-      const type = sniff(buffer)
+      const type = receipt ? sniff(buffer) : sniffFor(buffer, name, extensions)
       if (!type) {
-        skipped.push(`${name} (not a PDF, PNG or JPG)`)
+        skipped.push(`${name} (not a ${receipt ? 'PDF, PNG or JPG' : typesWords(extensions)})`)
         continue
       }
-      if (type !== 'application/pdf' && buffer.length < MIN_IMAGE_BYTES) continue
+      if (type.startsWith('image/') && buffer.length < MIN_IMAGE_BYTES) continue
       const originalname = /\.\w{1,5}$/.test(name) ? name : `${name}.${EXT[type]}`
       accepted.push({
         id: a.id,
@@ -696,11 +1214,43 @@ export class InboundService {
         })
       ).map((e) => [e.id, e.name])
     )
+    // A receipt filed to the workspace's Receipts by its own date keeps no month on the row (a run again would force it
+    // on the rest): the inbox shows its documents' month, when they share one.
+    const toWorkspace = rows.filter(
+      (r) =>
+        r.status === 'filed' &&
+        !r.engagementId &&
+        !r.period &&
+        (r.intendedKind ?? 'receipt') === 'receipt' &&
+        r.documentIds.length
+    )
+    const periodOf = new Map(
+      toWorkspace.length
+        ? (
+            await this.prisma.document.findMany({
+              where: {
+                id: { in: toWorkspace.flatMap((r) => r.documentIds) },
+                ...tenantWhere(caller),
+              },
+              select: { id: true, period: true },
+            })
+          ).map((d) => [d.id, d.period])
+        : []
+    )
+    const months = new Map(
+      toWorkspace.map((r) => {
+        const p = [...new Set(r.documentIds.map((id) => periodOf.get(id) ?? null))]
+        return [r.id, p.length === 1 ? p[0]! : null]
+      })
+    )
     const domain = receiptsDomain()
     return {
       address: w.receiptsAddress && domain ? `${w.receiptsAddress}@${domain}` : null,
       configured: !!inboundConfig(),
-      items: rows.map((r) => inboundDto(r, names)),
+      items: rows.map((r) => ({
+        ...inboundDto(r, names),
+        ...(months.get(r.id) && { period: months.get(r.id)! }),
+      })),
       canManage: workspaceRole(caller, workspaceId, WRITE_ROLES),
     }
   }
@@ -716,13 +1266,15 @@ export class InboundService {
       nextAttemptAt: new Date(),
       error: null,
       rejectReason: null,
+      // Its own confirmation once it is filed or left again.
+      confirmationSentAt: null,
     }
     await this.log.change(caller, (tx) => tx.inboundReceipt.update({ where: { id }, data }), {
       workspaceId: row.workspaceId!,
       resource: 'document',
       subjectId: id,
       action: 'update',
-      description: 'Ran an emailed receipt again from the receipts inbox',
+      description: 'Ran an emailed document again from the emailed documents inbox',
       changes: changesOf(row, data, STATUS_FIELDS),
     })
     return this.inbox(caller, row.workspaceId!)
@@ -747,7 +1299,7 @@ export class InboundService {
       resource: 'document',
       subjectId: id,
       action: 'update',
-      description: `Dismissed an emailed receipt from the receipts inbox: ${label.toLowerCase()}`,
+      description: `Dismissed an emailed document from the emailed documents inbox: ${label.toLowerCase()}`,
       changes: changesOf(row, data, STATUS_FIELDS),
     })
     return this.inbox(caller, row.workspaceId!)
@@ -755,7 +1307,8 @@ export class InboundService {
 
   /**
    * Files an unmatched receipt where the person says: the engagement and the month they choose (a draft month, started
-   * if needed). As the person clicking, now, with a line for each file in their name.
+   * if needed), or, with no engagement chosen in a workspace that works from its books, the workspace's Receipts for the
+   * month. As the person clicking, now, with a line for each file in their name.
    */
   async fileByHand(
     caller: Caller,
@@ -764,11 +1317,27 @@ export class InboundService {
   ): Promise<ReceiptsInboxDto> {
     const row = await this.changeable(caller, id)
     if (row.status !== 'unmatched')
-      throw new ConflictException('Only a receipt that needs filing is filed by hand')
-    if (typeof body?.engagementId !== 'string' || !body.engagementId)
-      throw new BadRequestException('Choose the engagement')
-    if (typeof body.period !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(body.period))
-      throw new BadRequestException('Choose the month, YYYY-MM')
+      throw new ConflictException('Only a document that needs filing is filed by hand')
+    const kind = body?.kind ?? 'receipt'
+    // Every problem at once, in one message (CLAUDE.md, "Something wrong in a form").
+    const problems: string[] = []
+    if (!isEmailedKind(kind))
+      problems.push('Choose what it is: a receipt or one of the payroll folders')
+    const receipt = kind === 'receipt'
+    // A receipt goes to the engagement chosen; with none chosen, to the workspace's Receipts for the month, but only in
+    // a workspace that works from its books (owner's decision, 2026-11-17): elsewhere nothing would ever match it there.
+    const engagementId =
+      typeof body?.engagementId === 'string' && body.engagementId ? body.engagementId : null
+    if (
+      receipt &&
+      !engagementId &&
+      ((body?.engagementId != null && body.engagementId !== '') ||
+        !(await this.hasBooks(caller, row.workspaceId!)))
+    )
+      problems.push('Choose the engagement')
+    if (typeof body?.period !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(body.period))
+      problems.push('Choose the month, YYYY-MM')
+    if (problems.length) throw new BadRequestException(problems.join('. '))
     // Taken while it is filed ("filing", which the worker never claims), so two people filing it at once, or a
     // person and the worker, cannot both file it.
     const claimed = await this.prisma.inboundReceipt.updateMany({
@@ -780,8 +1349,12 @@ export class InboundService {
       await this.file(
         caller,
         row,
-        { engagementId: body.engagementId, period: body.period },
-        (made, name) => `Filed ${describe(made)} of ${name} from the receipts inbox`
+        {
+          kind: kind as EmailedKind,
+          engagementId: receipt ? engagementId : null,
+          period: body.period as string,
+        },
+        (made, name) => `Filed ${describe(made)} of ${name} from the emailed documents inbox`
       )
     } catch (e) {
       await this.prisma.inboundReceipt.update({ where: { id }, data: { status: 'unmatched' } })
@@ -807,14 +1380,21 @@ export class InboundService {
   }
 }
 
-/** The engagement the subject names by code; else the only active one; else none (unmatched, with the reason). */
-function pickEngagement<E extends { id: string; code: string | null; status: string }>(
+/** The engagement the subject names by code; null when it names none; unmatched when it names two or more. */
+function namedEngagement<E extends { code: string | null }>(
   engagements: E[],
   subject: string | null
-): E {
+): E | null {
   const named = engagements.filter((x) => x.code && namesCode(subject, x.code))
-  if (named.length === 1) return named[0]!
   if (named.length > 1) throw new Unmatched('The subject names more than one engagement code')
+  return named[0] ?? null
+}
+
+/**
+ * With no code in the subject, in a workspace that has never brought in its books: the only active engagement, else
+ * none (unmatched, with the reason).
+ */
+function onlyActive<E extends { status: string }>(engagements: E[]): E {
   const active = engagements.filter((x) => x.status === 'active')
   if (active.length === 1) return active[0]!
   throw new Unmatched(
@@ -841,6 +1421,8 @@ function inboundDto(r: InboundReceipt, names: Map<string, string>): InboundRecei
     engagementId: r.engagementId,
     engagementName: r.engagementId ? (names.get(r.engagementId) ?? null) : null,
     documentCount: r.documentIds.length,
+    kind: isEmailedKind(r.intendedKind) ? r.intendedKind : null,
+    period: r.period,
     reason: r.rejectReason,
     error: r.error,
     attempts: r.attempts,

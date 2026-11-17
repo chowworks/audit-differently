@@ -35,7 +35,7 @@ export const MAX_RECEIPTS = 20
 export const MAX_RECEIPT_BYTES = 10 * 1024 * 1024
 
 /** What was read from a receipt, in the access log: a business receipt's amount, date and vendor by value. */
-const RECEIPT_FIELDS: Fields = {
+export const RECEIPT_FIELDS: Fields = {
   receiptAmount: { label: 'Amount', show: 'money' },
   receiptDate: { label: 'Date', show: 'date' },
   receiptVendor: { label: 'Vendor', show: 'text' },

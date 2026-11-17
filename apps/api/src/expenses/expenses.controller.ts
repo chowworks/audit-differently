@@ -21,6 +21,11 @@ import type {
   AccountMappingDto,
   BooksBillInput,
   BooksPaymentInput,
+  EmailedFilesDto,
+  EmailedMoveDto,
+  FileManagementChangeDto,
+  MoveFileRequest,
+  RenameFileRequest,
   WorkspaceExpensesDto,
   WorkspaceExpensesSavedDto,
 } from '@ad/types'
@@ -109,6 +114,74 @@ export class ExpensesController {
     @Param('documentId') documentId: string
   ): Promise<WorkspaceExpensesDto> {
     return this.expenses.removeReceipt(await this.callers.load(userId), id, period, documentId)
+  }
+
+  /** Moves a file of File Management to another of its folders (issue #82): owners only. Logged. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Post('workspaces/:id/payroll/:period/files/:documentId/move')
+  @HttpCode(200)
+  async moveFile(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('period') period: string,
+    @Param('documentId') documentId: string,
+    @Body() body: Partial<MoveFileRequest> = {}
+  ): Promise<FileManagementChangeDto> {
+    return this.expenses.moveFile(await this.callers.load(userId), id, period, documentId, body?.to)
+  }
+
+  /** The files an emailed document filed, for the emailed documents inbox's Move to…: owners and bookkeepers. Logged. */
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('workspaces/:id/emailed/:inboundId/files')
+  async emailedFiles(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('inboundId') inboundId: string
+  ): Promise<EmailedFilesDto> {
+    return this.expenses.emailedFiles(await this.callers.load(userId), id, inboundId)
+  }
+
+  /**
+   * Moves one of them to another folder (owner's decision, 2026-11-17): whoever emailed it, or an owner, until an owner
+   * has matched it. Logged.
+   */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Post('workspaces/:id/emailed/:inboundId/files/:documentId/move')
+  @HttpCode(200)
+  async moveEmailed(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('inboundId') inboundId: string,
+    @Param('documentId') documentId: string,
+    @Body() body: Partial<MoveFileRequest> = {}
+  ): Promise<EmailedMoveDto> {
+    return this.expenses.moveEmailed(
+      await this.callers.load(userId),
+      id,
+      inboundId,
+      documentId,
+      body?.to
+    )
+  }
+
+  /** Renames a file of File Management (issue #82): its shown name only. Owners only. Logged. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Post('workspaces/:id/payroll/:period/files/:documentId/rename')
+  @HttpCode(200)
+  async renameFile(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('period') period: string,
+    @Param('documentId') documentId: string,
+    @Body() body: Partial<RenameFileRequest> = {}
+  ): Promise<FileManagementChangeDto> {
+    return this.expenses.renameFile(
+      await this.callers.load(userId),
+      id,
+      period,
+      documentId,
+      body?.name
+    )
   }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })

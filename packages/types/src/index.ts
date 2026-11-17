@@ -1404,6 +1404,10 @@ export interface InboundReceiptDto {
   /** The engagement's name today; null when there is none or it was deleted. */
   engagementName: string | null
   documentCount: number
+  /** What it is filed as, from the subject's word (issue #82): a receipt, or one of the month's payroll files. */
+  kind: EmailedKind | null
+  /** The month it is filed in, YYYY-MM: from the subject, else the month it arrived (payroll files; null until known). */
+  period: string | null
   /** Why it was refused or why it needs filing. */
   reason: string | null
   /** The last failure, or the attachments that were skipped. */
@@ -1521,7 +1525,10 @@ export interface AdminMatchStatsDto {
 
 /** Body of POST /inbound-receipts/:id/file: where a person files an unmatched emailed receipt. */
 export interface FileInboundReceiptRequest {
-  engagementId: string
+  /** What it is: a receipt (the default) or one of the month's payroll files. */
+  kind?: EmailedKind
+  /** A receipt's engagement; a payroll file has none. */
+  engagementId?: string
   /** YYYY-MM */
   period: string
 }
@@ -1562,6 +1569,11 @@ export interface ZipFolder {
   extensions: readonly string[]
   /** Its files are kept as files: File Management shows them, Add files adds to it and Download zip writes it. */
   stored: boolean
+  /**
+   * The words in an emailed subject that send its files here (lowercase, singular and plural; issue #82). Empty: not
+   * sent by email. The first is the one the screens show.
+   */
+  emailWords: readonly string[]
 }
 
 const PROOF_FILES = ['pdf', 'png', 'jpg', 'jpeg', 'xlsx', 'docx'] as const
@@ -1576,6 +1588,16 @@ export const ZIP_FOLDER_LIST = [
     required: true,
     extensions: [...PROOF_FILES, 'csv'],
     stored: true,
+    emailWords: [
+      'timesheets',
+      'timesheet',
+      'time sheets',
+      'time sheet',
+      'timecards',
+      'timecard',
+      'time cards',
+      'time card',
+    ],
   },
   {
     name: 'Payroll registers',
@@ -1585,6 +1607,7 @@ export const ZIP_FOLDER_LIST = [
     required: true,
     extensions: [...PROOF_FILES, 'csv'],
     stored: true,
+    emailWords: ['registers', 'payroll registers', 'payroll register'],
   },
   {
     // Optional: a month of staff pay only has none to give.
@@ -1595,6 +1618,7 @@ export const ZIP_FOLDER_LIST = [
     required: false,
     extensions: PROOF_FILES,
     stored: true,
+    emailWords: ['paystubs', 'paystub', 'pay stubs', 'pay stub', 'pay-stubs', 'pay-stub'],
   },
   {
     // The bank's and the card's statements share one folder.
@@ -1605,6 +1629,13 @@ export const ZIP_FOLDER_LIST = [
     required: true,
     extensions: PROOF_FILES,
     stored: true,
+    emailWords: [
+      'statements',
+      'bank statements',
+      'bank statement',
+      'card statements',
+      'card statement',
+    ],
   },
   {
     // The books' export is the whole month, its expenses too; optional (GitHub issue #22, section 8).
@@ -1615,6 +1646,7 @@ export const ZIP_FOLDER_LIST = [
     required: false,
     extensions: [...PROOF_FILES, 'csv'],
     stored: true,
+    emailWords: ['quickbooks'],
   },
   {
     // Each program's names in the books and the payroll company: merged into the workspace's program names.
@@ -1624,6 +1656,7 @@ export const ZIP_FOLDER_LIST = [
     required: false,
     extensions: ['csv', 'xlsx'],
     stored: false,
+    emailWords: [],
   },
   {
     // Each engagement's chart of accounts mapped to its funder's categories (owner's decision, 2026-11-09).
@@ -1633,6 +1666,7 @@ export const ZIP_FOLDER_LIST = [
     required: false,
     extensions: ['csv', 'xlsx'],
     stored: false,
+    emailWords: [],
   },
   {
     // The receipts and invoices of the books' bills, each matched to its bill (owner's decision, 2026-11-12).
@@ -1642,6 +1676,7 @@ export const ZIP_FOLDER_LIST = [
     required: false,
     extensions: ['pdf', 'png', 'jpg', 'jpeg'],
     stored: true,
+    emailWords: ['receipts', 'receipt', 'invoices', 'invoice'],
   },
 ] as const satisfies readonly ZipFolder[]
 
@@ -1662,6 +1697,23 @@ export const PAYROLL_FOLDERS = ZIP_FOLDER_LIST.filter(
 export const PROGRAM_NAMES_FOLDER = zipFolder('program-names').name
 export const ACCOUNT_MAPPING_FOLDER = zipFolder('account-mapping').name
 export const RECEIPTS_FOLDER = zipFolder('receipts').name
+
+/**
+ * What an emailed file may be filed as (issue #82): a receipt (into an engagement's month, as before) or one of the
+ * month's payroll files (into Month End Close's File Management). Never a contract, a participant's record or anything
+ * not kept by month.
+ */
+export const EMAILED_KINDS = ['receipt', ...PAYROLL_DOCUMENT_KINDS] as const
+export type EmailedKind = (typeof EMAILED_KINDS)[number]
+
+/** The File Management folder an emailed kind lands in. */
+export const emailedFolder = (kind: EmailedKind): ZipFolder =>
+  kind === 'receipt' ? zipFolder('receipts') : zipFolder('payroll-proof', kind)
+
+/** The subject words of each emailed kind, from the folder list. */
+export const EMAILED_KIND_WORDS: Record<EmailedKind, readonly string[]> = Object.fromEntries(
+  EMAILED_KINDS.map((k) => [k, emailedFolder(k).emailWords])
+) as Record<EmailedKind, readonly string[]>
 
 /** "A, B and C". */
 export const andList = (names: readonly string[]) =>
@@ -2284,6 +2336,12 @@ export interface WorkspacePayrollFileDto {
   personal: boolean
   /** Its media type: a PDF opens in the viewer, any file downloads. */
   contentType: string
+  /** Added (emailed in or moved here) since the month was last matched: it counts once an owner re-matches. */
+  notMatchedYet: boolean
+  /** Why it cannot be moved to another folder (it proves pay, or an unsaved upload holds it); null: it can. */
+  cannotMove: string | null
+  /** Why it cannot be renamed (its own month is closed, or an unsaved upload holds it); null: it can. */
+  cannotRename: string | null
 }
 
 /** GET /workspaces/:id/payroll/:period/files: the month's set. */
@@ -2293,6 +2351,48 @@ export interface WorkspacePayrollFilesDto {
   files: WorkspacePayrollFileDto[]
   /** Owners change the set; auditors read it. */
   can: { change: boolean }
+}
+
+/** POST .../files/:documentId/move: the File Management folder a file goes to (issue #82). */
+export interface MoveFileRequest {
+  to: EmailedKind
+}
+/**
+ * One file an emailed document filed, as the emailed documents inbox's Move to… lists it (owner's decision,
+ * 2026-11-17): whoever emailed it, or an owner, moves it to another folder until an owner has matched it.
+ */
+export interface EmailedFileDto {
+  id: string
+  fileName: string
+  /** The folder it is in now. */
+  kind: EmailedKind
+  /** YYYY-MM */
+  period: string | null
+  personal: boolean
+  contentType: string
+  /** Why the caller cannot move it, in plain words; null: they can. */
+  cannotMove: string | null
+}
+/** GET workspaces/:id/emailed/:inboundId/files */
+export interface EmailedFilesDto {
+  inboundId: string
+  files: EmailedFileDto[]
+}
+/** POST workspaces/:id/emailed/:inboundId/files/:documentId/move ({ to }, as MoveFileRequest): the files as they are now. */
+export interface EmailedMoveDto extends EmailedFilesDto {
+  /** One line for the inbox, in plain words. */
+  note: string
+}
+/** POST .../files/:documentId/rename: the name without its extension, which stays. */
+export interface RenameFileRequest {
+  name: string
+}
+/** After a move or a rename in File Management: the month's files and receipts as they are now, and what happened. */
+export interface FileManagementChangeDto {
+  files: WorkspacePayrollFilesDto
+  expenses: WorkspaceExpensesDto
+  /** One line for the page, in plain words ("Moved X to Timesheets."). */
+  note: string
 }
 
 /** Why an owner's decision on a file was dropped: the file's contents or name changed, or the file left the set. */
@@ -3021,6 +3121,10 @@ export interface BooksBillSaved {
 export interface BooksReceiptDto {
   documentId: string
   fileName: string
+  /** Why it cannot be moved to a payroll folder (a locked month, a participant's record, payroll proof); null: it can. */
+  cannotMove: string | null
+  /** Why it cannot be renamed (its own month is closed, or an unsaved upload holds it); null: it can. */
+  cannotRename: string | null
   amount: number | null
   date: string | null
   vendor: string | null

@@ -233,6 +233,7 @@ function setup(
       create: jest.fn(async ({ data }) => ({ id: `d-${++n}`, ...data })),
       createMany: jest.fn(),
       deleteMany: jest.fn(),
+      updateMany: jest.fn(),
       findMany: jest.fn(async () => setDocs),
       count: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) => where.id.in.length),
     },

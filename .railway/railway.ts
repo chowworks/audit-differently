@@ -62,6 +62,9 @@ export default defineRailway((ctx) => {
     RESEND_RECEIVING_API_KEY: preserve(),
     RESEND_WEBHOOK_SECRET: preserve(),
     RECEIPTS_DOMAIN: preserve(),
+    // The confirmation sent back to a verified sender of emailed documents (src/inbound/confirmation.ts), through
+    // RESEND_API_KEY, from an address on a domain Resend may send from; unset, no confirmation is sent.
+    RECEIPTS_REPLY_FROM: preserve(),
   }
 
   // `dev`: the shared development environment (fictional seed only). Its database has no public address: laptops
