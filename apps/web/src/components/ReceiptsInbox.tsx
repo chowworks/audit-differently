@@ -394,6 +394,10 @@ export function ReceiptsInbox({
             lead="Email receipts and payroll files in; one word in the subject says what they are."
           >
             <CopyPill label="Email" value={address} />
+            <p className="ad-hand-address">
+              <span className="ad-hand-address-label">Subject</span>
+              <span className="ad-mono">&lt;word&gt; &lt;month&gt;</span>
+            </p>
             <CopyPill label="Example subject" value="timesheets October" />
             <ol className="ad-hand-steps">
               <li>Send from the email you sign in with, up to 10 files per email.</li>
