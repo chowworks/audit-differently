@@ -398,8 +398,8 @@ export function ReceiptsInbox({
             <ol className="ad-hand-steps">
               <li>Send from the email you sign in with, up to 10 files per email.</li>
               <li>
-                Subject word: {SUBJECT_WORDS}. No word: they're receipts, filed by the engagement
-                code in the subject.
+                Subject word: {SUBJECT_WORDS}. No word: they're receipts. Add an engagement's code
+                to file them on its month.
               </li>
               <li>Name the month, or they go in this month. We email you where they went.</li>
               <li>Never email eligibility records or contracts: upload those on the engagement.</li>
