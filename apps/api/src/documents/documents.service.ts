@@ -63,6 +63,8 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 /** A file's name as it is kept: letters, digits and a few signs, at most 200 characters. */
 export const storedFileName = (name: string) => name.replace(/[^\w.() -]+/g, '_').slice(0, 200)
 
+const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
 /** The first bytes each allowed type starts with; Office files are zip archives. */
 const SIGNATURES: Record<string, Buffer[]> = {
   'application/pdf': [Buffer.from('%PDF-')],
@@ -589,19 +591,8 @@ export class DocumentsService {
    * a pay stub, which opens in the browser like the other payroll files (owner's decision, 2026-10-16).
    */
   async url(caller: Caller, id: string): Promise<{ url: string; expiresInSeconds: number }> {
-    const doc = await this.prisma.document.findFirst({ where: { id, ...tenantWhere(caller) } })
-    if (!doc) throw new NotFoundException()
-    const personal = doc.sensitivity === 'personal'
-    if (personal) {
-      const roles = [...personalRolesFor(doc.kind)] as Role[]
-      if (!workspaceRole(caller, doc.workspaceId, roles))
-        throw new ForbiddenException(
-          'Personal documents are open to owners and auditors only (pay stubs to bookkeepers too)'
-        )
-    }
+    const { doc, personal, download } = await this.openable(caller, id)
     const expiresInSeconds = personal ? 60 : 120
-    const download = personal && doc.kind !== 'paystub'
-    if (!keyInWorkspace(doc)) throw new NotFoundException()
     const url = await this.storage.getSignedUrl(
       doc.storageKey,
       expiresInSeconds,
@@ -615,5 +606,43 @@ export class DocumentsService {
       description: `${download ? 'Downloaded' : 'Opened'} ${describe(doc)}`,
     })
     return { url, expiresInSeconds }
+  }
+
+  /**
+   * A spreadsheet's bytes, through the API, for the in-app viewer: the browser cannot show an xlsx from its link, which
+   * only downloads it. Same gates as the link, and logged as opened; a record that opens only as a download is refused.
+   */
+  async file(
+    caller: Caller,
+    id: string
+  ): Promise<{ bytes: Uint8Array; contentType: string; fileName: string }> {
+    const { doc, download } = await this.openable(caller, id)
+    if (download) throw new ForbiddenException('This record opens as a download only')
+    if (doc.contentType !== XLSX_TYPE) throw new NotFoundException()
+    const bytes = await this.storage.read(doc.storageKey)
+    await this.log.log(caller, {
+      workspaceId: doc.workspaceId,
+      resource: 'document',
+      subjectId: doc.id,
+      action: 'read',
+      description: `Opened ${describe(doc)}`,
+    })
+    return { bytes, contentType: doc.contentType, fileName: doc.fileName }
+  }
+
+  /** The document, if the caller may open it, and whether it opens only as a download (a personal record but a pay stub). */
+  private async openable(caller: Caller, id: string) {
+    const doc = await this.prisma.document.findFirst({ where: { id, ...tenantWhere(caller) } })
+    if (!doc) throw new NotFoundException()
+    const personal = doc.sensitivity === 'personal'
+    if (personal) {
+      const roles = [...personalRolesFor(doc.kind)] as Role[]
+      if (!workspaceRole(caller, doc.workspaceId, roles))
+        throw new ForbiddenException(
+          'Personal documents are open to owners and auditors only (pay stubs to bookkeepers too)'
+        )
+    }
+    if (!keyInWorkspace(doc)) throw new NotFoundException()
+    return { doc, personal, download: personal && doc.kind !== 'paystub' }
   }
 }

@@ -21,7 +21,8 @@ const SheetViewer = lazy(() =>
  * as that item's own copy instead, drawn by the API with only that item's highlights: a PDF in the in-app viewer, with
  * Download under its own name (a browser tab of it would save under a made-up one), a CSV or a spreadsheet (payroll
  * details, the books' export behind an allocation worksheet) as a table in the same way; another file downloads under
- * its name.
+ * its name. Any other spreadsheet opens in the same viewer from its own bytes (an xlsx link would only download it),
+ * unless it is a personal record, which stays a download.
  */
 export function DocumentLink({
   doc,
@@ -40,10 +41,22 @@ export function DocumentLink({
   const api = useApi()
   const [error, setError] = useState<string | null>(null)
   const [viewing, setViewing] = useState(false)
-  const copy = proofOf && `/payroll/${proofOf.target}/${proofOf.id}/proof/${doc.id}`
+  const copy =
+    proofOf &&
+    (PAYROLL_DOCUMENT_KINDS as readonly string[]).includes(doc.kind) &&
+    `/payroll/${proofOf.target}/${proofOf.id}/proof/${doc.id}`
+  // Any other spreadsheet a person may open (not a record that opens only as a download): its bytes through the API,
+  // shown in the same viewer, since its link would only download it.
+  const sheet =
+    !copy &&
+    isXlsx(doc) &&
+    (doc.sensitivity !== 'personal' || doc.kind === 'paystub') &&
+    `/documents/${doc.id}/file`
+  const src = copy || sheet
   const open = async () => {
     try {
-      if (copy && (PAYROLL_DOCUMENT_KINDS as readonly string[]).includes(doc.kind)) {
+      if (sheet) return setViewing(true)
+      if (copy) {
         if (doc.contentType === 'application/pdf' || isCsv(doc) || isXlsx(doc))
           return setViewing(true)
         const bytes = await api.bytes(copy)
@@ -75,7 +88,7 @@ export function DocumentLink({
       </button>
       {error && <span className="ml-1 text-xs text-danger">{error}</span>}
       {viewing &&
-        copy &&
+        src &&
         // At the page, not inside the table cell the link sits in.
         createPortal(
           <Modal
@@ -85,11 +98,11 @@ export function DocumentLink({
           >
             <Suspense fallback={<p className="text-sm text-soft">Opening the file…</p>}>
               {isCsv(doc) ? (
-                <CsvViewer src={copy} downloadName={doc.fileName} />
+                <CsvViewer src={src} downloadName={doc.fileName} />
               ) : isXlsx(doc) ? (
-                <SheetViewer src={copy} downloadName={doc.fileName} />
+                <SheetViewer src={src} downloadName={doc.fileName} />
               ) : (
-                <StatementViewer doc={doc} src={copy} page={page} downloadName={doc.fileName} />
+                <StatementViewer doc={doc} src={src} page={page} downloadName={doc.fileName} />
               )}
             </Suspense>
           </Modal>,

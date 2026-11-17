@@ -208,6 +208,7 @@ const GATED = [
   'GET /api/documents/of-workspace/:workspaceId',
   'DELETE /api/documents/:id',
   'GET /api/documents/:id/url',
+  'GET /api/documents/:id/file',
   'PATCH /api/participants/:id',
   'DELETE /api/participants/:id',
   'PATCH /api/participants/:id/tags',

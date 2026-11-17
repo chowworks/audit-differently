@@ -601,6 +601,30 @@ describe('DocumentsService', () => {
     }
   )
 
+  it('hands a spreadsheet to the in-app viewer through the API, logged as opened; nothing else', async () => {
+    const { service: s, prisma, storage, log } = service()
+    const sheet = {
+      ...row('d-alloc', 'allocation-calculation', 'financial'),
+      fileName: 'allocation.xlsx',
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }
+    prisma.document.findFirst.mockResolvedValueOnce(sheet)
+    storage.read.mockResolvedValueOnce(Buffer.from('PK\x03\x04'))
+    expect(await s.file(member('bookkeeper'), 'd-alloc')).toEqual({
+      bytes: Buffer.from('PK\x03\x04'),
+      contentType: sheet.contentType,
+      fileName: 'allocation.xlsx',
+    })
+    expect(storage.read).toHaveBeenCalledWith(sheet.storageKey)
+    expect(log.entries.map((e) => e.description)).toEqual(['Opened an allocation worksheet'])
+    // A PDF opens from its link, and a record that opens only as a download is never handed over.
+    await expect(s.file(member('bookkeeper'), 'd-inv')).rejects.toThrow(NotFoundException)
+    await expect(s.file(member('owner'), 'd-age')).rejects.toThrow(ForbiddenException)
+    await expect(s.file(member('bookkeeper'), 'd-age')).rejects.toThrow(ForbiddenException)
+    expect(storage.read).toHaveBeenCalledTimes(1)
+    expect(log.entries).toHaveLength(1)
+  })
+
   it("holds a closed month's proof: no upload, replacement or removal; the signed report and a draft month stay open", async () => {
     const { service: s, prisma, storage, log } = service()
     const who = member('bookkeeper')
