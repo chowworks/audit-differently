@@ -63,8 +63,6 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 /** A file's name as it is kept: letters, digits and a few signs, at most 200 characters. */
 export const storedFileName = (name: string) => name.replace(/[^\w.() -]+/g, '_').slice(0, 200)
 
-const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-
 /** The first bytes each allowed type starts with; Office files are zip archives. */
 const SIGNATURES: Record<string, Buffer[]> = {
   'application/pdf': [Buffer.from('%PDF-')],
@@ -587,38 +585,35 @@ export class DocumentsService {
   }
 
   /**
-   * A short-lived link to the file. Personal documents: shorter, fewer roles, download only and logged as such, except
-   * a pay stub, which opens in the browser like the other payroll files (owner's decision, 2026-10-16).
+   * A short-lived link to the file, opened in the browser. Personal documents: shorter and fewer roles (pay stubs open to
+   * every member like the other payroll files, owner's decision, 2026-10-16); every open logged. They open like any
+   * other document (owner's decision, 2026-11-17: no forced download).
    */
   async url(caller: Caller, id: string): Promise<{ url: string; expiresInSeconds: number }> {
-    const { doc, personal, download } = await this.openable(caller, id)
+    const { doc, personal } = await this.openable(caller, id)
     const expiresInSeconds = personal ? 60 : 120
-    const url = await this.storage.getSignedUrl(
-      doc.storageKey,
-      expiresInSeconds,
-      download ? { downloadName: doc.fileName } : { inlineName: doc.fileName }
-    )
+    const url = await this.storage.getSignedUrl(doc.storageKey, expiresInSeconds, {
+      inlineName: doc.fileName,
+    })
     await this.log.log(caller, {
       workspaceId: doc.workspaceId,
       resource: 'document',
       subjectId: doc.id,
       action: 'read',
-      description: `${download ? 'Downloaded' : 'Opened'} ${describe(doc)}`,
+      description: `Opened ${describe(doc)}`,
     })
     return { url, expiresInSeconds }
   }
 
   /**
-   * A spreadsheet's bytes, through the API, for the in-app viewer: the browser cannot show an xlsx from its link, which
-   * only downloads it. Same gates as the link, and logged as opened; a record that opens only as a download is refused.
+   * A document's bytes, through the API, for the in-app viewer (PDF, image, CSV, spreadsheet or Word file): a browser
+   * shows only some of these from a link and downloads the rest. Same gates as the link, logged as opened.
    */
   async file(
     caller: Caller,
     id: string
   ): Promise<{ bytes: Uint8Array; contentType: string; fileName: string }> {
-    const { doc, download } = await this.openable(caller, id)
-    if (download) throw new ForbiddenException('This record opens as a download only')
-    if (doc.contentType !== XLSX_TYPE) throw new NotFoundException()
+    const { doc } = await this.openable(caller, id)
     const bytes = await this.storage.read(doc.storageKey)
     await this.log.log(caller, {
       workspaceId: doc.workspaceId,
@@ -630,7 +625,7 @@ export class DocumentsService {
     return { bytes, contentType: doc.contentType, fileName: doc.fileName }
   }
 
-  /** The document, if the caller may open it, and whether it opens only as a download (a personal record but a pay stub). */
+  /** The document, if the caller may open it: a personal record only by the roles its kind allows. */
   private async openable(caller: Caller, id: string) {
     const doc = await this.prisma.document.findFirst({ where: { id, ...tenantWhere(caller) } })
     if (!doc) throw new NotFoundException()
@@ -643,6 +638,6 @@ export class DocumentsService {
         )
     }
     if (!keyInWorkspace(doc)) throw new NotFoundException()
-    return { doc, personal, download: personal && doc.kind !== 'paystub' }
+    return { doc, personal }
   }
 }

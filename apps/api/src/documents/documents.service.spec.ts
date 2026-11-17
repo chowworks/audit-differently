@@ -563,7 +563,7 @@ describe('DocumentsService', () => {
     await s.url(member('owner'), 'd-age')
     await s.upload(member('owner'), file, upload('eligibility-record'))
     expect(log.entries.map((e) => e.description)).toEqual([
-      'Downloaded an eligibility record (personal)',
+      'Opened an eligibility record (personal)',
       'Uploaded an eligibility record (personal)',
     ])
     expect(JSON.stringify(log.entries)).not.toMatch(/d-age\.pdf|card\.pdf/)
@@ -587,21 +587,21 @@ describe('DocumentsService', () => {
   })
 
   it.each(['owner', 'auditor'] as Role[])(
-    'opens a personal record to an %s as a sixty-second download, and logs it as personal',
+    'opens a personal record to an %s in the browser for sixty seconds, and logs it as personal',
     async (role) => {
       const { service: s, log } = service()
       const who = member(role)
       expect(await s.url(who, 'd-age')).toEqual({
-        url: `signed:${birthCertificate.storageKey}:60:d-age.pdf`,
+        url: `signed:${birthCertificate.storageKey}:60:inline:d-age.pdf`,
         expiresInSeconds: 60,
       })
       expect(log.entries.map((e) => e.description)).toEqual([
-        'Downloaded an eligibility record (personal)',
+        'Opened an eligibility record (personal)',
       ])
     }
   )
 
-  it('hands a spreadsheet to the in-app viewer through the API, logged as opened; nothing else', async () => {
+  it("hands a document's bytes to the in-app viewer with the link's gates, logged as opened", async () => {
     const { service: s, prisma, storage, log } = service()
     const sheet = {
       ...row('d-alloc', 'allocation-calculation', 'financial'),
@@ -609,20 +609,22 @@ describe('DocumentsService', () => {
       contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     }
     prisma.document.findFirst.mockResolvedValueOnce(sheet)
-    storage.read.mockResolvedValueOnce(Buffer.from('PK\x03\x04'))
+    storage.read.mockResolvedValue(Buffer.from('PK\x03\x04'))
     expect(await s.file(member('bookkeeper'), 'd-alloc')).toEqual({
       bytes: Buffer.from('PK\x03\x04'),
       contentType: sheet.contentType,
       fileName: 'allocation.xlsx',
     })
     expect(storage.read).toHaveBeenCalledWith(sheet.storageKey)
-    expect(log.entries.map((e) => e.description)).toEqual(['Opened an allocation worksheet'])
-    // A PDF opens from its link, and a record that opens only as a download is never handed over.
-    await expect(s.file(member('bookkeeper'), 'd-inv')).rejects.toThrow(NotFoundException)
-    await expect(s.file(member('owner'), 'd-age')).rejects.toThrow(ForbiddenException)
+    // A personal record opens to an owner or auditor, never to the bookkeeper who attached it.
+    await s.file(member('auditor'), 'd-age')
     await expect(s.file(member('bookkeeper'), 'd-age')).rejects.toThrow(ForbiddenException)
-    expect(storage.read).toHaveBeenCalledTimes(1)
-    expect(log.entries).toHaveLength(1)
+    await expect(s.file(member('bookkeeper'), 'd-bad')).rejects.toThrow(NotFoundException)
+    expect(storage.read).toHaveBeenCalledTimes(2)
+    expect(log.entries.map((e) => e.description)).toEqual([
+      'Opened an allocation worksheet',
+      'Opened an eligibility record (personal)',
+    ])
   })
 
   it("holds a closed month's proof: no upload, replacement or removal; the signed report and a draft month stay open", async () => {

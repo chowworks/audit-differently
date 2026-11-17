@@ -45,6 +45,13 @@ export const payPeriodWords = (start: string, end: string) => {
 /** A payroll CSV (timesheet, register, payroll details): shown as a table in the app. */
 export const isCsv = (f: { contentType?: string; fileName: string }) =>
   /csv/i.test(f.contentType ?? '') || /\.csv$/i.test(f.fileName)
+/** A PDF, a Word file or a picture, by its type or name. */
+export const isPdf = (f: { contentType?: string; fileName: string }) =>
+  /pdf/i.test(f.contentType ?? '') || /\.pdf$/i.test(f.fileName)
+export const isDocx = (f: { contentType?: string; fileName: string }) =>
+  /wordprocessingml\.document/i.test(f.contentType ?? '') || /\.docx$/i.test(f.fileName)
+export const isImage = (f: { contentType?: string; fileName: string }) =>
+  /^image\//i.test(f.contentType ?? '') || /\.(png|jpe?g)$/i.test(f.fileName)
 /** An xlsx file, by its type or name. */
 export const isXlsx = (f: { contentType?: string; fileName: string }) =>
   /spreadsheetml\.sheet/i.test(f.contentType ?? '') || /\.xlsx$/i.test(f.fileName)

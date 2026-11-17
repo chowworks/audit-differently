@@ -83,7 +83,7 @@ export class DocumentsController {
     return this.documents.url(await this.callers.load(userId), id)
   }
 
-  /** A spreadsheet's bytes for the in-app viewer (an xlsx link only downloads), gated and logged as the link is. */
+  /** A document's bytes for the in-app viewer, gated and logged as the link is. */
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Get(':id/file')
   @UseGuards(AuthenticatedGuard)

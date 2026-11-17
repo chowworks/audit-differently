@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { DocumentDto, DocumentKind } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
 import { shortDate } from '@/lib/format'
 import { Button, ErrorNote, Field, Modal } from '@/components/ui'
 import { kindLabel } from '@/components/AttachModal'
+import { DocumentViewer, canView } from '@/components/DocumentViewer'
 
 export interface DocumentChange {
   added?: DocumentDto
@@ -47,11 +49,16 @@ export function DocumentMenuModal({
       setBusy(false)
     }
   }
+  const [viewing, setViewing] = useState(false)
+  // In the app's viewer, from the file's bytes through the API (which logs the open); a type it cannot show opens
+  // from its short-lived link.
   const open = () =>
-    run(async () => {
-      const { url } = await api.get<{ url: string }>(`/documents/${doc.id}/url`)
-      window.open(url, '_blank', 'noopener')
-    })
+    canView(doc)
+      ? setViewing(true)
+      : run(async () => {
+          const { url } = await api.get<{ url: string }>(`/documents/${doc.id}/url`)
+          window.open(url, '_blank', 'noopener')
+        })
   // One call: the new file and the old one's removal happen together, or not at all.
   const replace = () =>
     run(async () => {
@@ -117,6 +124,13 @@ export function DocumentMenuModal({
           </div>
         )}
       </div>
+      {viewing &&
+        createPortal(
+          <Modal title={doc.fileName} onClose={() => setViewing(false)} wide>
+            <DocumentViewer file={doc} doc={doc} src={`/documents/${doc.id}/file`} />
+          </Modal>,
+          document.body
+        )}
     </Modal>
   )
 }

@@ -45,7 +45,7 @@ function toMark(v: PageViewport, page: number, b: Box): StatementMark {
  * A payroll file drawn in the browser with pdf.js, from its bytes as the API serves them (which logs the read), every
  * page one under another in a pane that scrolls, opened at the marked line's page with the line highlighted. A page is
  * drawn as it comes near view. With `onDraw`, the person drags a box on a page to mark the line by hand.
- * Financial documents and pay stubs only: any other personal document is never previewed, so this shows nothing for one.
+ * Personal records too, for the people who may open them (owner's decision, 2026-11-17).
  */
 export function StatementViewer({
   doc,
@@ -74,8 +74,6 @@ export function StatementViewer({
   const [error, setError] = useState<string | null>(null)
   /** The bytes as served, kept for Download: saving them fetches nothing again, so no second open is logged. */
   const kept = useRef<Blob | null>(null)
-  // A pay stub is shown like the other payroll files (owner's decision, 2026-10-16); no other personal document is.
-  const financial = doc.sensitivity === 'financial' || doc.kind === 'paystub'
   const open = mark?.page ?? startPage
 
   // The API client through a ref: its identity changes with Clerk's user object, and fetching again would log
@@ -84,7 +82,6 @@ export function StatementViewer({
   apiRef.current = api
 
   useEffect(() => {
-    if (!financial) return
     setError(null)
     let done = false
     let loading: ReturnType<typeof getDocument> | null = null
@@ -115,7 +112,7 @@ export function StatementViewer({
       setFirst(null)
       void loading?.destroy()
     }
-  }, [doc.id, financial, src])
+  }, [doc.id, src])
 
   // Opened at the page asked for (the mark's): scrolled to its top once the pages are placed.
   useEffect(() => {
@@ -125,9 +122,6 @@ export function StatementViewer({
     )
     if (at) pane.current.scrollTop = at.offsetTop
   }, [pdf, first, open])
-
-  if (!financial)
-    return <p className="text-sm text-soft">Personal documents are never previewed.</p>
 
   return (
     <div className="ad-statement">

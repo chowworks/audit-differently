@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   MAX_WORKSPACE_PAYROLL_FILES,
@@ -130,10 +130,7 @@ import {
   inputClass,
 } from '@/components/ui'
 
-/** pdf.js is large: it loads when a copy is first shown. */
-const StatementViewer = lazy(() =>
-  import('@/components/StatementViewer').then((m) => ({ default: m.StatementViewer }))
-)
+import { DocumentViewer } from '@/components/DocumentViewer'
 
 /** The proof each person-pay is, on an item: a register its register, a pay stub a participant's pay, a bank line a staff line's. */
 const PAY_SLOT: Record<PayLineKind, PayrollSlot> = {
@@ -2010,20 +2007,18 @@ function WorkspaceMatch({
         )}
         {viewing && (
           <Modal title={viewing.title} onClose={() => setViewing(null)} wide>
-            <Suspense fallback={<p className="text-sm text-soft">Opening the file…</p>}>
-              <StatementViewer
-                doc={{
-                  id: viewing.src,
-                  sensitivity: viewing.personal ? 'personal' : 'financial',
-                  // A pay stub opens here like the other payroll files (owner's decision, 2026-10-16).
-                  kind: viewing.personal ? 'paystub' : undefined,
-                }}
-                src={viewing.src}
-                page={viewing.page}
-                mark={viewing.mark ?? undefined}
-                downloadName={viewing.fileName}
-              />
-            </Suspense>
+            <DocumentViewer
+              file={{ fileName: viewing.fileName ?? '' }}
+              doc={{
+                id: viewing.src,
+                sensitivity: viewing.personal ? 'personal' : 'financial',
+                // A pay stub opens here like the other payroll files (owner's decision, 2026-10-16).
+                kind: viewing.personal ? 'paystub' : undefined,
+              }}
+              src={viewing.src}
+              page={viewing.page}
+              mark={viewing.mark ?? undefined}
+            />
           </Modal>
         )}
       </Card>

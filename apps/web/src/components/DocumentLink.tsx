@@ -1,28 +1,15 @@
-import { Suspense, lazy, useState } from 'react'
+import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { DOCUMENT_KIND_LABELS, PAYROLL_DOCUMENT_KINDS, type DocumentDto } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
-import { isCsv, isXlsx } from '@/lib/format'
 import { Modal } from '@/components/ui'
-
-/** pdf.js is large: it loads when a proof is first shown. */
-const StatementViewer = lazy(() =>
-  import('@/components/StatementViewer').then((m) => ({ default: m.StatementViewer }))
-)
-const CsvViewer = lazy(() =>
-  import('@/components/CsvViewer').then((m) => ({ default: m.CsvViewer }))
-)
-const SheetViewer = lazy(() =>
-  import('@/components/SheetViewer').then((m) => ({ default: m.SheetViewer }))
-)
+import { DocumentViewer, canView } from '@/components/DocumentViewer'
 
 /**
- * Opens a document through a short-lived link from the API (which logs the read). With `proofOf`, a payroll proof opens
- * as that item's own copy instead, drawn by the API with only that item's highlights: a PDF in the in-app viewer, with
- * Download under its own name (a browser tab of it would save under a made-up one), a CSV or a spreadsheet (payroll
- * details, the books' export behind an allocation worksheet) as a table in the same way; another file downloads under
- * its name. Any other spreadsheet opens in the same viewer from its own bytes (an xlsx link would only download it),
- * unless it is a personal record, which stays a download.
+ * Opens a document in the app's viewer (PDF, picture, CSV, spreadsheet or Word file), from its bytes through the API,
+ * which logs the open. With `proofOf`, a payroll proof opens as that item's own copy instead, drawn by the API with only
+ * that item's highlights. Every viewer has Download under the file's own name. A type the app cannot show opens from
+ * its short-lived link.
  */
 export function DocumentLink({
   doc,
@@ -45,31 +32,9 @@ export function DocumentLink({
     proofOf &&
     (PAYROLL_DOCUMENT_KINDS as readonly string[]).includes(doc.kind) &&
     `/payroll/${proofOf.target}/${proofOf.id}/proof/${doc.id}`
-  // Any other spreadsheet a person may open (not a record that opens only as a download): its bytes through the API,
-  // shown in the same viewer, since its link would only download it.
-  const sheet =
-    !copy &&
-    isXlsx(doc) &&
-    (doc.sensitivity !== 'personal' || doc.kind === 'paystub') &&
-    `/documents/${doc.id}/file`
-  const src = copy || sheet
   const open = async () => {
+    if (canView(doc)) return setViewing(true)
     try {
-      if (sheet) return setViewing(true)
-      if (copy) {
-        if (doc.contentType === 'application/pdf' || isCsv(doc) || isXlsx(doc))
-          return setViewing(true)
-        const bytes = await api.bytes(copy)
-        const url = URL.createObjectURL(new Blob([bytes], { type: doc.contentType }))
-        const a = document.createElement('a')
-        a.href = url
-        a.download = doc.fileName
-        document.body.appendChild(a)
-        a.click()
-        a.remove()
-        setTimeout(() => URL.revokeObjectURL(url), 10_000)
-        return
-      }
       const { url } = await api.get<{ url: string }>(`/documents/${doc.id}/url`)
       window.open(url, '_blank', 'noopener')
     } catch (e) {
@@ -82,13 +47,12 @@ export function DocumentLink({
         type="button"
         onClick={open}
         className={`cursor-pointer border-0 bg-transparent p-0 font-semibold text-accent hover:underline ${className}`}
-        title={`${DOCUMENT_KIND_LABELS[doc.kind]} · ${doc.fileName}${doc.sensitivity === 'personal' ? ' · personal: download only, logged' : ''}`}
+        title={`${DOCUMENT_KIND_LABELS[doc.kind]} · ${doc.fileName}${doc.sensitivity === 'personal' ? ' · personal: every read logged' : ''}`}
       >
         {children ?? doc.fileName}
       </button>
       {error && <span className="ml-1 text-xs text-danger">{error}</span>}
       {viewing &&
-        src &&
         // At the page, not inside the table cell the link sits in.
         createPortal(
           <Modal
@@ -96,15 +60,12 @@ export function DocumentLink({
             onClose={() => setViewing(false)}
             wide
           >
-            <Suspense fallback={<p className="text-sm text-soft">Opening the file…</p>}>
-              {isCsv(doc) ? (
-                <CsvViewer src={src} downloadName={doc.fileName} />
-              ) : isXlsx(doc) ? (
-                <SheetViewer src={src} downloadName={doc.fileName} />
-              ) : (
-                <StatementViewer doc={doc} src={src} page={page} downloadName={doc.fileName} />
-              )}
-            </Suspense>
+            <DocumentViewer
+              file={doc}
+              doc={doc}
+              src={copy || `/documents/${doc.id}/file`}
+              page={page}
+            />
           </Modal>,
           document.body
         )}
