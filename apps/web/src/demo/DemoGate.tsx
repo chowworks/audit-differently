@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { ApiError, apiFetch } from '@/services/api'
 import { ErrorNote, Field, inputClass } from '@/components/ui'
 import { ORG } from './data'
-import { Tagline } from './TaglineSwitch'
 
 /**
  * The demo's sign-up. A visitor leaves their name, work email, organization and role, sent to the team as a
@@ -105,7 +104,7 @@ export function DemoGate({ onUnlock }: { onUnlock: () => void }) {
         <div className="addm-gate-pitch">
           <p className="addm-eyebrow addm-eyebrow-light">Interactive demo · 5 minutes</p>
           <h1>
-            <Tagline />
+            Every dollar, accounted for. Every grant, on track. <span>Always audit-ready.</span>
           </h1>
           <p>
             Walk one month at {ORG}, a fictional training provider: the approved budget, the month’s

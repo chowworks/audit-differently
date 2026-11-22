@@ -1603,34 +1603,3 @@
 .addm-pace-row .addm-chip {
   justify-self: end;
 }
-
-/* DESIGN EXPERIMENT (review only): the tagline switch, TaglineSwitch.tsx. Delete with it. */
-.addm-review {
-  position: fixed;
-  bottom: 16px;
-  left: 16px;
-  z-index: 50;
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  padding: 6px;
-  border-radius: 999px;
-  background: #b7791f;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 800;
-  box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
-}
-.addm-review span {
-  padding: 0 6px;
-}
-.addm-review a {
-  padding: 4px 10px;
-  border-radius: 999px;
-  color: #fff;
-  text-decoration: none;
-}
-.addm-review a.addm-review-on {
-  background: #fff;
-  color: #b7791f;
-}

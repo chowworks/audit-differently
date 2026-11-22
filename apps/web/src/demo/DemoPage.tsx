@@ -3,7 +3,6 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Mark } from '@/components/Mark'
 import { SiteFooter } from '@/components/SiteFooter'
 import { DemoGate, isUnlocked } from './DemoGate'
-import { Tagline, TaglineSwitch } from './TaglineSwitch'
 import { FUNDER, GRANT, ORG, PEOPLE, type PersonKey } from './data'
 import {
   AuditScene,
@@ -119,27 +118,27 @@ const STEPS: Step[] = [
 const PROPS = [
   {
     icon: '🧭',
-    title: 'Accountable from the start',
+    title: 'Accountable from the first dollar.',
     text: 'Every dollar is held against an approved budget line from day one, with its proof beside it.',
   },
   {
     icon: '📈',
-    title: 'Forecasting',
+    title: 'See where every grant is headed, not just where it’s been.',
     text: 'See the share of each line spent, and whether it is on track or heading over, months before it is.',
   },
   {
     icon: '🗂',
-    title: 'Audit-ready, in one place',
+    title: 'Every record, every proof, one place.',
     text: 'Records, proof, payroll and participant files together, and one number that says how ready you are.',
   },
   {
     icon: '⏱',
-    title: 'Less time, more accuracy',
+    title: 'Less work. Fewer mistakes. Same month.',
     text: 'Upload what your books and payroll already produce. The matching and checking happen for you.',
   },
   {
     icon: '🛡',
-    title: 'An allowable-cost guardrail',
+    title: 'Guardrails, not guesswork.',
     text: 'Charges the federal cost principles don’t allow are caught before they reach a report.',
   },
 ]
@@ -201,7 +200,6 @@ export function DemoPage() {
         )}
       </main>
       <SiteFooter />
-      <TaglineSwitch />
     </div>
   )
 }
@@ -218,7 +216,8 @@ function Landing({ go }: { go: (n: number) => void }) {
               {ORG} · {GRANT}
             </p>
             <h1 className="addm-title">
-              <Tagline endClass="addm-title-2" />
+              Every dollar, accounted for. Every grant, on track.{' '}
+              <span className="addm-title-2">Always audit-ready.</span>
             </h1>
             <p className="addm-lede">
               Follow one month at a fictional training provider funded by the {FUNDER}: from the
