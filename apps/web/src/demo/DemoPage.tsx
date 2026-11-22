@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Mark } from '@/components/Mark'
 import { SiteFooter } from '@/components/SiteFooter'
 import { DemoGate, isUnlocked } from './DemoGate'
+import { Tagline, TaglineSwitch } from './TaglineSwitch'
 import { FUNDER, GRANT, ORG, PEOPLE, type PersonKey } from './data'
 import {
   AuditScene,
@@ -200,6 +201,7 @@ export function DemoPage() {
         )}
       </main>
       <SiteFooter />
+      <TaglineSwitch />
     </div>
   )
 }
@@ -216,8 +218,7 @@ function Landing({ go }: { go: (n: number) => void }) {
               {ORG} · {GRANT}
             </p>
             <h1 className="addm-title">
-              You do your books. Upload the reports.{' '}
-              <span className="addm-title-2">The magic happens.</span>
+              <Tagline endClass="addm-title-2" />
             </h1>
             <p className="addm-lede">
               Follow one month at a fictional training provider funded by the {FUNDER}: from the
