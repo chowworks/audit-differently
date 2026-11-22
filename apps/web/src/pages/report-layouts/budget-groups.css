@@ -1,0 +1,66 @@
+/* A budget line's heading in Expenses & Proof and Payroll & Proof (budget-groups.tsx). */
+.ad-table tr.rl-bl-head {
+  cursor: pointer;
+}
+.ad-table tr.rl-bl-head td {
+  background: var(--tint);
+  border-top: 2px solid var(--line);
+  border-left: 4px solid var(--navy);
+  padding-left: 10px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.rl-bl-caret {
+  display: inline-block;
+  width: 20px;
+  font-size: 16px;
+  color: var(--ink);
+}
+.rl-bl-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-right: 12px;
+}
+.rl-bl-meta {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+}
+/* "Needs a budget line": it blocks the month, so it shows red. */
+.ad-table tr.rl-bl-none td {
+  background: var(--danger-tint);
+  border-left-color: var(--danger);
+}
+.ad-table tr.rl-bl-none .rl-bl-name {
+  color: var(--danger);
+}
+/* A line's rows start where its name does, under the caret's right (owner's request, 2026-11-17). */
+.ad-table tr.rl-bl-head ~ tr:not(.rl-bl-head):not(.wpd-group):not(.wpd-fold) > td:first-child,
+.ad-table:has(tr.rl-bl-head) thead th:first-child {
+  padding-left: 34px;
+}
+/* Inside an engagement group on Month End Close: the heading indented under the engagement's, its rows under it. */
+.wpd-recgrid tr.rl-bl-head td:first-child {
+  padding-left: 28px;
+}
+.wpd-recgrid tr.rl-bl-head ~ tr:not(.rl-bl-head):not(.wpd-group):not(.wpd-fold) > td:first-child,
+.wpd-recgrid:has(tr.rl-bl-head) thead th:first-child {
+  padding-left: 52px;
+}
+/* What is on no engagement yet has no budget lines: its rows are not indented (it is always the last group). */
+.wpd-recgrid tr.wpd-group-none ~ tr > td:first-child {
+  padding-left: 0;
+}
+/* Under an engagement's heading the line's heading reads as the smaller of the two. */
+.wpd-recgrid .rl-bl-name,
+.wpd-recgrid .rl-bl-caret {
+  font-size: 14px;
+}
+.wpd-recgrid .rl-bl-meta {
+  font-size: 13px;
+}
+.wpd-recgrid tr.rl-bl-head td {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}

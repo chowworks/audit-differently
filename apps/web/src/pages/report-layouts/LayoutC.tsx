@@ -34,6 +34,7 @@ import {
   useOpenChecks,
   type PayRow,
 } from './proof-rows'
+import { LineSections, lineGroups } from './budget-groups'
 import { FIELD_WORDS, FilterBar, searchOf, type FieldChoices, type FilterToken } from './FilterBar'
 import {
   MonthHead,
@@ -842,6 +843,19 @@ function ExpensesSection({
   }
   const addProof = (e: ExpenseDto, purpose: DocumentPurpose) =>
     purpose === 'invoice' && unmatched > 0 ? openReceipts() : act.attach(e, purpose)
+  const expenseRow = (e: ExpenseDto) => (
+    <ExpenseRow
+      key={e.id}
+      r={r}
+      e={e}
+      checksOpen={quickOpensChecks(quick) || openChecks.has(e.id)}
+      onToggleChecks={() => toggleChecks(e.id)}
+      onAdd={(purpose) => addProof(e, purpose)}
+      act={act}
+      actions={r.can.edit}
+      highlight={highlight === e.id}
+    />
+  )
 
   return (
     <Card
@@ -937,19 +951,15 @@ function ExpensesSection({
               <ExpenseHead actions={r.can.edit} />
             </thead>
             <tbody>
-              {rows.map((e) => (
-                <ExpenseRow
-                  key={e.id}
-                  r={r}
-                  e={e}
-                  checksOpen={quickOpensChecks(quick) || openChecks.has(e.id)}
-                  onToggleChecks={() => toggleChecks(e.id)}
-                  onAdd={(purpose) => addProof(e, purpose)}
-                  act={act}
-                  actions={r.can.edit}
-                  highlight={highlight === e.id}
-                />
-              ))}
+              <LineSections
+                groups={lineGroups(r, rows, all, lineKey)}
+                columns={r.can.edit ? 7 : 6}
+                noun={['expense', 'expenses']}
+                amountOf={(e) => e.allocatedAmount}
+                provedOf={(e) => missingOf(requiredPurposes(e), e.documents).length === 0}
+                rowKey={(e) => e.id}
+                render={expenseRow}
+              />
             </tbody>
           </table>
         </div>
@@ -1057,6 +1067,18 @@ function PayrollSection({
     (row) => missingOf(facts(row).needed, facts(row).docs).length > 0
   ).length
   const addProof = (row: PayRow, purpose: DocumentPurpose) => addPayrollProof(r, act, row, purpose)
+  const payrollRow = (row: PayRow) => (
+    <PayrollRow
+      key={row.id}
+      r={r}
+      row={row}
+      checksOpen={quickOpensChecks(quick) || openChecks.has(row.id)}
+      onToggleChecks={() => toggleChecks(row.id)}
+      onAdd={(purpose) => addProof(row, purpose)}
+      act={act}
+      actions={r.can.edit}
+    />
+  )
 
   return (
     <Card
@@ -1126,18 +1148,17 @@ function PayrollSection({
               <PayrollHead actions={r.can.edit} />
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <PayrollRow
-                  key={row.id}
-                  r={r}
-                  row={row}
-                  checksOpen={quickOpensChecks(quick) || openChecks.has(row.id)}
-                  onToggleChecks={() => toggleChecks(row.id)}
-                  onAdd={(purpose) => addProof(row, purpose)}
-                  act={act}
-                  actions={r.can.edit}
-                />
-              ))}
+              <LineSections
+                groups={lineGroups(r, rows, all, (row) => facts(row).line)}
+                columns={r.can.edit ? 5 : 4}
+                noun={['payroll row', 'payroll rows']}
+                amountOf={(row) =>
+                  row.kind === 'expense' ? row.e.allocatedAmount : row.w.grossAmount
+                }
+                provedOf={(row) => missingOf(facts(row).needed, facts(row).docs).length === 0}
+                rowKey={(row) => row.id}
+                render={payrollRow}
+              />
             </tbody>
           </table>
         </div>
