@@ -16,6 +16,7 @@ import { NewEngagementPage } from '@/pages/NewEngagementPage'
 import { ReportPage } from '@/pages/ReportPage'
 import { ReportFormPage } from '@/pages/ReportFormPage'
 import { HomePage } from '@/home/HomePage'
+import { DemoPage } from '@/demo/DemoPage'
 import { ContactPage } from '@/pages/ContactPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { AdminPage } from '@/pages/AdminPage'
@@ -67,6 +68,8 @@ export default function App() {
   if (!session.ready) return <Empty>Loading…</Empty>
   // The public homepage is / for everyone, outside the app's frame; the app starts at /overview.
   if (pathname === '/') return <HomePage />
+  // The interactive demo: public marketing, behind its own sign-up, signed in or out.
+  if (pathname === '/demo') return <DemoPage />
   if (pathname === '/home') return <Navigate to="/" replace />
   if (!session.signedIn) {
     return (

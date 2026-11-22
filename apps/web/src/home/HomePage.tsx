@@ -65,6 +65,9 @@ export function HomePage() {
               <li>
                 <a href="#security">Security</a>
               </li>
+              <li>
+                <Link to="/demo">Demo</Link>
+              </li>
             </ul>
           </nav>
           <div className="adh-head-actions">
@@ -108,8 +111,8 @@ function Hero() {
             <a href="#story" className="ad-btn adh-btn-lg">
               ▶ Watch the story
             </a>
-            <Link to="/contact?topic=demo" className="ad-btn-secondary adh-btn-lg">
-              Book a demo
+            <Link to="/demo" className="ad-btn-secondary adh-btn-lg">
+              Try the interactive demo
             </Link>
           </div>
         </div>
