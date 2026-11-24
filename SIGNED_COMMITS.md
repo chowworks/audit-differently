@@ -71,7 +71,7 @@ Wrong or unverified email = commit shows "Unverified" even when signed.
 git config --global gpg.ssh.program "C:/Windows/System32/OpenSSH/ssh-keygen.exe"
 ```
 
-## 4. Add the key to GitHub as a *signing* key
+## 4. Add the key to GitHub as a _signing_ key
 
 This is the step people miss. An authentication key does **not** sign.
 
@@ -113,16 +113,16 @@ This rewrites your own branch's commits. Do it only on a branch you alone work o
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| `Merging is blocked` persists after push | Old commits still unsigned | Rebase command above |
-| Badge says **Unverified** | Key not added as *Signing Key*, or commit email not verified on GitHub | Step 4; check `git config user.email` |
-| `error: Load key ... incorrect passphrase` / `agent refused operation` | Key not in agent | `ssh-add` (step 2) |
-| `Couldn't load public key` | `user.signingkey` path wrong | Point it at the `.pub` file |
-| Mac asks passphrase every time | Not stored in Keychain | `ssh-add --apple-use-keychain ...` |
-| Windows: `unable to start ssh-keygen` | Git can't find OpenSSH | `gpg.ssh.program` line in step 3 |
-| Commits made in GitHub's web editor | GitHub signs these itself | Nothing to do |
-| Another repo shouldn't sign | Global setting applies everywhere | `git config commit.gpgsign false` inside that repo |
+| Symptom                                                                | Cause                                                                  | Fix                                                |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------- |
+| `Merging is blocked` persists after push                               | Old commits still unsigned                                             | Rebase command above                               |
+| Badge says **Unverified**                                              | Key not added as _Signing Key_, or commit email not verified on GitHub | Step 4; check `git config user.email`              |
+| `error: Load key ... incorrect passphrase` / `agent refused operation` | Key not in agent                                                       | `ssh-add` (step 2)                                 |
+| `Couldn't load public key`                                             | `user.signingkey` path wrong                                           | Point it at the `.pub` file                        |
+| Mac asks passphrase every time                                         | Not stored in Keychain                                                 | `ssh-add --apple-use-keychain ...`                 |
+| Windows: `unable to start ssh-keygen`                                  | Git can't find OpenSSH                                                 | `gpg.ssh.program` line in step 3                   |
+| Commits made in GitHub's web editor                                    | GitHub signs these itself                                              | Nothing to do                                      |
+| Another repo shouldn't sign                                            | Global setting applies everywhere                                      | `git config commit.gpgsign false` inside that repo |
 
 ## Prefer GPG?
 
