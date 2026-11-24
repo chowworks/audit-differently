@@ -65,11 +65,13 @@ git config --global user.email
 
 Wrong or unverified email = commit shows "Unverified" even when signed.
 
-**Windows only:** if signing fails with `error: unable to start ssh-keygen` or similar, point Git at Windows' OpenSSH:
+**Windows only, do this too:** Git for Windows bundles its own `ssh-keygen`, which can't use the key you loaded into Windows' separate `ssh-agent` in step 2. Point Git at Windows' OpenSSH so both match:
 
 ```powershell
 git config --global gpg.ssh.program "C:/Windows/System32/OpenSSH/ssh-keygen.exe"
 ```
+
+Skipping this shows up as signing failing (`error: unable to start ssh-keygen`, or `incorrect passphrase` / `agent refused operation`) even though the key is loaded.
 
 ## 4. Add the key to GitHub as a _signing_ key
 
@@ -85,19 +87,37 @@ If you already added the same key as an Authentication key, add it again as a Si
 
 ## 5. Check it works
 
+Do this on a throwaway branch with a clean working tree (`git status` shows nothing). `--allow-empty` still commits anything you have staged, so don't test with work in progress.
+
 ```sh
+git switch -c test-signing
 git commit --allow-empty -m "test signing"
 git log --show-signature -1
 ```
 
 Locally, `git log --show-signature` may say `No signature` / `gpg.ssh.allowedSignersFile needs to be configured`. That is a local-only check. To fix it:
 
+**Mac, or Git Bash on Windows:**
+
 ```sh
 echo "your-github-email@example.com $(cat ~/.ssh/id_ed25519.pub)" > ~/.ssh/allowed_signers
 git config --global gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
 ```
 
-The real test: push a branch, open the commit on GitHub. A green **Verified** badge = done. Drop the test commit (`git reset --hard HEAD~1`) before pushing real work.
+**Windows PowerShell** (its `>` writes UTF-16, which OpenSSH can't read, so set the encoding):
+
+```powershell
+"your-github-email@example.com $(Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub)" | Set-Content -Encoding ascii $env:USERPROFILE\.ssh\allowed_signers
+git config --global gpg.ssh.allowedSignersFile "$env:USERPROFILE/.ssh/allowed_signers"
+```
+
+The real test: push the branch (`git push -u origin test-signing`), open the commit on GitHub. A green **Verified** badge = done. Then clean up. This removes the test commit and keeps any edits:
+
+```sh
+git switch -
+git branch -D test-signing
+git push origin --delete test-signing
+```
 
 ## Already blocked? Sign the commits you already made
 
