@@ -738,7 +738,6 @@ export interface EngagementSummary {
 }
 
 export interface EngagementDetail extends EngagementSummary {
-  funderContact: string | null
   solicitation: string | null
   proposalSubmittedOn: string | null
   awardedOn: string | null
@@ -769,6 +768,8 @@ export interface EngagementDetail extends EngagementSummary {
     /** Charged to it to date, every month together. */
     spent: number
   }[]
+  /** The award's contacts at the funder and partner organizations (G-09); several per award. */
+  contacts: EngagementContact[]
   /** Names used for budget lines in the workspace's other engagements (and its old list), to suggest when adding one. */
   budgetNameSuggestions: string[]
   /** Every tag type of the workspace, for tagging the engagement and its participants. */
@@ -785,7 +786,6 @@ export interface EngagementInput {
   name: string
   tracks?: EngagementTrack[]
   funder?: string | null
-  funderContact?: string | null
   solicitation?: string | null
   requestedAmount?: number | null
   /** YYYY-MM-DD */
@@ -808,6 +808,30 @@ export interface EngagementInput {
   authorizerName?: string | null
   authorizerOrganization?: string | null
   eligibilityItems?: EligibilityItemDef[]
+}
+
+/** A contact on an award (G-09): someone at the funder or a partner organization the team may reach. */
+export interface EngagementContact {
+  id: string
+  /** Who they are. Required. */
+  name: string
+  /** The funder or partner they work for. */
+  organization: string | null
+  jobTitle: string | null
+  email: string | null
+  phone: string | null
+}
+
+/**
+ * A new or changed award contact. Name is required, and at least one of email or phone, so a saved contact can
+ * always be reached.
+ */
+export interface EngagementContactInput {
+  name: string
+  organization?: string | null
+  jobTitle?: string | null
+  email?: string | null
+  phone?: string | null
 }
 
 /** A workspace: the team's container for its engagements, people and lists. */

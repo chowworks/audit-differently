@@ -67,6 +67,12 @@ suite('tenant isolation', () => {
         number: `N-${w}`,
       })
       await insert(db, 'BudgetLine', { id: `BL-${w}`, engagementId: `E-${w}`, name: 'WEX' })
+      await insert(db, 'EngagementContact', {
+        id: `EC-${w}`,
+        engagementId: `E-${w}`,
+        name: 'Dana Rivers',
+        email: `grants@${w}.example.org`,
+      })
       await insert(db, 'MonthlyReport', { id: `R-${w}`, engagementId: `E-${w}`, period: '2026-07' })
       await insert(db, 'Expense', {
         id: `X-${w}`,
@@ -147,6 +153,7 @@ suite('tenant isolation', () => {
         )
       for (const [table, id] of [
         ['BudgetLine', 'BL-W1'],
+        ['EngagementContact', 'EC-W1'],
         ['MonthlyReport', 'R-W1'],
         ['Expense', 'X-W1'],
         ['ExpenseDocument', 'X-W1'],
@@ -250,6 +257,7 @@ suite('tenant isolation', () => {
         expect(await ids('Workspace')).toEqual(['W1'])
         expect(await ids('Engagement')).toEqual(['E-W1'])
         expect(await ids('BudgetLine')).toEqual(['BL-W1'])
+        expect(await ids('EngagementContact')).toEqual(['EC-W1'])
         expect(await ids('MonthlyReport')).toEqual(['R-W1'])
         expect(await ids('Expense')).toEqual(['X-W1'])
         expect(await ids('Document')).toEqual(['D-W1'])
@@ -1738,6 +1746,7 @@ suite('tenant isolation', () => {
     const RECORD_TABLES = [
       'Engagement',
       'BudgetLine',
+      'EngagementContact',
       'MonthlyReport',
       'Expense',
       'Document',
@@ -2022,6 +2031,7 @@ suite('tenant isolation', () => {
       const rows: Record<string, Record<string, string>> = {
         Engagement: { workspaceId: 'W1', name: 'p', number: 'N-adm' },
         BudgetLine: { engagementId: 'E-W1', name: 'WEX' },
+        EngagementContact: { engagementId: 'E-W1', name: 'Dana Rivers' },
         MonthlyReport: { engagementId: 'E-W1', period: '2026-09' },
         Expense: {
           engagementId: 'E-W1',
@@ -2381,6 +2391,7 @@ suite('tenant isolation', () => {
               number: 'D',
             })
             await insert(db, 'BudgetLine', { engagementId: 'E-del', name: 'WEX' })
+            await insert(db, 'EngagementContact', { engagementId: 'E-del', name: 'Dana Rivers' })
             await insert(db, 'MonthlyReport', {
               id: 'R-del',
               engagementId: 'E-del',
@@ -2438,6 +2449,7 @@ suite('tenant isolation', () => {
           await asOwner(async () => {
             for (const [t, left] of [
               ['BudgetLine', ['BL-W1', 'BL-W2']],
+              ['EngagementContact', ['EC-W1', 'EC-W2']],
               ['MonthlyReport', ['R-W1', 'R-W2']],
               ['Expense', ['X-W1', 'X-W2']],
               ['WexPayment', ['WX-W1', 'WX-W2']],

@@ -125,7 +125,6 @@ export function NewEngagementPage() {
     name: '',
     solicitation: '',
     funder: '',
-    funderContact: '',
     tags: [],
     requestedAmount: null,
     proposalSubmittedOn: '',
@@ -240,13 +239,6 @@ export function NewEngagementPage() {
           className={inputClass}
           value={form.funder ?? ''}
           onChange={(e) => set('funder', e.target.value)}
-        />
-      </Field>
-      <Field label="Funding organization contact" hint="A name or email there">
-        <input
-          className={inputClass}
-          value={form.funderContact ?? ''}
-          onChange={(e) => set('funderContact', e.target.value)}
         />
       </Field>
       <div className="ad-field sm:col-span-2">

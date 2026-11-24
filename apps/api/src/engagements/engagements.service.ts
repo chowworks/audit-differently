@@ -70,7 +70,6 @@ const ENGAGEMENT_FIELDS: Fields = {
   status: { label: 'Status', show: 'text', labels: STATUS_WORDS },
   tracks: { label: 'Records kept', show: 'list', labels: ENGAGEMENT_TRACK_LABELS },
   funder: { label: 'Funding organization', show: 'text' },
-  funderContact: { label: 'Funding organization contact' },
   solicitation: { label: 'Proposal name', show: 'text' },
   number: { label: 'Contract number', show: 'text' },
   code: { label: 'Engagement code', show: 'text' },
@@ -247,6 +246,7 @@ export class EngagementsService {
           include: { documents: { include: { document: true } } },
           orderBy: { displayName: 'asc' },
         },
+        contacts: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] },
       },
     })
     if (!c) throw new NotFoundException()
@@ -302,7 +302,6 @@ export class EngagementsService {
     )
     return {
       ...this.summary(c),
-      funderContact: c.funderContact,
       solicitation: c.solicitation,
       proposalSubmittedOn: c.proposalSubmittedOn ? iso(c.proposalSubmittedOn) : null,
       awardedOn: c.awardedOn ? iso(c.awardedOn) : null,
@@ -325,6 +324,14 @@ export class EngagementsService {
         payroll: b.payroll as PayrollBudgetKind[],
         hasSpending: b._count.expenses > 0,
         spent: spentByLine.get(b.id) ?? 0,
+      })),
+      contacts: c.contacts.map((ct) => ({
+        id: ct.id,
+        name: ct.name,
+        organization: ct.organization,
+        jobTitle: ct.jobTitle,
+        email: ct.email,
+        phone: ct.phone,
       })),
       budgetNameSuggestions: suggestions,
       tagTypes: allTagTypes(c.workspace),
@@ -358,7 +365,6 @@ export class EngagementsService {
     const text = (
       k:
         | 'funder'
-        | 'funderContact'
         | 'solicitation'
         | 'number'
         | 'indirectTerms'
@@ -372,7 +378,6 @@ export class EngagementsService {
       if (has(k)) out[k] = input[k]?.trim() || null
     }
     text('funder')
-    text('funderContact')
     text('solicitation')
     text('number')
     if (has('code')) {

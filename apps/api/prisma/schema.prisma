@@ -158,7 +158,6 @@ model Engagement {
   kind                   String            @default("grant") // ENGAGEMENT_KINDS in packages/types
   name                   String // the program or project, as the team calls it
   funder                 String? // who awards and audits it, e.g. a state workforce board
-  funderContact          String? // the funder's contact for this engagement, as written on the award letter
   solicitation           String? // the request for proposals this answered, by name or number
   requestedAmount        Decimal?          @db.Decimal(12, 2)
   proposalSubmittedOn    DateTime?
@@ -196,6 +195,7 @@ model Engagement {
   updatedAt              DateTime          @updatedAt
   workspace              Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   budgetLines            BudgetLine[]
+  contacts               EngagementContact[]
   monthlyReports         MonthlyReport[]
   expenses               Expense[]
   participants           Participant[]
@@ -226,6 +226,25 @@ model BudgetLine {
   expenses     Expense[]
 
   @@index([workspaceId])
+}
+
+/// A contact on an award (G-09, issue #94): someone at the funder or a partner the team may reach.
+model EngagementContact {
+  id           String     @id @default(uuid())
+  workspaceId  String? // set by trigger
+  engagementId String
+  name         String // who they are
+  organization String? // the funder or partner they work for
+  jobTitle     String?
+  email        String?
+  phone        String?
+  sortOrder    Int        @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  engagement   Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([engagementId])
 }
 
 // ── Monthly reports and expenses ────────────────────────────────────────────

@@ -39,6 +39,7 @@ import { AttachModal } from '@/components/AttachModal'
 import { AddParticipantModal } from '@/components/AddParticipantModal'
 import { BudgetLineModal, recheckNotice } from '@/components/BudgetLineModal'
 import { BudgetSummary, ManageBudgetModal } from '@/components/BudgetSummary'
+import { ContactsCard } from '@/components/ContactsCard'
 import { ImportTransactionsModal } from '@/components/ImportTransactionsModal'
 import { DocumentMenuModal } from '@/components/DocumentMenuModal'
 import { EditEngagementModal } from '@/components/EditEngagementModal'
@@ -487,6 +488,7 @@ export function EngagementPage() {
         <div className="grid content-start gap-4 lg:sticky lg:top-4 lg:col-span-1 lg:self-start">
           {hand}
           {thisMonth}
+          <ContactsCard c={c} onChanged={setData} />
         </div>
       </div>
 
