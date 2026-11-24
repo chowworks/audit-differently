@@ -1,0 +1,60 @@
+name: Dev PR alerts
+
+# Posts new pull requests to a Google Chat space through an incoming webhook (repository secret
+# GOOGLE_CHAT_WEBHOOK). Kept out of ci.yml so it never queues behind or adds runs to the pipeline.
+#
+# pull_request_target, not pull_request: it runs in the base repository's context, so pull requests from forks
+# get the secret too. That is safe only because this workflow never checks out or runs the pull request's code.
+# Keep it that way: no actions/checkout, no scripts from the repo.
+on:
+  pull_request_target:
+    branches: [main, develop]
+    types: [opened, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  notify-google-chat:
+    name: Notify Google Chat of new PR
+    # Drafts are announced when marked ready, not when opened.
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # PR text is untrusted, so it reaches the shell only through env and jq, never inline ${{ }} in run.
+      # Without the secret the step prints that it skipped and exits 0.
+      - name: Post to Google Chat
+        # A Chat outage shouldn't put a red X on every new PR.
+        continue-on-error: true
+        env:
+          WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
+          ACTION: ${{ github.event.action }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          URL: ${{ github.event.pull_request.html_url }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          HEAD: ${{ github.event.pull_request.head.label }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "GOOGLE_CHAT_WEBHOOK is not set; skipping."
+            exit 0
+          fi
+          case "$ACTION" in
+            reopened) verb="Reopened" ;;
+            ready_for_review) verb="Ready for review" ;;
+            *) verb="New" ;;
+          esac
+          # Chat reads <...> as markup (<users/all> pings the whole space, <url|label> is a disguised link),
+          # and the PR author controls these. jq escapes JSON, not Chat markup, so drop the brackets.
+          TITLE=${TITLE//[<>]/}
+          HEAD=${HEAD//[<>]/}
+          AUTHOR=${AUTHOR//[<>]/}
+          jq -n \
+            --arg text "🔀 ${verb} PR #${NUMBER} by ${AUTHOR}: *${TITLE}*
+          ${HEAD} → ${BASE}
+          ${URL}" \
+            '{text: $text}' \
+          | curl -fsS --max-time 15 -X POST \
+              -H 'Content-Type: application/json; charset=UTF-8' \
+              --data @- "$WEBHOOK"
