@@ -1,0 +1,19 @@
+# Files whose change needs the owner's review before merge (ruleset "Main"
+# requires code owner review). Everything else needs any one approval.
+
+# CI, deploy and monitoring: a change here can weaken the checks or reach production
+/.github/            @ludakhris
+/.railway/           @ludakhris
+/ops/                @ludakhris
+/apps/web/vercel.json @ludakhris
+/apps/api/scripts/   @ludakhris
+
+# Tenant isolation, auth and startup security checks
+/apps/api/prisma/migrations/        @ludakhris
+/apps/api/src/auth/                 @ludakhris
+/apps/api/src/core/tenant-*         @ludakhris
+/apps/api/src/startup-checks.ts     @ludakhris
+/docs/tenant-isolation.md           @ludakhris
+
+# Project rules
+/CLAUDE.md           @ludakhris
