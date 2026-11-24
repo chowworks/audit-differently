@@ -38,4 +38,7 @@ async function bootstrap() {
   console.log(`API running on port ${port}`)
 }
 
-bootstrap()
+bootstrap().catch((err) => {
+  console.error('The API failed to start', err)
+  process.exit(1)
+})
