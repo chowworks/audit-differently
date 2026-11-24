@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/brand/logo.svg" alt="Audit Differently" width="96" height="96">
+  <img src="docs/brand/logo.svg" alt="Audit Differently test" width="96" height="96">
 </p>
 
 <h1 align="center">Audit Differently</h1>
