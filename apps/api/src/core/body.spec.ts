@@ -58,6 +58,14 @@ describe('BodyReader', () => {
     expect(() => empty.done()).not.toThrow()
   })
 
+  it('gives a field as sent, and keeps the problems the caller finds with the others', () => {
+    const r = new BodyReader({ items: [{ a: 1 }], name: 3 })
+    expect(r.any('items')).toEqual([{ a: 1 }])
+    r.string('name')
+    r.problem('items[0].a', 'items[0].a must be text')
+    expect(refusal(r).message).toBe('name must be text. items[0].a must be text')
+  })
+
   it('refuses a number that is not finite', () => {
     const r = new BodyReader({ n: Number.NaN })
     r.numberLike('n')

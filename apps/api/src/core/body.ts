@@ -78,9 +78,14 @@ export class BodyReader {
     ) as Record<string, string | null> | null | undefined
   }
 
-  /** A field of any type, for a service that checks it fully itself (for example `cleanTags`). */
+  /** A field as it was sent, for a caller that checks its type itself and reports with `problem()`. */
   any(field: string): unknown {
     return this.body[field]
+  }
+
+  /** A problem found by the caller (a field inside a list item), kept with the others for `done()`. */
+  problem(field: string, message: string): void {
+    this.problems.push({ field, message })
   }
 
   /** Refuses the request with every problem in one 400, or does nothing when there is none. */

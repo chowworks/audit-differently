@@ -61,6 +61,57 @@ describe('engagement request bodies', () => {
     )
   })
 
+  it('names a wrong tag type with the other problems, so one try shows them all', async () => {
+    const { controller: c, engagements } = controller()
+    expect(await refusal(() => c.update('u', 'e-1', { name: 7, tags: [1] }))).toBe(
+      'name must be text. tags must be a list of text'
+    )
+    expect(
+      await refusal(() =>
+        c.createParticipant('u', 'e-1', { participantId: 1, displayName: 'A', tags: 'x' })
+      )
+    ).toBe('participantId must be text. tags must be a list of text')
+    expect(engagements.update).not.toHaveBeenCalled()
+    expect(engagements.createParticipant).not.toHaveBeenCalled()
+  })
+
+  it('refuses a checklist item of the wrong type rather than saving it changed', async () => {
+    const { controller: c, engagements } = controller()
+    // cleanEligibilityItems would save this as a required item named "123".
+    const items = [
+      { label: 123, required: 'false' },
+      { label: 'Form', key: 5 },
+    ]
+    expect(await refusal(() => c.update('u', 'e-1', { eligibilityItems: items }))).toBe(
+      'eligibilityItems[0].label must be text. eligibilityItems[0].required must be true or false. ' +
+        'eligibilityItems[1].key must be text'
+    )
+    for (const eligibilityItems of [null, 'x', { label: 'Form' }])
+      expect(await refusal(() => c.update('u', 'e-1', { eligibilityItems }))).toBe(
+        'eligibilityItems must be a list'
+      )
+    // An item that is not an object is named on its own, and the items around it are still checked.
+    expect(
+      await refusal(() =>
+        c.update('u', 'e-1', {
+          eligibilityItems: [{ label: 123 }, 'Form', null, [], { label: 'ID' }],
+        })
+      )
+    ).toBe(
+      'eligibilityItems[0].label must be text. eligibilityItems[1] must be an object. ' +
+        'eligibilityItems[2] must be an object. eligibilityItems[3] must be an object'
+    )
+    expect(engagements.update).not.toHaveBeenCalled()
+  })
+
+  it('leaves out of a checklist item what it leaves out, so the defaults still apply', () => {
+    const eligibilityItems = [
+      { label: 'Enrollment form' },
+      { key: '', label: 'ID', required: true },
+    ]
+    expect(parseEngagementBody({ eligibilityItems }, true)).toEqual({ eligibilityItems })
+  })
+
   it('passes the bodies the web app sends to the service', async () => {
     const { controller: c, engagements } = controller()
     await c.createParticipant('u', 'e-1', { participantId: '900002', displayName: 'Riley' })
