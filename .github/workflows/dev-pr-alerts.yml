@@ -1,60 +1,128 @@
 name: Dev PR alerts
 
-# Posts new pull requests to a Google Chat space through an incoming webhook (repository secret
-# GOOGLE_CHAT_WEBHOOK). Kept out of ci.yml so it never queues behind or adds runs to the pipeline.
+# Posts pull requests into main and develop to a Google Chat space through an incoming webhook (repository secret
+# GOOGLE_CHAT_WEBHOOK): a new PR starts a thread, and its new commits and new comments are replied in that thread.
+# The thread is found by its key, <repo>-pr-<number>, so nothing is stored. A PR opened before threading existed
+# has no keyed thread, so its first update starts one. Kept out of ci.yml so it never queues behind or adds runs
+# to the pipeline.
 #
-# pull_request_target, not pull_request: it runs in the base repository's context, so pull requests from forks
-# get the secret too. That is safe only because this workflow never checks out or runs the pull request's code.
-# Keep it that way: no actions/checkout, no scripts from the repo.
+# pull_request_target and issue_comment, not pull_request: they run in the base repository's context, so pull
+# requests from forks get the secret too. That is safe only because this workflow never checks out or runs the
+# pull request's code. Keep it that way: no actions/checkout, no scripts from the repo.
 on:
   pull_request_target:
     branches: [main, develop]
-    types: [opened, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
 
-permissions: {}
+# Read only: the commit list of a push and the PR a comment is on.
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   notify-google-chat:
-    name: Notify Google Chat of new PR
-    # Drafts are announced when marked ready, not when opened.
-    if: ${{ !github.event.pull_request.draft }}
+    name: Notify Google Chat
+    # Drafts are announced when marked ready, not when opened, and their commits aren't posted. Comments are on
+    # pull requests only (issue_comment also fires for issues), and never from bots such as preview deployers.
+    if: >-
+      ${{
+        (github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+         github.event.comment.user.type != 'Bot')
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # PR text is untrusted, so it reaches the shell only through env and jq, never inline ${{ }} in run.
       # Without the secret the step prints that it skipped and exits 0.
       - name: Post to Google Chat
-        # A Chat outage shouldn't put a red X on every new PR.
+        # A Chat outage shouldn't put a red X on every PR.
         continue-on-error: true
         env:
           WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
-          NUMBER: ${{ github.event.pull_request.number }}
-          TITLE: ${{ github.event.pull_request.title }}
+          SENDER: ${{ github.event.sender.login }}
+          # pull_request_target
+          NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          TITLE: ${{ github.event.pull_request.title || github.event.issue.title }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
-          URL: ${{ github.event.pull_request.html_url }}
+          URL: ${{ github.event.pull_request.html_url || github.event.issue.html_url }}
           BASE: ${{ github.event.pull_request.base.ref }}
           HEAD: ${{ github.event.pull_request.head.label }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          # issue_comment
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
         run: |
           if [ -z "$WEBHOOK" ]; then
             echo "GOOGLE_CHAT_WEBHOOK is not set; skipping."
             exit 0
           fi
-          case "$ACTION" in
-            reopened) verb="Reopened" ;;
-            ready_for_review) verb="Ready for review" ;;
-            *) verb="New" ;;
-          esac
+          api() {
+            curl -fsS --max-time 15 -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/$1"
+          }
           # Chat reads <...> as markup (<users/all> pings the whole space, <url|label> is a disguised link),
-          # and the PR author controls these. jq escapes JSON, not Chat markup, so drop the brackets.
-          TITLE=${TITLE//[<>]/}
-          HEAD=${HEAD//[<>]/}
-          AUTHOR=${AUTHOR//[<>]/}
-          jq -n \
-            --arg text "🔀 ${verb} PR #${NUMBER} by ${AUTHOR}: *${TITLE}*
-          ${HEAD} → ${BASE}
-          ${URL}" \
-            '{text: $text}' \
+          # and the PR's author and commenters control these. jq escapes JSON, not Chat markup, so drop the brackets.
+          clean() { printf '%s' "${1//[<>]/}"; }
+          TITLE=$(clean "$TITLE")
+
+          case "$EVENT/$ACTION" in
+            pull_request_target/synchronize)
+              # The commits this push added. A force push can drop BEFORE; then just say there are new commits.
+              commits=$(api "compare/$BEFORE...$AFTER" \
+                | jq -r '.total_commits as $n
+                    | (.commits[-5:] | map("• \(.sha[0:7]) \(.commit.message | split("\n")[0])") | join("\n"))
+                      + (if $n > 5 then "\n…and \($n - 5) more" else "" end)') \
+                || commits="• ${AFTER:0:7} (force push)"
+              text="📝 New commits on PR #${NUMBER} by $(clean "$SENDER"): *${TITLE}*
+          $(clean "$commits")
+          ${URL}/commits"
+              ;;
+            issue_comment/*)
+              # issue_comment has no branch filter and doesn't say whether the PR is a draft, so ask.
+              pr=$(api "pulls/$NUMBER")
+              base=$(jq -r '.base.ref' <<<"$pr")
+              if [ "$base" != main ] && [ "$base" != develop ]; then
+                echo "PR #$NUMBER is into $base; skipping."
+                exit 0
+              fi
+              if [ "$(jq -r '.draft' <<<"$pr")" = true ]; then
+                echo "PR #$NUMBER is a draft; skipping."
+                exit 0
+              fi
+              body=$(clean "$COMMENT_BODY")
+              if [ "${#body}" -gt 300 ]; then body="${body:0:300}…"; fi
+              text="💬 $(clean "$COMMENT_AUTHOR") commented on PR #${NUMBER}: *${TITLE}*
+          ${body}
+          ${COMMENT_URL}"
+              ;;
+            *)
+              case "$ACTION" in
+                reopened) verb="Reopened" ;;
+                ready_for_review) verb="Ready for review" ;;
+                *) verb="New" ;;
+              esac
+              text="🔀 ${verb} PR #${NUMBER} by $(clean "$AUTHOR"): *${TITLE}*
+          $(clean "$HEAD") → ${BASE}
+          ${URL}"
+              ;;
+          esac
+
+          # Every message for a PR carries the same thread key; Chat replies in that thread, or starts it.
+          case "$WEBHOOK" in
+            *\?*) url="$WEBHOOK&messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD" ;;
+            *) url="$WEBHOOK?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD" ;;
+          esac
+          jq -n --arg text "$text" --arg key "${REPO#*/}-pr-${NUMBER}" \
+            '{text: $text, thread: {threadKey: $key}}' \
           | curl -fsS --max-time 15 -X POST \
               -H 'Content-Type: application/json; charset=UTF-8' \
-              --data @- "$WEBHOOK"
+              --data @- "$url"
