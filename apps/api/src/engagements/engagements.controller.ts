@@ -16,7 +16,6 @@ import type { Response } from 'express'
 import type {
   AuditPackagePartsDto,
   EngagementDetail,
-  EngagementInput,
   EngagementSummary,
   ParticipantDto,
   ReportSummary,
@@ -24,6 +23,7 @@ import type {
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
 import { AuditPackageService } from './audit-package.service'
+import { parseEngagementBody, parseParticipantBody, parseReportBody } from './engagement-body'
 import { EngagementsService } from './engagements.service'
 
 @Controller('engagements')
@@ -41,8 +41,9 @@ export class EngagementsController {
   }
 
   @Post()
-  async create(@UserId() userId: string, @Body() body: EngagementInput): Promise<EngagementDetail> {
-    return this.engagements.create(await this.callers.load(userId), body)
+  async create(@UserId() userId: string, @Body() body: unknown): Promise<EngagementDetail> {
+    const input = parseEngagementBody(body, false)
+    return this.engagements.create(await this.callers.load(userId), input)
   }
 
   @Get(':id')
@@ -54,9 +55,10 @@ export class EngagementsController {
   async update(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: Partial<EngagementInput>
+    @Body() body: unknown
   ): Promise<EngagementDetail> {
-    return this.engagements.update(await this.callers.load(userId), id, body)
+    const input = parseEngagementBody(body, true)
+    return this.engagements.update(await this.callers.load(userId), id, input)
   }
 
   /**
@@ -108,18 +110,19 @@ export class EngagementsController {
   async createReport(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { period: string }
+    @Body() body: unknown
   ): Promise<ReportSummary> {
-    return this.engagements.createReport(await this.callers.load(userId), id, body.period)
+    const { period } = parseReportBody(body)
+    return this.engagements.createReport(await this.callers.load(userId), id, period)
   }
 
   @Post(':id/participants')
   async createParticipant(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body()
-    body: { participantId: string; displayName: string; enrollmentStatus?: string; tags?: unknown }
+    @Body() body: unknown
   ): Promise<ParticipantDto> {
-    return this.engagements.createParticipant(await this.callers.load(userId), id, body)
+    const input = parseParticipantBody(body)
+    return this.engagements.createParticipant(await this.callers.load(userId), id, input)
   }
 }
