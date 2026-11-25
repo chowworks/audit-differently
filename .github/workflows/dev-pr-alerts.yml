@@ -1,7 +1,7 @@
 name: Dev PR alerts
 
 # Posts pull requests into main and develop to a Google Chat space through an incoming webhook (repository secret
-# GOOGLE_CHAT_WEBHOOK): a new PR starts a thread, and its new commits and new comments are replied in that thread.
+# GOOGLE_CHAT_WEBHOOK): a new PR starts a thread, and its new commits, new comments and merge are replied in it.
 # The thread is found by its key, <repo>-pr-<number>, so nothing is stored. A PR opened before threading existed
 # has no keyed thread, so its first update starts one. Kept out of ci.yml so it never queues behind or adds runs
 # to the pipeline.
@@ -12,7 +12,7 @@ name: Dev PR alerts
 on:
   pull_request_target:
     branches: [main, develop]
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize, closed]
   issue_comment:
     types: [created]
 
@@ -26,9 +26,11 @@ jobs:
     name: Notify Google Chat
     # Drafts are announced when marked ready, not when opened, and their commits aren't posted. Comments are on
     # pull requests only (issue_comment also fires for issues), and never from bots such as preview deployers.
+    # A PR closed without merging posts nothing.
     if: >-
       ${{
-        (github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
+        (github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+         (github.event.action != 'closed' || github.event.pull_request.merged)) ||
         (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
          github.event.comment.user.type != 'Bot')
       }}
@@ -56,6 +58,7 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.label }}
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
+          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
           # issue_comment
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           COMMENT_BODY: ${{ github.event.comment.body }}
@@ -85,6 +88,10 @@ jobs:
               text="📝 New commits on PR #${NUMBER} by $(clean "$SENDER"): *${TITLE}*
           $(clean "$commits")
           ${URL}/commits"
+              ;;
+            pull_request_target/closed)
+              text="✅ Merged PR #${NUMBER} by $(clean "$MERGED_BY"): *${TITLE}*
+          ${URL}"
               ;;
             issue_comment/*)
               # issue_comment has no branch filter and doesn't say whether the PR is a draft, so ask.
