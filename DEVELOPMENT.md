@@ -1,27 +1,95 @@
-# Installation and Development
+# Installation
 
-## Local development
+## Prerequisites
 
-**Prerequisites:** Node 22.
+You must have these items before you start:
 
-Install the packages and copy the environment files:
+- Node 22 or later
+- The Railway CLI
+- A Railway token
+
+### Node
+
+The minimum version is Node 22. You can use a later version.
+
+We recommend nvm to install and manage Node. Install nvm:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+```
+
+Close the terminal and open a new terminal. Then go to the root of the repository and install Node:
+
+```bash
+nvm install
+nvm use
+```
+
+These commands read the version from `.nvmrc`.
+
+### Railway CLI
+
+Install the Railway CLI with npm:
+
+```bash
+npm install -g @railway/cli
+```
+
+Make sure that the CLI is installed:
+
+```bash
+railway --version
+```
+
+### Railway token
+
+To get the Railway token, ask Chris.
+
+Add the token to your shell profile (`~/.bashrc` or `~/.zshrc`):
+
+```bash
+export RAILWAY_TOKEN=<your-token>
+```
+
+Close the terminal and open a new terminal.
+
+## First-time setup
+
+Install the packages and copy the environment file:
 
 ```bash
 npm install
-cp apps/api/.env.example apps/api/.env       # Dev keys. railway-dev-vars.sh copies them to api-dev (docs/dev-api.md).
-cp apps/web/.env.example apps/web/.env.local # The api-dev domain and the dev Clerk publishable key.
+cp apps/web/.env.example apps/web/.env.local
 ```
 
-### Start the web app
+In `apps/web/.env.local`, set these variables:
+
+- `VITE_API_URL`: the api-dev domain. Do not put a `/` at the end of the URL.
+- `VITE_CLERK_PUBLISHABLE_KEY`: the dev Clerk publishable key.
+
+## Start the web app
 
 ```bash
-npx prisma generate --schema apps/api/prisma/schema.prisma   # Makes the Prisma client. Do this before typecheck.
-npm run dev -w @ad/web     # Starts the web app on http://localhost:5173. It uses api-dev.
+npm run dev -w @ad/web
 ```
+
+The web app runs on http://localhost:5173. It uses api-dev.
 
 ## The demo
 
 For the demo users, the demo story and the reset command, refer to [docs/dev-api.md](docs/dev-api.md).
+
+# Development
+
+## Feature
+
+If your change affects the API or the database, deploy the change to api-dev:
+
+```bash
+apps/api/scripts/deploy-dev.sh
+```
+
+Then restart the local web server and test the change.
 
 ## CI gates
 
@@ -34,3 +102,7 @@ npm run typecheck
 npm run build
 npm run test
 ```
+
+## Open a PR
+
+Request a review from Copilot.
