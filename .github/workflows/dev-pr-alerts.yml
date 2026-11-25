@@ -79,13 +79,18 @@ jobs:
 
           case "$EVENT/$ACTION" in
             pull_request_target/synchronize)
-              # The commits this push added. A force push can drop BEFORE; then just say there are new commits.
+              # The commits this push added, newest 5. After a force push (status diverged or behind) the list
+              # can be short or empty, and if the compare fails (BEFORE gone) we don't know, so always name the head.
+              head="${AFTER:0:7}"
               commits=$(api "compare/$BEFORE...$AFTER" \
-                | jq -r '.total_commits as $n
+                | jq -r --arg head "$head" '.total_commits as $n
                     | (.commits[-5:] | map("• \(.sha[0:7]) \(.commit.message | split("\n")[0])") | join("\n"))
-                      + (if $n > 5 then "\n…and \($n - 5) more" else "" end)') \
-                || commits="• ${AFTER:0:7} (force push)"
-              text="📝 New commits on PR #${NUMBER} by $(clean "$SENDER"): *${TITLE}*
+                      + (if $n > 5 then "\n…and \($n - 5) more" else "" end)
+                      + (if .status == "diverged" or .status == "behind"
+                         then (if $n > 0 then "\n" else "" end) + "History rewritten; new head \($head)"
+                         else "" end)') \
+                || commits="New head ${head} (couldn't list the commits)"
+              text="📝 Push to PR #${NUMBER} by $(clean "$SENDER"): *${TITLE}*
           $(clean "$commits")
           ${URL}/commits"
               ;;
