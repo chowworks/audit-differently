@@ -15,6 +15,10 @@ on:
     types: [opened, reopened, ready_for_review, synchronize, closed]
   issue_comment:
     types: [created]
+  # Comments on lines of code, Copilot's included, and replies to them. For a PR from a fork this event gets no
+  # secret, so those comments post nothing.
+  pull_request_review_comment:
+    types: [created]
 
 # Read only: the commit list of a push and the PR a comment is on.
 permissions:
@@ -26,13 +30,16 @@ jobs:
     name: Notify Google Chat
     # Drafts are announced when marked ready, not when opened, and their commits aren't posted. Comments are on
     # pull requests only (issue_comment also fires for issues), and never from bots such as preview deployers.
-    # A PR closed without merging posts nothing.
+    # A PR closed without merging posts nothing. Copilot is the one bot whose code comments are posted.
     if: >-
       ${{
         (github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
          (github.event.action != 'closed' || github.event.pull_request.merged)) ||
         (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
-         github.event.comment.user.type != 'Bot')
+         github.event.comment.user.type != 'Bot') ||
+        (github.event_name == 'pull_request_review_comment' && !github.event.pull_request.draft &&
+         contains(fromJSON('["main","develop"]'), github.event.pull_request.base.ref) &&
+         (github.event.comment.user.type != 'Bot' || github.event.comment.user.login == 'Copilot'))
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -59,7 +66,8 @@ jobs:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
           MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
-          # issue_comment
+          # issue_comment and pull_request_review_comment
+          COMMENT_PATH: ${{ github.event.comment.path }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_URL: ${{ github.event.comment.html_url }}
@@ -97,6 +105,14 @@ jobs:
             pull_request_target/closed)
               text="✅ Merged PR #${NUMBER} by $(clean "$MERGED_BY"): *${TITLE}*
           ${URL}"
+              ;;
+            pull_request_review_comment/*)
+              body=$(printf '%s' "$COMMENT_BODY" | sed 's/<!--[^>]*-->//g')
+              body=$(clean "$body")
+              if [ "${#body}" -gt 300 ]; then body="${body:0:300}…"; fi
+              text="💬 $(clean "$COMMENT_AUTHOR") commented on $(clean "$COMMENT_PATH") in PR #${NUMBER}: *${TITLE}*
+          ${body}
+          ${COMMENT_URL}"
               ;;
             issue_comment/*)
               # issue_comment has no branch filter and doesn't say whether the PR is a draft, so ask.
