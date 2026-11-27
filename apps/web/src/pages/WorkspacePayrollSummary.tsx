@@ -233,7 +233,7 @@ export function PayrollActions({
       sign: '⚠️',
       who: name,
       text: 'No program name is linked to it',
-      sub: "Its timesheets' projects prove none of its pay until one is. Link its program on the Program names card.",
+      sub: "Its timesheets' projects prove none of its pay until one is. Link its program under Map Payroll Programs on the workspace page.",
       go: <Link to={programs!.href}>Link its program →</Link>,
     })
   for (const c of all) {

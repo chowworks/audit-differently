@@ -113,6 +113,155 @@ export interface BudgetChange extends EngagementDetail {
   backToDraft: { id: string; period: string; was: 'closed' | 'submitted' }[]
 }
 
+// ── QuickBooks names (owner's decision, 2026-11-27, #132) ────────────────────
+// One list on the workspace says which budget line each QuickBooks account or category goes to, read by Import
+// transactions and Month End Close alike. A name points at a budget line's name (so it carries to every engagement with
+// a line of that name) or is Unallowable; an engagement may override a name for itself.
+
+/** The kinds of list a name is on: QuickBooks names today, the payroll rollup next (#132). */
+export const LINE_ALIAS_LISTS = ['quickbooks'] as const
+export type LineAliasList = (typeof LINE_ALIAS_LISTS)[number]
+
+/** The most names a workspace keeps, overrides included. */
+export const MAX_LINE_ALIASES = 2000
+
+/**
+ * A budget line's name as lines compare (owner's decision, 2026-11-27): case and surrounding spaces aside, punctuation
+ * kept, so "Program Costs" and "Program-Costs" are two lines. The database's unique index on a line's name says the same.
+ */
+export const lineKey = (name: string) => name.trim().toLowerCase()
+
+/**
+ * A QuickBooks name as the list compares it: case, spacing and punctuation aside, nothing stripped ("60901 Rent
+ * Expense" and "60901 rent expense" are one name; "Rent Expense" is another).
+ */
+export const aliasKey = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+
+export interface LineAliasDto {
+  id: string
+  /** The QuickBooks account or category, as written. */
+  name: string
+  /** Null: the workspace's own entry. Set: this engagement's override. */
+  engagementId: string | null
+  /** The budget line's name it goes to; null when Unallowable. */
+  budgetLineName: string | null
+  unallowable: boolean
+}
+
+/** What a person adds or changes: a name and where it goes (a budget line's name, or Unallowable). */
+export interface LineAliasInput {
+  name?: string
+  engagementId?: string | null
+  budgetLineName?: string | null
+  unallowable?: boolean
+}
+
+/**
+ * One row of the workspace page's list as it is edited: a name and where it maps to, for every engagement (null) or for
+ * the engagements ticked, saved as one entry per engagement. `ids` are the entries the row stood for; an empty
+ * `engagementIds` removes them all.
+ */
+export interface LineAliasGroupInput {
+  ids: string[]
+  name: string
+  engagementIds: string[] | null
+  budgetLineName: string | null
+  unallowable: boolean
+}
+
+/** The list as the workspace page shows it, with each engagement's budget line names to point at. */
+export interface LineAliasesDto {
+  aliases: LineAliasDto[]
+  engagements: { id: string; name: string; budgetLines: string[] }[]
+}
+
+/** An existing name a new one may be the same as ("Is it the same as one of these?"), and where it goes. */
+export interface AliasSuggestion {
+  name: string
+  budgetLineName: string | null
+  unallowable: boolean
+}
+
+/** Words that say little about which account a name is. */
+const ALIAS_FILLER = new Set(['and', 'the', 'of', 'for', 'expense', 'expenses', 'cost', 'costs'])
+
+/** How alike two QuickBooks names are, 0 to 1, by their words (a shared account number counts most). */
+export function aliasLikeness(a: string, b: string): number {
+  const words = (s: string) =>
+    new Set(
+      aliasKey(s)
+        .split(' ')
+        .filter((w) => w && !ALIAS_FILLER.has(w))
+    )
+  const x = words(a)
+  const y = words(b)
+  if (!x.size || !y.size) return 0
+  const numberOf = (w: Set<string>) => [...w].find((t) => /^\d{3,}$/.test(t))
+  const n = numberOf(x)
+  if (n && n === numberOf(y)) return 1
+  const shared = [...x].filter((w) => y.has(w)).length
+  return shared / new Set([...x, ...y]).size
+}
+
+/**
+ * "Is it the same as one of these?" for a name not on the list (owner's decision, 2026-11-27): the workspace's names
+ * missing from this file first (an account renamed in QuickBooks leaves its old name unseen), then the names most
+ * alike, at most three, each only when it looks like this one at all.
+ */
+export function suggestAliases(
+  name: string,
+  aliases: Pick<LineAliasDto, 'name' | 'engagementId' | 'budgetLineName' | 'unallowable'>[],
+  inFile: Iterable<string> = [],
+  engagementId: string | null = null
+): AliasSuggestion[] {
+  const seen = new Set([...inFile].map(aliasKey))
+  const key = aliasKey(name)
+  // Where a name goes on this engagement: its own override first, as the lookup reads it.
+  const here = (a: (typeof aliases)[number]) =>
+    (engagementId &&
+      aliases.find(
+        (o) => o.engagementId === engagementId && aliasKey(o.name) === aliasKey(a.name)
+      )) ||
+    a
+  return (
+    aliases
+      // The workspace's names, and this engagement's own where the workspace has none of that name.
+      .filter(
+        (a) =>
+          aliasKey(a.name) !== key &&
+          (a.engagementId === null ||
+            (!!engagementId &&
+              a.engagementId === engagementId &&
+              !aliases.some(
+                (w) => w.engagementId === null && aliasKey(w.name) === aliasKey(a.name)
+              )))
+      )
+      .map((a) => ({ a, like: aliasLikeness(name, a.name), missing: !seen.has(aliasKey(a.name)) }))
+      .filter((s) => s.like >= 0.25)
+      .sort((p, q) => Number(q.missing) - Number(p.missing) || q.like - p.like)
+      .slice(0, 3)
+      .map(({ a }) => {
+        const t = here(a)
+        return { name: a.name, budgetLineName: t.budgetLineName, unallowable: t.unallowable }
+      })
+  )
+}
+
+/** What a file of the account mapping folder added to the list. */
+export interface LineAliasesMergeDto extends LineAliasesDto {
+  added: number
+  /** Accounts the file names that were already on the list as it says. */
+  same: number
+  /** The file's engagement, when it says which: its blank and differing rows became that engagement's overrides. */
+  engagementName: string | null
+  /** Accounts left blank in a file of no known engagement: not added. */
+  skipped: number
+}
+
 // ── Expenses and documents ──────────────────────────────────────────────────
 
 export const ALLOCATION_TYPES = ['direct', 'payroll', 'usage', 'books'] as const
@@ -1192,6 +1341,8 @@ export interface ImportFileDto {
   mappingId: string | null
   /** The budget items this engagement uses (it has a line for), to map categories to. */
   budgetOptions: BudgetOption[]
+  /** The workspace's QuickBooks names and this engagement's overrides: what a category may be the same as. */
+  aliases: LineAliasDto[]
 }
 
 /** The mapping the person confirmed, sent with the file (as the `mapping` field) to preview and to import. */
@@ -1253,7 +1404,14 @@ export interface ImportPreviewDto {
    * Each value of the file's budget-line column (blank when a row has none), with how many rows and how much, and the
    * one budget item whose name it matches, if exactly one does (pre-filled; the person confirms or changes it).
    */
-  categories: { value: string; rows: number; total: number; match: string | null }[]
+  categories: {
+    value: string
+    rows: number
+    total: number
+    match: string | null
+    /** Where the match came from: the QuickBooks names list, or a budget line named as the category is. */
+    from: 'list' | 'name' | null
+  }[]
   /** The months the rows go to; `isNew` ones are started as drafts on import. */
   months: { period: string; isNew: boolean; rows: number; total: number }[]
   rows: ImportRowDto[]
@@ -2912,7 +3070,7 @@ export const MAX_PROGRAM_NAME_LENGTH = 200
 export const programKey = (name: string) =>
   name
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
 
 /**
@@ -2995,7 +3153,7 @@ export const namesOfEngagement = (
 // ── The month's expenses from the books (owner's decision, 2026-11-09) ────────────────────────────────────────────
 // The zip's accounting export holds the whole month; payroll takes the rows of a person's pay run, and every other line
 // booked to an expense account is an expense. Each is routed to an engagement by its class (program names) and to a
-// budget line by its account (the engagement's account mapping file, in the zip's "Account mapping" folder).
+// budget line by its account (the workspace's QuickBooks names list, which the zip's "Account mapping" folder fills).
 
 /** Why a books line is, or is not, on an engagement. */
 export const BOOKS_LINE_STATUSES = [
@@ -3005,8 +3163,8 @@ export const BOOKS_LINE_STATUSES = [
   'no-class',
   'no-program',
   'not-ours',
-  'no-mapping',
-  'not-billable',
+  'unmapped',
+  'unallowable',
   'no-budget-line',
   'payroll-account',
   'credit',
@@ -3023,9 +3181,9 @@ export const BOOKS_LINE_STATUS_LABELS: Record<BooksLineStatus, string> = {
   'no-class': 'No class',
   'no-program': 'Class not in the program names',
   'not-ours': 'Program of no engagement',
-  'no-mapping': 'No account mapping for the engagement',
-  'not-billable': 'Account not billable to the engagement',
-  'no-budget-line': 'Category with no budget line',
+  unmapped: 'Account not on the QuickBooks names list',
+  unallowable: 'Unallowable',
+  'no-budget-line': 'Its budget line is not on the engagement',
   'payroll-account': 'On a payroll account',
   credit: 'A credit or refund',
   'outside-contract': 'Outside the contract period',
@@ -3161,32 +3319,13 @@ export interface BooksLineDto {
   saved: 'same' | 'changed' | null
 }
 
-/** A category of a mapping and the engagement's budget line it bills to. */
-export interface AccountMappingCategoryDto {
-  category: string
-  accounts: number
-  budgetLineId: string | null
-  budgetLineName: string | null
-  /** Chosen by an owner, not read from the file. */
-  chosen: boolean
-}
-
-export interface AccountMappingDto {
-  id: string
-  fileName: string
-  title: string
-  engagementId: string | null
-  engagementName: string | null
-  uploadedAt: string
-  categories: AccountMappingCategoryDto[]
-}
-
 export interface WorkspaceExpensesDto {
   workspaceId: string
   period: string
   /** The accounting export the lines are read from; null when the month's files have none. */
   file: { id: string; fileName: string } | null
-  mappings: AccountMappingDto[]
+  /** The QuickBooks names list, overrides included: where each account goes, and what a new one may be the same as. */
+  aliases: LineAliasDto[]
   engagements: {
     id: string
     name: string

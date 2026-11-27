@@ -1389,7 +1389,7 @@ const ZIP_MAX_FILES = 200
 const NAMES_MAX_BYTES = 5 * 1024 * 1024
 /** The server's limit for one file (MAX_UPLOAD_BYTES in the API). */
 export const FILE_MAX_BYTES = 25 * 1024 * 1024
-/** The server's limit for an account mapping file (the account-mappings upload in the API). */
+/** The server's limit for an account mapping file (the QuickBooks names list upload in the API). */
 export const MAPPING_MAX_BYTES = 5 * 1024 * 1024
 /** The server's limit for one receipt (the expenses receipts upload in the API). */
 export const RECEIPT_MAX_BYTES = 10 * 1024 * 1024
@@ -1450,7 +1450,7 @@ export function UploadPanel({
     files: { file: File; kind: PayrollFolderKind }[],
     replace: boolean,
     names: File[],
-    /** Its "Account mapping" files: not proof either (each engagement's account mapping). */
+    /** Its "Account mapping" files: not proof either (merged into the QuickBooks names list). */
     mappings: File[],
     /** Its "Receipts" files: the receipts of the books' bills, for the expenses step. */
     receipts: File[]

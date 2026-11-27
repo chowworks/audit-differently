@@ -20,6 +20,8 @@ export const APP_ROLE_FUNCTIONS: readonly string[] = [
   'app_receipts_address_taken(text)',
   // The staff list (migration 20261018000100): the workspaces whose staff the caller reads (owners and auditors).
   'app_staff_workspace_ids()',
+  // The QuickBooks names list (migration 20261127000100): the workspaces whose list the caller keeps (owners, bookkeepers).
+  'app_writer_workspace_ids()',
 ]
 
 /** SQL that gives `role` its table access and exactly the functions above, and nothing else. `role` is a plain identifier. */

@@ -3,6 +3,9 @@ import {
   IMPORT_FIELD_LABELS,
   IMPORT_FIELDS,
   IMPORT_SKIP,
+  aliasKey,
+  lineKey,
+  suggestAliases,
   PAYROLL_BUDGET_KIND_LABELS,
   REPORT_LINE_LABELS,
   type ImportCategories,
@@ -21,14 +24,7 @@ import { HandCard } from '@/components/HandCard'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Chip, ErrorNote, Field, Modal, Stepper, inputClass } from '@/components/ui'
 
-const STEPS = [
-  'File',
-  'Columns',
-  'Payroll transactions',
-  'Budget lines',
-  'Preview',
-  'Done',
-] as const
+const STEPS = ['File', 'Columns', 'Payroll transactions', 'Maps to', 'Preview', 'Done'] as const
 type Step = (typeof STEPS)[number]
 
 // What each column is often called in an export, so the person finds it in their own file.
@@ -37,7 +33,7 @@ const FIELD_HINTS: Partial<Record<ImportField, string>> = {
   amount: 'Often Amount or Total; in a bank file, the money out column (Debit or Withdrawal).',
   reference: 'Often Num, Ref or Check no. Without one, each line gets IMP-1, IMP-2, …',
   category:
-    "The file's category column (often Category or Split). You match each category to a budget line in step 3.",
+    "The file's category column (often Category or Split). You map each category to a budget category in the Maps to step.",
   memo: 'Often Memo or Description.',
   account: 'Often Account. An auditor uses it to match your ledger.',
 }
@@ -71,7 +67,10 @@ const SAMPLE_COLUMNS: [string, string][] = [
   ['Vendor', 'who was paid'],
   ['Memo', 'what it was for (optional)'],
   ['Account', 'the account in your books (optional)'],
-  ['Category', 'your own word for the cost; you match each one to a budget line in step 3'],
+  [
+    'Category',
+    'your own word for the cost; you map each one to a budget category in the Maps to step',
+  ],
   ['Amount', 'what was spent, as a positive number'],
 ]
 
@@ -110,7 +109,7 @@ export function ImportTransactionsModal({
   const [categories, setCategories] = useState<ImportCategories>({})
   const [preview, setPreview] = useState<ImportPreviewDto | null>(null)
   const [save, setSave] = useState(true)
-  const [saveAs, setSaveAs] = useState('QuickBooks mapping')
+  const [saveAs, setSaveAs] = useState('Books export mapping')
   const [result, setResult] = useState<ImportResultDto | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -182,7 +181,12 @@ export function ImportTransactionsModal({
     : columns.category
       ? preview.categories.filter((c) => !categories[c.value]).length
       : preview.assignable.filter((r) => !rowLines[String(r.line)]).length
-  const lineSelect = (value: string, onChange: (v: string) => void, label: string) =>
+  const lineSelect = (
+    value: string,
+    onChange: (v: string) => void,
+    label: string,
+    skip = 'Skip (do not import)'
+  ) =>
     info && (
       <select
         className={inputClass}
@@ -193,15 +197,37 @@ export function ImportTransactionsModal({
         <option value="">Choose…</option>
         {info.budgetOptions.map((i) => (
           <option key={i.key} value={i.key}>
-            {i.label} ({REPORT_LINE_LABELS[i.reportLine]})
+            {i.label}
+            {aliasKey(i.label) === aliasKey(REPORT_LINE_LABELS[i.reportLine])
+              ? ''
+              : ` (${REPORT_LINE_LABELS[i.reportLine]})`}
           </option>
         ))}
-        <option value={IMPORT_SKIP}>Skip (do not import)</option>
+        <option value={IMPORT_SKIP}>{skip}</option>
       </select>
     )
-  /** One line at the top of step 3: how many are done, how many still need a budget line. */
-  const lineSummary = (left: number, matched: number, what: 'value' | 'row') =>
-    left > 0 ? (
+  /**
+   * "Is it the same as one of these?" (#132): names on the QuickBooks names list a value not on it may be, first those
+   * this file no longer has (an account renamed in QuickBooks), each with the budget line it goes to here.
+   */
+  const sameAs = (value: string) => {
+    if (!info || !preview || !value) return []
+    const inFile = preview.categories.map((c) => c.value.trim())
+    return suggestAliases(value.trim(), info.aliases, inFile, engagementId).flatMap((s) => {
+      if (s.unallowable) return [{ name: s.name, key: IMPORT_SKIP, label: 'Unallowable' }]
+      const o = info.budgetOptions.find((b) => lineKey(b.label) === lineKey(s.budgetLineName ?? ''))
+      return o ? [{ name: s.name, key: o.key, label: o.label }] : []
+    })
+  }
+  /** The Maps to step's top line: how many still need a budget category, and where the rest came from. */
+  const lineSummary = (left: number, fromList: number, byName: number, what: 'value' | 'row') => {
+    const done = [
+      fromList ? `${fromList} from your financial categories list` : '',
+      byName ? `${byName} matched by name` : '',
+    ]
+      .filter(Boolean)
+      .join(', ')
+    return left > 0 ? (
       <p className="ad-field-error-sum" role="status">
         {left}{' '}
         {what === 'value'
@@ -211,14 +237,15 @@ export function ImportTransactionsModal({
           : left === 1
             ? 'row needs'
             : 'rows need'}{' '}
-        a budget line before the next step.
-        {matched > 0 && <span className="text-soft"> {matched} matched by name.</span>}
+        a Maps to choice before the next step.
+        {done && <span className="text-soft"> {done}.</span>}
       </p>
     ) : (
       <p className="text-sm text-soft">
-        Every {what} has a budget line.{matched > 0 && ` ${matched} matched by name.`}
+        Every {what} maps to a budget category.{done && ` ${done}.`}
       </p>
     )
+  }
   /** One field's column picker: the file's columns, or "Not in this file". */
   const pick = (f: ImportField, label = IMPORT_FIELD_LABELS[f]) =>
     info && (
@@ -287,13 +314,18 @@ export function ImportTransactionsModal({
         form({ columns, categories, lines: columns.category ? undefined : rowLines, payroll })
       )
       // Values that name a budget line are pre-filled; the person confirms them and maps the rest.
+      // Only this column's values: choices made for another column are dropped.
       setCategories((c) => {
-        const next = { ...c }
-        for (const v of got.categories) if (!next[v.value] && v.match) next[v.value] = v.match
+        const next: typeof c = {}
+        for (const v of got.categories) {
+          const was = c[v.value]
+          if (was) next[v.value] = was
+          else if (v.match) next[v.value] = v.match
+        }
         return next
       })
       setPreview(got)
-      setStep(got.payroll.length ? 'Payroll transactions' : 'Budget lines')
+      setStep(got.payroll.length ? 'Payroll transactions' : 'Maps to')
     })
   const toBudgetLines = () =>
     run(async () => {
@@ -303,7 +335,7 @@ export function ImportTransactionsModal({
           form({ columns, categories, lines: columns.category ? undefined : rowLines, payroll })
         )
       )
-      setStep('Budget lines')
+      setStep('Maps to')
     })
   const toPreview = () =>
     run(async () => {
@@ -342,9 +374,9 @@ export function ImportTransactionsModal({
       {step === 'File' && (
         <div className="grid gap-4">
           <p className="text-sm text-soft">
-            Export the transactions from your accounting system (in QuickBooks: Reports, Transaction
-            Report, then Export to CSV or Excel). Each row becomes an expense line in the month of
-            its date. The file is read, never stored.
+            Export the transactions from your accounting system (for example, in QuickBooks:
+            Reports, Transaction Report, then Export to CSV or Excel). Each row becomes an expense
+            line in the month of its date. The file is read, never stored.
           </p>
           <details className="ad-import-sample">
             <summary>No accounting system? Start from a sample file</summary>
@@ -375,7 +407,7 @@ export function ImportTransactionsModal({
             />
           </Field>
           <Actions onClose={onClose} busy={busy}>
-            <Button kind="primary" onClick={read} disabled={!file || busy}>
+            <Button kind="navy" onClick={read} disabled={!file || busy}>
               Next: columns
             </Button>
           </Actions>
@@ -490,7 +522,7 @@ export function ImportTransactionsModal({
               setStep('File')
             }}
           >
-            <Button kind="primary" onClick={toCategories} disabled={busy || problemCount > 0}>
+            <Button kind="navy" onClick={toCategories} disabled={busy || problemCount > 0}>
               Next
             </Button>
           </Actions>
@@ -524,14 +556,14 @@ export function ImportTransactionsModal({
           }
         >
           <Actions onClose={onClose} busy={busy} onBack={() => setStep('Columns')}>
-            <Button kind="primary" onClick={toBudgetLines} disabled={busy}>
+            <Button kind="navy" onClick={toBudgetLines} disabled={busy}>
               Next: budget lines
             </Button>
           </Actions>
         </PayrollConfirmation>
       )}
 
-      {step === 'Budget lines' && info && preview && (
+      {step === 'Maps to' && info && preview && (
         <div className="grid gap-4">
           {info.budgetOptions.length === 0 ? (
             <HandCard
@@ -548,22 +580,28 @@ export function ImportTransactionsModal({
             <>
               {lineSummary(
                 preview.categories.filter((c) => !categories[c.value]).length,
-                preview.categories.filter((c) => c.match && categories[c.value] === c.match).length,
+                preview.categories.filter(
+                  (c) => c.match && c.from === 'list' && categories[c.value] === c.match
+                ).length,
+                preview.categories.filter(
+                  (c) => c.match && c.from !== 'list' && categories[c.value] === c.match
+                ).length,
                 'value'
               )}
               <div className="ad-tablewrap">
                 <table className="ad-table">
                   <thead>
                     <tr>
-                      <th>{columns.category} in the file</th>
+                      <th>Financial Category</th>
                       <th className="ad-num">Rows</th>
                       <th className="ad-num">Amount</th>
-                      <th>Budget line</th>
+                      <th>Maps to</th>
                     </tr>
                   </thead>
                   <tbody>
+                    {/* Unmatched first, by what the file brought: a row stays put while it is chosen. */}
                     {[...preview.categories]
-                      .sort((a, b) => Number(!!categories[a.value]) - Number(!!categories[b.value]))
+                      .sort((a, b) => Number(!!a.match) - Number(!!b.match))
                       .map((c) => (
                         <tr key={c.value}>
                           <td>{c.value || <i>Blank</i>}</td>
@@ -573,16 +611,40 @@ export function ImportTransactionsModal({
                             {lineSelect(
                               categories[c.value] ?? '',
                               (v) => setCategories({ ...categories, [c.value]: v }),
-                              `Budget line for ${c.value || 'blank rows'}`
+                              `Budget line for ${c.value || 'blank rows'}`,
+                              'Unallowable (not imported, not included in reports/budget)'
                             )}
                             {!categories[c.value] ? (
-                              <small className="ad-field-error">
-                                Choose a budget line or skip.
+                              <>
+                                <small className="ad-field-error">
+                                  {c.value
+                                    ? `"${c.value}" isn't on your financial categories list yet. Choose what it maps to.`
+                                    : 'Choose a budget category, or Unallowable.'}
+                                </small>
+                                {sameAs(c.value).map((s) => (
+                                  <button
+                                    key={s.name}
+                                    type="button"
+                                    className="ad-chip ad-chip-info mr-1 mt-1"
+                                    onClick={() =>
+                                      setCategories({ ...categories, [c.value]: s.key })
+                                    }
+                                  >
+                                    Same as {s.name} → {s.label}?
+                                  </button>
+                                ))}
+                              </>
+                            ) : c.match && categories[c.value] === c.match ? (
+                              <small className="text-soft">
+                                {c.from === 'list'
+                                  ? '✓ Mapped on the workspace page'
+                                  : '✓ Matched by name'}
                               </small>
                             ) : (
-                              c.match &&
-                              categories[c.value] === c.match && (
-                                <small className="text-soft">✓ Matched by name</small>
+                              c.value && (
+                                <small className="text-soft">
+                                  Kept on your financial categories list when you import.
+                                </small>
                               )
                             )}
                           </td>
@@ -596,6 +658,7 @@ export function ImportTransactionsModal({
             <>
               {lineSummary(
                 preview.assignable.filter((r) => !rowLines[String(r.line)]).length,
+                0,
                 0,
                 'row'
               )}
@@ -659,7 +722,7 @@ export function ImportTransactionsModal({
                       <th>Vendor</th>
                       <th>Memo</th>
                       <th className="ad-num">Total cost</th>
-                      <th>Budget line</th>
+                      <th>Maps to</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -711,7 +774,7 @@ export function ImportTransactionsModal({
             busy={busy}
             onBack={() => setStep(preview.payroll.length ? 'Payroll transactions' : 'Columns')}
           >
-            <Button kind="primary" onClick={toPreview} disabled={busy || linesLeft > 0}>
+            <Button kind="navy" onClick={toPreview} disabled={busy || linesLeft > 0}>
               Next: preview
             </Button>
           </Actions>
@@ -774,19 +837,23 @@ export function ImportTransactionsModal({
               </Field>
             )}
           </div>
-          <Actions onClose={onClose} busy={busy} onBack={() => setStep('Budget lines')}>
+          <Actions onClose={onClose} busy={busy} onBack={() => setStep('Maps to')}>
             <Button
-              kind="primary"
+              kind="navy"
               onClick={doImport}
               disabled={
                 busy ||
-                (preview.rows.length === 0 && preview.updates.length === 0) ||
+                (preview.rows.length === 0 &&
+                  preview.updates.length === 0 &&
+                  !(columns.category && Object.keys(categories).length)) ||
                 (save && !saveAs.trim())
               }
             >
-              {preview.rows.length === 0
-                ? `Change ${preview.updates.length} ${preview.updates.length === 1 ? 'line' : 'lines'}`
-                : `Import ${preview.rows.length} ${preview.rows.length === 1 ? 'transaction' : 'transactions'}${preview.updates.length ? `, change ${preview.updates.length}` : ''}`}
+              {preview.rows.length === 0 && preview.updates.length === 0
+                ? 'Keep the category answers'
+                : preview.rows.length === 0
+                  ? `Change ${preview.updates.length} ${preview.updates.length === 1 ? 'line' : 'lines'}`
+                  : `Import ${preview.rows.length} ${preview.rows.length === 1 ? 'transaction' : 'transactions'}${preview.updates.length ? `, change ${preview.updates.length}` : ''}`}
             </Button>
           </Actions>
         </div>
@@ -801,7 +868,9 @@ export function ImportTransactionsModal({
             <h3>
               {result.imported} {result.imported === 1 ? 'transaction' : 'transactions'} imported
             </h3>
-            <p>into {result.months.map((m) => periodLabel(m.period)).join(', ')}</p>
+            {result.months.length > 0 && (
+              <p>into {result.months.map((m) => periodLabel(m.period)).join(', ')}</p>
+            )}
           </div>
           <div className="ad-done-tiles">
             <div className="ad-tile ad-tile-ok">
@@ -834,7 +903,7 @@ export function ImportTransactionsModal({
             </p>
           </HandCard>
           <div className="ad-actions justify-end">
-            <Button kind="primary" onClick={onClose}>
+            <Button kind="navy" onClick={onClose}>
               Done
             </Button>
           </div>

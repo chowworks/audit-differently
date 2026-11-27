@@ -69,10 +69,21 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   (`Expense.budgetLineId`; its `reportLine` follows from it, trigger `Expense_4_budget_line`, migration
   `20261017000200`), so spending is compared with the approved budget line by line: the month's budget tile, the
   `budget-overrun` check, a blocking `no-budget-line` check, and the audit package's `Budget vs actual.csv`. A line with
-  spending keeps its report line and is not removed. Imports map categories to budget lines, saved by line name.
+  spending keeps its report line and is not removed. **The QuickBooks names list** (`LineAlias`, migration
+  `20261127000100`, #132; owner's decisions, 2026-11-27) says where each QuickBooks account or category goes: the name
+  exactly as the books write it (number and any parent:child path included, nothing stripped or shortened; owner's rule,
+  2026-11-27) to a budget line's NAME or to Unallowable, for the workspace, with an engagement's own override. Import transactions and Month End
+  Close both resolve a name through it alone (`apps/api/src/aliases/resolve.ts`: override, then workspace entry, then a
+  line of the same name; an account written with its parents is looked up whole first, then by its own part, as an
+  account mapping sheet writes it); a name on neither is asked about ("Is it the same as one of these?", `suggestAliases`) and
+  the answer is kept on the list. Owners and bookkeepers keep it under Configuration Data; an auditor and a platform
+  admin never see it. Unallowable rows are not saved at all: only listed in the import's "not imported" and Month End
+  Close's review. An account mapping spreadsheet only fills the list, read in memory. `ImportMapping.categories` and the
+  `AccountMapping` table are no longer read and stay undropped; migration `20261127000300` copied them onto the list
+  once (add-only).
   The workspace's own list of budget items is gone (migration `20261017000300`); names are suggested from the
-  workspace's other engagements. **A budget line's name is its key; keep its row** (owner's rule, 2026-11-27): saved
-  import mappings find lines by name, and the account mapping's picks and the payroll ticks hang on the row's id. Any
+  workspace's other engagements. **A budget line's name is its key; keep its row** (owner's rule, 2026-11-27): the
+  QuickBooks names list finds lines by name, and the payroll ticks hang on the row's id. Any
   bulk change (an upload, a replace, a copy) updates a line of the same name in place and never deletes and recreates
   it; renaming a line shows what uses the old name before it is saved (#132).
 - **Payroll on the budget** (owner's decisions, 2026-10-20): the pay the payroll match proves is the staff and
@@ -456,6 +467,10 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
   `ErrorNote` at the top).
 - **How to use a screen**, when it isn't obvious: a closed "How to …?" line under its controls with the navy `info` icon (a `<details>`, `.ss-help`), opened
   on a click, never on hover alone.
+- **Adding from a file** (Bulk Add Names, a mapping, a list): never a bare file button. The button opens a dialog
+  (`components/BulkAddModal.tsx`, owner's decision, 2026-11-27): the navy `HandCard` the payroll match's upload uses
+  (one bold line on what the file adds, the steps, then the columns and "Download a sample (CSV)" in its pill, fictional
+  rows to replace), each column explained under it, then a "Select file to upload" field and a navy "Add names"; a refusal shows at the dialog's top. Import transactions' first step and the payroll match's upload follow the same order.
 - **What went wrong** (a refusal, a failed save): `ErrorNote` (`ad-error`: a soft red band, ⚠️ then the message in
   bold red), at the top of the form, dialog or section; a problem with one field goes beside that field. Never wrap an
   error in `Notice` or style a new error box.
@@ -466,6 +481,11 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
   problem in one message; its `ErrorNote` is only for what the screen could not know. A choice the screen knows cannot work
   here (a saved mapping made for other columns) is not offered.
 
+- **Choosing several from a list that can grow** (engagements, people, tag values):
+  `MultiSelect` (`components/MultiSelect.tsx`; owner's decision, 2026-11-27; Add to staff's engagements converted, #136): a box showing the chosen ones as chips that opens a
+  searchable, tickable list drawn over the page. Never a column of checkboxes, which pushes the dialog down as the list
+  grows. A short fixed list (`ENGAGEMENT_TRACKS`, `TAG_TARGETS`) may stay checkboxes; "every one" is its own checkbox
+  beside the picker (the financial categories' Applies to).
 - **Buttons:** navy (`kind="navy"`) for actions, Next and Save; green (`primary`) only for a card's one creating
   action ("+ Invite someone", "+ Add Tag Group"), placed beside the card's heading; Cancel `ghost`; a removal is a red
   text link. A dialog saves when its form is done: no separate "Save all" button under a list.

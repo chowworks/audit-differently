@@ -8,7 +8,22 @@ import {
   type ProgramNamesDto,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
-import { Button, Card, ErrorNote } from '@/components/ui'
+import { BulkAddModal } from '@/components/BulkAddModal'
+import { Button, Card, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
+
+/** Bulk Add Names' sample: a heading row, then one program a row. Fictional rows, meant to be replaced. */
+const PROGRAM_SAMPLE = [
+  'Payroll Project Names,,',
+  'Youth Works,YW-2026,Summer Youth Works',
+  'Adult Pathways,AP Training,',
+].join('\r\n')
+
+const PROGRAM_COLUMNS: [string, string][] = [
+  [
+    'Payroll Project Names',
+    'every name one program goes by, one per column: in your books and in your payroll files',
+  ],
+]
 
 /**
  * The workspace's program names (owner's decision, 2026-11-01): each program's names in the books and the payroll
@@ -31,7 +46,9 @@ export function ProgramNamesCard({
   } = useLoad<ProgramNamesDto>(`/workspaces/${workspaceId}/program-names`)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const run = async (work: () => Promise<ProgramNamesDto>) => {
+  const [adding, setAdding] = useState(false)
+  // A refusal shows on the card, or, from a dialog (`inDialog`), is thrown back for the dialog to show at its top.
+  const run = async (work: () => Promise<ProgramNamesDto>, inDialog = false) => {
     setBusy(true)
     setError(null)
     try {
@@ -42,18 +59,26 @@ export function ProgramNamesCard({
           `${out.conflicts.length === 1 ? '1 row was' : `${out.conflicts.length} rows were`} left out: each names programs linked to different engagements (${out.conflicts[0]!.join(' · ')}).`
         )
     } catch (e) {
+      if (inDialog) throw e
       setError((e as Error).message)
     } finally {
       setBusy(false)
     }
   }
-  const save = (programs: ProgramNames[]) =>
-    run(() => api.put<ProgramNamesDto>(`/workspaces/${workspaceId}/program-names`, { programs }))
-  const addFile = (file: File | undefined) => {
-    if (!file) return
+  const save = (programs: ProgramNames[], inDialog = false) =>
+    run(
+      () => api.put<ProgramNamesDto>(`/workspaces/${workspaceId}/program-names`, { programs }),
+      inDialog
+    )
+  const [bulk, setBulk] = useState(false)
+  const [removing, setRemoving] = useState<number | null>(null)
+  const [removeError, setRemoveError] = useState<string | null>(null)
+  const addFile = async (file: File) => {
     const form = new FormData()
     form.append('file', file)
-    void run(() => api.upload<ProgramNamesDto>(`/workspaces/${workspaceId}/program-names`, form))
+    // A refusal throws to the dialog, which shows it; rows left out are said on the card, as after a hand-made change.
+    const out = await api.upload<ProgramNamesDto>(`/workspaces/${workspaceId}/program-names`, form)
+    await run(async () => out)
   }
   const programs = data?.programs ?? []
   const engagements = data?.engagements ?? []
@@ -70,42 +95,35 @@ export function ProgramNamesCard({
   }, [data, hash])
   return (
     <Card
-      title="Program names"
+      id="program-names"
+      title="Map Payroll Programs"
       aside={
         canManage && (
-          <label className="ad-btn ad-btn-navy ad-btn-sm cursor-pointer focus-within:outline focus-within:outline-2 focus-within:outline-offset-2">
-            Add from a file
-            <input
-              type="file"
-              accept=".xlsx,.csv"
-              className="sr-only"
-              disabled={busy}
-              onChange={(e) => {
-                addFile(e.target.files?.[0])
-                e.target.value = ''
-              }}
-            />
-          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button kind="navy" size="sm" disabled={busy} onClick={() => setBulk(true)}>
+              Bulk Add Names
+            </Button>
+            <Button kind="primary" size="sm" disabled={busy} onClick={() => setAdding(true)}>
+              + Add a name
+            </Button>
+          </div>
         )
       }
     >
       <p className="mb-3 text-sm text-soft">
-        The names each program goes by in your books and your payroll company&apos;s files (a class
-        in the books, a project or job in payroll), so the payroll match reads a company-wide export
-        as it is and counts each row on its own engagement. Add a mapping file whose rows each name
-        one program, or put it in the payroll zip&apos;s {PROGRAM_NAMES_FOLDER} folder; each file is
-        merged with the list and never stored. A program is an engagement&apos;s when one of its
-        names is the engagement&apos;s name, or when you link it.
+        Every name a program goes by in your books and payroll files, and the engagement it belongs
+        to. The payroll match reads this list to put each row on its engagement. A file in the
+        payroll zip&apos;s {PROGRAM_NAMES_FOLDER} folder adds to it too.
       </p>
       <ErrorNote message={error ?? loadError} />
       {programs.length === 0 ? (
         <p className="text-sm text-soft">No program names yet.</p>
       ) : (
-        <div className="ad-table-wrap">
+        <div className="ad-tablewrap">
           <table className="ad-table">
             <thead>
               <tr>
-                <th>Names</th>
+                <th>Payroll Project Names</th>
                 <th>Engagement</th>
                 {canManage && <th aria-label="Remove" />}
               </tr>
@@ -158,9 +176,13 @@ export function ProgramNamesCard({
                       <Button
                         kind="ghost"
                         size="sm"
+                        className="text-danger"
                         disabled={busy}
                         aria-label={`Remove ${g.names[0]}`}
-                        onClick={() => void save(programs.filter((_, j) => j !== i))}
+                        onClick={() => {
+                          setRemoveError(null)
+                          setRemoving(i)
+                        }}
                       >
                         Remove
                       </Button>
@@ -172,6 +194,158 @@ export function ProgramNamesCard({
           </table>
         </div>
       )}
+      {removing !== null && programs[removing] && (
+        <Modal title="Remove this program?" onClose={() => setRemoving(null)}>
+          <ErrorNote message={removeError} />
+          <div className="grid gap-3 text-sm">
+            <p className="font-bold">
+              <span aria-hidden="true">⚠️</span> {programs[removing].names.join(' · ')} will no
+              longer be read as a program.
+            </p>
+            <p>
+              Payroll rows already filed stay where they are. The next payroll match that finds
+              these names counts them on no engagement until they are added again. The removal is
+              recorded in the workspace history.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button kind="ghost" onClick={() => setRemoving(null)}>
+                Cancel
+              </Button>
+              <Button
+                kind="danger"
+                disabled={busy}
+                onClick={() => {
+                  setRemoveError(null)
+                  save(
+                    programs.filter((_, j) => j !== removing),
+                    true
+                  ).then(
+                    () => setRemoving(null),
+                    (e: Error) => setRemoveError(e.message)
+                  )
+                }}
+              >
+                Remove
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {bulk && (
+        <BulkAddModal
+          title="Bulk Add Names"
+          lead="Add many programs at once, each with every name it goes by."
+          columns={PROGRAM_COLUMNS}
+          note="Keep the heading row. Rows that share a name are one program."
+          sample={{ fileName: 'program-names-sample.csv', csv: PROGRAM_SAMPLE }}
+          onFile={addFile}
+          onClose={() => setBulk(false)}
+        />
+      )}
+      {adding && (
+        <AddProgramModal
+          programs={programs}
+          engagements={engagements}
+          onClose={() => setAdding(false)}
+          onAdd={async (p) => {
+            await save([...programs, p], true)
+            setAdding(false)
+          }}
+        />
+      )}
     </Card>
+  )
+}
+
+/** One program added by hand: its names in the books and the payroll company's files, and its engagement. */
+function AddProgramModal({
+  programs,
+  engagements,
+  onClose,
+  onAdd,
+}: {
+  programs: ProgramNames[]
+  engagements: ProgramNamesDto['engagements']
+  onClose: () => void
+  onAdd: (p: ProgramNames) => Promise<void>
+}) {
+  const [text, setText] = useState('')
+  const [engagementId, setEngagementId] = useState('auto')
+  const [tried, setTried] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const names = [
+    ...new Set(
+      text
+        .split(/\n|,/)
+        .map((n) => n.trim())
+        .filter(Boolean)
+    ),
+  ]
+  const key = (n: string) => n.trim().toLowerCase()
+  const taken = names.filter((n) => programs.some((g) => g.names.some((x) => key(x) === key(n))))
+  const problem = !names.length
+    ? 'Give at least one name'
+    : taken.length
+      ? `Already on the list: ${taken.join(', ')}`
+      : null
+  const save = async () => {
+    setTried(true)
+    if (problem) return
+    setBusy(true)
+    setError(null)
+    try {
+      await onAdd({
+        names,
+        engagementId:
+          engagementId === 'auto' ? null : engagementId === 'none' ? NOT_OURS : engagementId,
+      })
+    } catch (e) {
+      setError((e as Error).message)
+    }
+    setBusy(false)
+  }
+  return (
+    <Modal title="Add a program" onClose={onClose}>
+      <ErrorNote message={error} />
+      <div className="grid gap-3">
+        <Field
+          label="Names"
+          required
+          hint="Each name the program goes by in the books (a class) or in payroll (a project or job), one per line"
+          error={tried || taken.length ? problem : null}
+        >
+          <textarea
+            className={inputClass}
+            rows={3}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+        </Field>
+        <Field label="Engagement">
+          <select
+            className={inputClass}
+            value={engagementId}
+            onChange={(e) => setEngagementId(e.target.value)}
+          >
+            <option value="auto">The engagement of its name, if any</option>
+            <option value="none">Not linked</option>
+            {engagements.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button kind="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button kind="navy" onClick={() => void save()} disabled={busy}>
+          Save
+        </Button>
+      </div>
+    </Modal>
   )
 }

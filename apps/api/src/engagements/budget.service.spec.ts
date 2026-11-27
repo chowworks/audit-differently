@@ -87,6 +87,21 @@ function service(
     )
   const prisma = {
     engagement: scoped(engagement()),
+    // The QuickBooks names list: one workspace entry goes to Travel (#132).
+    lineAlias: {
+      findMany: jest.fn(async () => [
+        {
+          id: 'a-1',
+          engagementId: null,
+          name: '62000 Travel',
+          key: '62000 travel',
+          budgetLineName: 'Travel',
+          unallowable: false,
+        },
+      ]),
+      update: jest.fn(async () => ({})),
+      create: jest.fn(async () => ({})),
+    },
     budgetLine: {
       findFirst: jest.fn(async (args: { where: Record<string, unknown> }) => {
         const { category, engagementId, ...rest } = args.where
@@ -96,7 +111,12 @@ function service(
         if (engagementId !== undefined && found.engagementId !== engagementId) return null
         return found
       }),
-      findMany: jest.fn(async () => lines.filter((l) => l.engagementId === 'e-1')),
+      findMany: jest.fn(async (args?: { where?: { engagementId?: unknown } }) =>
+        // Another engagement's lines (a rename asks whether one keeps the old name): this workspace has none.
+        typeof args?.where?.engagementId === 'object'
+          ? []
+          : lines.filter((l) => l.engagementId === 'e-1')
+      ),
       count: jest.fn(async () => lines.filter((l) => l.engagementId === 'e-1').length),
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'b-2', ...data })),
       update: jest.fn(async ({ data }: { data: object }) => ({ ...travel(), ...data })),
@@ -430,8 +450,14 @@ describe('BudgetService', () => {
       where: { id: 'b-1' },
       data: { name: 'Staff travel' },
     })
+    // The QuickBooks name that went to Travel goes to Staff travel, in the rename's own transaction.
+    expect(prisma.lineAlias.update).toHaveBeenCalledWith({
+      where: { id: 'a-1' },
+      data: expect.objectContaining({ budgetLineName: 'Staff travel' }),
+    })
     expect(log.entries.at(-1)?.changes).toEqual([
       { field: 'Name', before: 'Travel', after: 'Staff travel' },
+      { field: 'QuickBooks names moved to the new name', after: '1' },
     ])
     await expect(s.update(who, 'e-1', 'b-1', { reportLine: 'indirect' })).rejects.toThrow(
       /keeps the line it rolls up to/

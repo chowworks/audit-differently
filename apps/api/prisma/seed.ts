@@ -5,6 +5,7 @@ import 'reflect-metadata'
 import {
   DOCUMENT_SENSITIVITY,
   REPORT_LINE_LABELS,
+  aliasKey,
   payrollDefaults,
   type ReportLine,
   type DocumentKind,
@@ -1252,15 +1253,8 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
       category: 'Class',
       amount: 'Amount',
     },
-    categories: {
-      'Program supplies': 'supplies',
-      Training: 'participant-training',
-      'Contract services': 'contractual',
-      Travel: 'travel',
-      'Payroll - staff': 'personnel',
-      'Payroll - WEX': 'wex',
-      'Bank fees': 'skip',
-    },
+    // The columns only: where each category goes is on the QuickBooks names list (#132).
+    categories: {},
   }
   await prisma.importMapping.upsert({
     where: { workspaceId_name: { workspaceId: riverbend.id, name: 'Ledger & Co. export' } },
@@ -1272,6 +1266,33 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
       ...mapping,
     },
   })
+
+  // ── The QuickBooks names list (#132) ── Each category of that export, as the books write it, and the budget line it
+  // goes to by the line's name (or Unallowable), for every engagement of the workspace.
+  const names: [string, ReportLine | null][] = [
+    ['Program supplies', 'program-costs'],
+    ['Training', 'program-costs'],
+    ['Contract services', 'program-costs'],
+    ['Travel', 'program-costs'],
+    ['Payroll - staff', 'staff-salaries'],
+    ['Payroll - WEX', 'wex'],
+    ['Entertainment', null],
+  ]
+  for (const [name, line] of names) {
+    const key = aliasKey(name)
+    const data = {
+      name,
+      key,
+      budgetLineName: line ? REPORT_LINE_LABELS[line] : null,
+      unallowable: line === null,
+      changedById: 'demo-dana',
+    }
+    const had = await prisma.lineAlias.findFirst({
+      where: { workspaceId: riverbend.id, list: 'quickbooks', engagementId: null, key },
+    })
+    if (had) await prisma.lineAlias.update({ where: { id: had.id }, data })
+    else await prisma.lineAlias.create({ data: { workspaceId: riverbend.id, ...data } })
+  }
 
   // ── A second engagement ── Adult IT Training shares Riverbend's staff with In-School Youth, for the workspace payroll
   // tour (GitHub issue #22): its September staff charge is covered by its own tagged staff's pay, but the two

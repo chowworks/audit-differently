@@ -141,7 +141,7 @@ export function sortPayrollZip(
 ): {
   files: { file: File; kind: PayrollFolderKind; folder: string }[]
   names: File[]
-  /** The zip's "Account mapping" files: not proof, sent to the engagements' account mappings. */
+  /** The zip's "Account mapping" files: not proof, merged into the QuickBooks names list. */
   mappings: File[]
   /** The zip's "Receipts" files: not payroll proof, sent to the month's receipts of the books' bills. */
   receipts: File[]

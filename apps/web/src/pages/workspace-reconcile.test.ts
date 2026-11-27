@@ -119,7 +119,7 @@ describe('Expenses & Proof rows on no engagement', () => {
       lines: [
         line('billed', 'billed'),
         line('off', 'not-ours'),
-        line('gap', 'no-mapping'),
+        line('gap', 'unmapped'),
         line('entered', 'already-entered'),
       ],
       receipts: [

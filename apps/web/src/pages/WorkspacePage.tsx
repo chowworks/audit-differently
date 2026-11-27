@@ -19,6 +19,7 @@ import { useApi, useLoad } from '@/hooks/useApi'
 import { usePeopleSearch } from '@/hooks/usePeopleSearch'
 import { TagsTable } from '@/pages/TagsTable'
 import { ProgramNamesCard } from '@/pages/ProgramNamesCard'
+import { QuickBooksNamesCard } from '@/pages/QuickBooksNamesCard'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { nextDue, workflow } from '@/lib/workflow'
 import {
@@ -355,10 +356,13 @@ export function WorkspacePage() {
           <SectionHead icon="sliders" title="Configuration Data" />
           <div className="grid gap-4">
             <Tags w={w} onChange={reload} />
-            <MoreLists w={w} onChange={reload} />
             {(w.myRole === 'owner' || w.myRole === 'auditor') && (
               <ProgramNamesCard workspaceId={w.id} canManage={w.myRole === 'owner'} />
             )}
+            {(w.myRole === 'owner' || w.myRole === 'bookkeeper') && (
+              <QuickBooksNamesCard workspaceId={w.id} />
+            )}
+            <MoreLists w={w} onChange={reload} />
           </div>
         </section>
       </div>
@@ -922,7 +926,7 @@ export function Tags({
   const t = editing == null ? undefined : types[editing]
   return (
     <Card
-      title="Tags"
+      title="Manage Tags"
       aside={
         w.canManage && (
           <Button kind={solid} size="sm" onClick={() => setAdding(true)}>
@@ -1075,11 +1079,11 @@ function MoreLists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promis
     }
   }
   return (
-    <Card title="Suggest configuration data">
-      <p className="text-sm text-soft">
-        Need a piece of configuration data we don't have, such as a list your funder's forms use?
-        Suggest it.
-      </p>
+    <HandCard
+      title="Missing something?"
+      icon="💡"
+      lead="Tell us what your funder's forms need, and we'll add it."
+    >
       <ErrorNote message={error} />
       {thanks && (
         <Notice tone="ok" fade>
@@ -1089,7 +1093,8 @@ function MoreLists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promis
       {w.myRole !== 'auditor' && (
         <form onSubmit={suggest} className="mt-3 flex gap-2">
           <input
-            className={inputClass}
+            className={`${inputClass} bg-white text-ink`}
+            aria-label="Suggest configuration data"
             placeholder="e.g. the report lines of our funder's own form"
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -1100,20 +1105,19 @@ function MoreLists({ w, onChange }: { w: WorkspaceDetail; onChange: () => Promis
         </form>
       )}
       {w.suggestions.length > 0 && (
-        <ul className="ad-rows mt-3">
+        <ul className="mt-3 grid gap-1 text-sm">
           {w.suggestions.map((s) => (
-            <li key={s.id} className="ad-row">
-              <span className="ad-row-main">
-                <b>{s.text}</b>
-                <span>
-                  {s.by} · {shortDate(s.createdAt)}
-                </span>
+            <li key={s.id}>
+              <b>{s.text}</b>
+              <span className="opacity-75">
+                {' '}
+                · {s.by} · {shortDate(s.createdAt)}
               </span>
             </li>
           ))}
         </ul>
       )}
-    </Card>
+    </HandCard>
   )
 }
 
