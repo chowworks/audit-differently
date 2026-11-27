@@ -259,6 +259,7 @@ const GATED = [
   'POST /api/workspaces/:id/line-aliases',
   'POST /api/workspaces/:id/line-aliases/choose',
   'POST /api/workspaces/:id/line-aliases/file',
+  'POST /api/workspaces/:id/line-aliases/group',
   'PATCH /api/workspaces/:id/line-aliases/:aliasId',
   'DELETE /api/workspaces/:id/line-aliases/:aliasId',
   'GET /api/workspaces/:id/expenses/:period',

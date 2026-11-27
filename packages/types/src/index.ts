@@ -157,6 +157,19 @@ export interface LineAliasInput {
   unallowable?: boolean
 }
 
+/**
+ * One row of the workspace page's list as it is edited: a name and where it maps to, for every engagement (null) or for
+ * the engagements ticked, saved as one entry per engagement. `ids` are the entries the row stood for; an empty
+ * `engagementIds` removes them all.
+ */
+export interface LineAliasGroupInput {
+  ids: string[]
+  name: string
+  engagementIds: string[] | null
+  budgetLineName: string | null
+  unallowable: boolean
+}
+
 /** The list as the workspace page shows it, with each engagement's budget line names to point at. */
 export interface LineAliasesDto {
   aliases: LineAliasDto[]

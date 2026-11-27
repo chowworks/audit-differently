@@ -10,7 +10,7 @@ import { BulkAddModal } from '@/components/BulkAddModal'
 import { Button, Card, ErrorNote, Field, Modal, Notice, inputClass } from '@/components/ui'
 
 /** Where an entry goes, as the list shows it. */
-const goesTo = (a: Pick<LineAliasDto, 'unallowable' | 'budgetLineName'>) =>
+const goesTo = (a: { unallowable: boolean; budgetLineName: string | null }) =>
   a.unallowable ? 'Unallowable' : (a.budgetLineName ?? '')
 
 const UNALLOWABLE = '__unallowable__'
@@ -37,9 +37,62 @@ const NAMES_COLUMNS: [string, string][] = [
 ]
 
 /**
- * The QuickBooks names list (owner's decisions, 2026-11-27, #132): each account or category as QuickBooks writes it,
- * and the budget line it goes to (by the line's name) or Unallowable, for every engagement, with an engagement's own
- * override where it differs. Import transactions and Month End Close both read it. Owners and bookkeepers keep it.
+ * One row of the list: a name and where it maps to, for every engagement (the workspace's entry) or for the engagements
+ * that each keep their own entry mapping it to the same place (owner's decision, 2026-11-27: one row, Applies to listing
+ * them). `except` names the engagements whose own entry maps the workspace's name elsewhere.
+ */
+interface Group {
+  key: string
+  name: string
+  rows: LineAliasDto[]
+  every: boolean
+  engagementIds: string[]
+  unallowable: boolean
+  budgetLineName: string | null
+  except: string[]
+}
+
+function groupsOf(aliases: LineAliasDto[], nameOf: (id: string) => string): Group[] {
+  const target = (a: LineAliasDto) => (a.unallowable ? '!' : aliasKey(a.budgetLineName ?? ''))
+  const byKey = new Map<string, LineAliasDto[]>()
+  for (const a of aliases) {
+    const k = `${aliasKey(a.name)}|${a.engagementId === null ? '*' : target(a)}`
+    byKey.set(k, [...(byKey.get(k) ?? []), a])
+  }
+  return [...byKey.entries()]
+    .map(([key, rows]) => {
+      rows.sort((x, y) => nameOf(x.engagementId ?? '').localeCompare(nameOf(y.engagementId ?? '')))
+      const first = rows[0]!
+      const every = first.engagementId === null
+      return {
+        key,
+        name: first.name,
+        rows,
+        every,
+        engagementIds: every ? [] : rows.map((r) => r.engagementId!),
+        unallowable: first.unallowable,
+        budgetLineName: first.budgetLineName,
+        except: every
+          ? aliases
+              .filter(
+                (o) =>
+                  o.engagementId !== null &&
+                  aliasKey(o.name) === aliasKey(first.name) &&
+                  target(o) !== target(first)
+              )
+              .map((o) => nameOf(o.engagementId!))
+              .sort()
+          : [],
+      }
+    })
+    .sort((x, y) => x.name.localeCompare(y.name) || (x.every ? -1 : y.every ? 1 : 0))
+}
+
+/**
+ * The financial categories list (owner's decisions, 2026-11-27, #132): each account or category exactly as the
+ * financial system writes it, and the budget line it maps to (by the line's name) or Unallowable, for every engagement,
+ * with engagements' own entries where they differ. Import transactions and Month End Close both read it. Owners and
+ * bookkeepers keep it.
  */
 export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
   const api = useApi()
@@ -47,52 +100,52 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
   const { data, error: loadError, setData } = useLoad<LineAliasesDto>(path)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
-  const [editing, setEditing] = useState<LineAliasDto | 'new' | null>(null)
+  const [editing, setEditing] = useState<Group | 'new' | null>(null)
   const [search, setSearch] = useState('')
-  const [removing, setRemoving] = useState<LineAliasDto | null>(null)
+  const [removing, setRemoving] = useState<Group | null>(null)
   const [removeBusy, setRemoveBusy] = useState(false)
   const [removeError, setRemoveError] = useState<string | null>(null)
-  const remove = async (a: LineAliasDto) => {
+
+  const aliases = data?.aliases ?? []
+  const engagements = data?.engagements ?? []
+  const nameOf = (id: string) => engagements.find((e) => e.id === id)?.name ?? 'An engagement'
+  const appliesTo = (g: Group) =>
+    g.every
+      ? `Every engagement${g.except.length ? ` except ${g.except.join(', ')}` : ''}`
+      : g.engagementIds.map(nameOf).join(', ')
+
+  const groups = useMemo(() => {
+    // The search counts only while its box shows.
+    const q = aliases.length > 8 ? aliasKey(search) : ''
+    return groupsOf(aliases, nameOf).filter(
+      (g) =>
+        !q || aliasKey(`${g.name} ${goesTo(g)}`).includes(q) || aliasKey(appliesTo(g)).includes(q)
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aliases, search, engagements])
+
+  const remove = async (g: Group) => {
     setRemoveBusy(true)
     setRemoveError(null)
     try {
-      setData(await api.del<LineAliasesDto>(`${path}/${a.id}`))
+      setData(
+        await api.post<LineAliasesDto>(`${path}/group`, {
+          ids: g.rows.map((r) => r.id),
+          name: g.name,
+          engagementIds: [],
+          unallowable: g.unallowable,
+          budgetLineName: g.budgetLineName,
+        })
+      )
       setRemoving(null)
       setError(null)
-      setDone(`${a.name} removed.`)
+      setDone(`${g.name} removed.`)
     } catch (e) {
       setRemoveError((e as Error).message)
     } finally {
       setRemoveBusy(false)
     }
   }
-
-  const aliases = data?.aliases ?? []
-  const engagements = data?.engagements ?? []
-  const engagementName = (id: string | null) =>
-    id ? (engagements.find((e) => e.id === id)?.name ?? 'An engagement') : 'Every engagement'
-
-  // Each workspace entry, its engagements' overrides under it; an override with no workspace entry stands alone.
-  const groups = useMemo(() => {
-    const byKey = new Map<string, LineAliasDto[]>()
-    for (const a of aliases)
-      byKey.set(aliasKey(a.name), [...(byKey.get(aliasKey(a.name)) ?? []), a])
-    // The search counts only while its box shows.
-    const q = aliases.length > 8 ? aliasKey(search) : ''
-    return [...byKey.values()]
-      .map((rows) =>
-        rows.sort((x, y) =>
-          x.engagementId === null
-            ? -1
-            : y.engagementId === null
-              ? 1
-              : engagementName(x.engagementId).localeCompare(engagementName(y.engagementId))
-        )
-      )
-      .filter((rows) => !q || rows.some((a) => aliasKey(`${a.name} ${goesTo(a)}`).includes(q)))
-      .sort((x, y) => x[0]!.name.localeCompare(y[0]!.name))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aliases, search, engagements])
 
   const [bulk, setBulk] = useState(false)
   const addFile = async (file: File) => {
@@ -162,42 +215,38 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
               </tr>
             </thead>
             <tbody>
-              {groups.flatMap((rows) =>
-                rows.map((a, i) => (
-                  <tr key={a.id}>
-                    <td className={i > 0 && rows[0]!.engagementId === null ? 'pl-8 text-soft' : ''}>
-                      {i > 0 && rows[0]!.engagementId === null ? '↳ same name' : a.name}
-                    </td>
-                    <td>
-                      {a.unallowable ? (
-                        <span className="ad-chip ad-chip-warn">Unallowable</span>
-                      ) : (
-                        a.budgetLineName
-                      )}
-                    </td>
-                    <td>{engagementName(a.engagementId)}</td>
-                    <td className="whitespace-nowrap text-right">
-                      <Button
-                        kind="navy"
-                        size="sm"
-                        onClick={() => setEditing(a)}
-                        aria-label={`Edit ${a.name}`}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        kind="ghost"
-                        size="sm"
-                        className="text-danger"
-                        onClick={() => setRemoving(a)}
-                        aria-label={`Remove ${a.name}`}
-                      >
-                        Remove
-                      </Button>
-                    </td>
-                  </tr>
-                ))
-              )}
+              {groups.map((g) => (
+                <tr key={g.key}>
+                  <td>{g.name}</td>
+                  <td>
+                    {g.unallowable ? (
+                      <span className="ad-chip ad-chip-warn">Unallowable</span>
+                    ) : (
+                      g.budgetLineName
+                    )}
+                  </td>
+                  <td>{appliesTo(g)}</td>
+                  <td className="whitespace-nowrap text-right">
+                    <Button
+                      kind="navy"
+                      size="sm"
+                      onClick={() => setEditing(g)}
+                      aria-label={`Edit ${g.name}`}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      kind="ghost"
+                      size="sm"
+                      className="text-danger"
+                      onClick={() => setRemoving(g)}
+                      aria-label={`Remove ${g.name}`}
+                    >
+                      Remove
+                    </Button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -208,8 +257,7 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
           <div className="grid gap-3 text-sm">
             <p className="font-bold">
               <span aria-hidden="true">⚠️</span> {removing.name} will no longer map to{' '}
-              {goesTo(removing)} for{' '}
-              {removing.engagementId ? engagementName(removing.engagementId) : 'every engagement'}.
+              {goesTo(removing)} for {removing.every ? 'every engagement' : appliesTo(removing)}.
             </p>
             <p>
               Its expenses already imported keep their budget lines. The next import or month end
@@ -254,7 +302,10 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
   )
 }
 
-/** Add or change one name: what QuickBooks calls it, for every engagement or one, and where it goes. */
+/**
+ * Add or edit one row: the category as the financial system writes it, where it maps to, and the engagements it applies
+ * to (every engagement, or the ones ticked). Saved as a whole: an engagement unticked loses its entry for the name.
+ */
 function AliasModal({
   path,
   editing,
@@ -263,88 +314,99 @@ function AliasModal({
   onSaved,
 }: {
   path: string
-  editing: LineAliasDto | null
+  editing: Group | null
   data: LineAliasesDto
   onClose: () => void
   onSaved: (out: LineAliasesDto, said: string) => void
 }) {
   const api = useApi()
   const [name, setName] = useState(editing?.name ?? '')
-  const [engagementId, setEngagementId] = useState(editing?.engagementId ?? '')
+  const [every, setEvery] = useState(editing ? editing.every : true)
+  const [picked, setPicked] = useState<string[]>(editing?.engagementIds ?? [])
   const [goes, setGoes] = useState(
     editing ? (editing.unallowable ? UNALLOWABLE : (editing.budgetLineName ?? '')) : ''
   )
   const [error, setError] = useState<string | null>(null)
   const [tried, setTried] = useState(false)
   const [busy, setBusy] = useState(false)
+  const nameOf = (id: string | null) =>
+    data.engagements.find((e) => e.id === id)?.name ?? 'An engagement'
+  const mine = new Set(editing?.rows.map((r) => r.id) ?? [])
 
-  // The budget line names to point at: the engagement's own, or every engagement's for the workspace's entry.
+  // The budget lines to point at: any engagement's for every engagement, else the ones every ticked engagement has.
   const lineNames = useMemo(() => {
-    const from = engagementId
-      ? data.engagements.filter((e) => e.id === engagementId)
-      : data.engagements
+    const from = every ? [] : data.engagements.filter((e) => picked.includes(e.id))
     const seen = new Map<string, string>()
-    for (const e of from)
-      for (const n of e.budgetLines) if (!seen.has(aliasKey(n))) seen.set(aliasKey(n), n)
+    if (!from.length) {
+      for (const e of data.engagements)
+        for (const n of e.budgetLines) if (!seen.has(aliasKey(n))) seen.set(aliasKey(n), n)
+    } else {
+      for (const n of from[0]!.budgetLines)
+        if (from.every((e) => e.budgetLines.some((m) => aliasKey(m) === aliasKey(n))))
+          seen.set(aliasKey(n), n)
+    }
     return [...seen.values()].sort((a, b) => a.localeCompare(b))
-  }, [data.engagements, engagementId])
+  }, [data.engagements, every, picked])
 
-  // Renaming a workspace entry (decision 6): its engagements' overrides of the old name move with it.
-  const renamed =
-    !!editing && editing.engagementId === null && aliasKey(name) !== aliasKey(editing.name)
+  // Renaming the workspace's entry (decision 6): its engagements' own entries of the old name move with it.
+  const renamed = !!editing && editing.every && every && aliasKey(name) !== aliasKey(editing.name)
   const followers = renamed
     ? data.aliases.filter(
         (a) => a.engagementId !== null && aliasKey(a.name) === aliasKey(editing!.name)
       )
     : []
-  const engagementName = (id: string | null) =>
-    data.engagements.find((e) => e.id === id)?.name ?? 'An engagement'
 
-  // A name already on the list for the same engagements is changed there, never overwritten from here.
-  const taken = data.aliases.some(
+  // Another row with the name for the same engagements is edited there, never overwritten from here.
+  const clash = data.aliases.filter(
     (a) =>
-      a.id !== editing?.id &&
-      (a.engagementId ?? '') === engagementId &&
-      aliasKey(a.name) === aliasKey(name)
+      !mine.has(a.id) &&
+      aliasKey(a.name) === aliasKey(name) &&
+      (every ? a.engagementId === null : !!a.engagementId && picked.includes(a.engagementId))
   )
-  // A line that is no longer one of the engagement's (renamed or removed since) is not a choice.
   const goesOk = goes === UNALLOWABLE || lineNames.some((n) => aliasKey(n) === aliasKey(goes))
   const problems = {
     name: !name.trim()
       ? 'Give the category as your financial system writes it'
-      : taken
-        ? 'That category is on the list already: edit that entry instead'
+      : clash.length
+        ? every
+          ? 'That category is on the list for every engagement already: edit that row instead'
+          : `${clash.map((a) => nameOf(a.engagementId)).join(', ')} already map${clash.length === 1 ? 's' : ''} it on another row: edit that row instead`
         : null,
     goes: !goes
       ? 'Choose a budget category, or Unallowable'
       : !goesOk
-        ? `${goes} is no longer a budget line here. Choose another.`
+        ? `${goes} is not a budget category of every engagement ticked. Choose another.`
         : null,
+    applies: !every && !picked.length ? 'Tick at least one engagement' : null,
   }
-  const left = [problems.name && 'Financial Category', problems.goes && 'Maps to'].filter(Boolean)
+  const left = [
+    problems.name && 'Financial Category',
+    problems.goes && 'Maps to',
+    problems.applies && 'Applies to',
+  ].filter(Boolean)
   // Every problem shows at once: as soon as there is something to say, and all of them once Save was pressed.
   const shown = (p: string | null, filled: boolean) => (tried || filled ? p : null)
   const save = async () => {
     setTried(true)
-    if (problems.name || problems.goes) return
+    if (problems.name || problems.goes || problems.applies) return
     setBusy(true)
     setError(null)
-    const body = {
-      name: name.trim(),
-      engagementId: engagementId || null,
-      unallowable: goes === UNALLOWABLE,
-      budgetLineName: goes === UNALLOWABLE ? null : goes,
-    }
     try {
-      const out = editing
-        ? await api.patch<LineAliasesDto>(`${path}/${editing.id}`, body)
-        : await api.post<LineAliasesDto>(path, body)
-      onSaved(out, `${body.name} saved.`)
+      const out = await api.post<LineAliasesDto>(`${path}/group`, {
+        ids: [...mine],
+        name: name.trim(),
+        engagementIds: every ? null : picked,
+        unallowable: goes === UNALLOWABLE,
+        budgetLineName: goes === UNALLOWABLE ? null : goes,
+      })
+      onSaved(out, `${name.trim()} saved.`)
     } catch (e) {
       setError((e as Error).message)
       setBusy(false)
     }
   }
+  const tick = (id: string, on: boolean) =>
+    setPicked((p) => (on ? [...p, id] : p.filter((x) => x !== id)))
   return (
     <Modal
       title={editing ? 'Edit a financial category' : 'Add a financial category'}
@@ -353,13 +415,7 @@ function AliasModal({
       <ErrorNote message={error} />
       {tried && left.length > 0 && (
         <p className="ad-field-error-sum" role="status">
-          Still to fix: {left.join(' and ')}.
-        </p>
-      )}
-      {editing && (
-        <p className="mb-3 text-sm text-soft">
-          Now: <strong>{editing.name}</strong> maps to <strong>{goesTo(editing)}</strong> for{' '}
-          {editing.engagementId ? engagementName(editing.engagementId) : 'every engagement'}.
+          Still to fix: {left.join(', ')}.
         </p>
       )}
       <div className="grid gap-3">
@@ -388,28 +444,27 @@ function AliasModal({
             </option>
           </select>
         </Field>
-        <Field label="Applies to">
-          <select
-            className={inputClass}
-            value={engagementId}
-            onChange={(e) => {
-              const id = e.target.value
-              setEngagementId(id)
-              // A budget category chosen first stays when the engagement has it too.
-              const has = (
-                id ? data.engagements.filter((x) => x.id === id) : data.engagements
-              ).some((x) => x.budgetLines.some((n) => aliasKey(n) === aliasKey(goes)))
-              setGoes((g) => (g === UNALLOWABLE || has ? g : ''))
-            }}
-            disabled={!!editing}
-          >
-            <option value="">Every engagement</option>
+        <Field label="Applies to" error={shown(problems.applies, false)}>
+          <div className="grid gap-1 rounded-md border border-line p-2 text-sm">
+            <label className="flex items-center gap-2 font-semibold">
+              <input type="checkbox" checked={every} onChange={(e) => setEvery(e.target.checked)} />
+              Every engagement
+            </label>
             {data.engagements.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.name} only
-              </option>
+              <label
+                key={e.id}
+                className={`flex items-center gap-2 pl-5 ${every ? 'text-soft' : ''}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={every || picked.includes(e.id)}
+                  disabled={every}
+                  onChange={(x) => tick(e.id, x.target.checked)}
+                />
+                {e.name}
+              </label>
             ))}
-          </select>
+          </div>
         </Field>
         {followers.length > 0 && (
           <div className="text-sm">
@@ -417,23 +472,20 @@ function AliasModal({
             <ul className="ml-5 list-disc">
               {followers.map((a) => (
                 <li key={a.id}>
-                  {a.name} → {goesTo(a)} for {engagementName(a.engagementId)}
+                  {a.name} → {goesTo(a)} for {nameOf(a.engagementId)}
                 </li>
               ))}
             </ul>
           </div>
         )}
       </div>
-      <div className="mt-4 flex items-center justify-between gap-2">
-        <span />
-        <div className="flex gap-2">
-          <Button kind="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button kind="navy" onClick={() => void save()} disabled={busy}>
-            Save
-          </Button>
-        </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button kind="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button kind="navy" onClick={() => void save()} disabled={busy}>
+          Save
+        </Button>
       </div>
     </Modal>
   )

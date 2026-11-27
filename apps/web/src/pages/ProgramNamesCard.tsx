@@ -104,12 +104,9 @@ export function ProgramNamesCard({
       }
     >
       <p className="mb-3 text-sm text-soft">
-        The names each program goes by in your books and your payroll company&apos;s files (a class
-        in the books, a project or job in payroll), so the payroll match reads a company-wide export
-        as it is and counts each row on its own engagement. Add a mapping file whose rows each name
-        one program, or put it in the payroll zip&apos;s {PROGRAM_NAMES_FOLDER} folder; each file is
-        merged with the list and never stored. A program is an engagement&apos;s when one of its
-        names is the engagement&apos;s name, or when you link it.
+        Every name a program goes by in your books and payroll files, and the engagement it belongs
+        to. The payroll match reads this list to put each row on its engagement. A file in the
+        payroll zip&apos;s {PROGRAM_NAMES_FOLDER} folder adds to it too.
       </p>
       <ErrorNote message={error ?? loadError} />
       {programs.length === 0 ? (

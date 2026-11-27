@@ -11,6 +11,7 @@ import {
   WRITE_ROLES,
   aliasKey,
   type LineAliasDto,
+  type LineAliasGroupInput,
   type LineAliasInput,
   type LineAliasesDto,
   type LineAliasesMergeDto,
@@ -278,6 +279,80 @@ export class AliasesService {
       action: 'delete',
       description: `Removed a QuickBooks name from the list ${this.where(row, names)}`,
     })
+    return this.dto(workspaceId)
+  }
+
+  /**
+   * A row of the workspace page saved as a whole (#132 tour, 2026-11-27): its name and where it maps to, for every
+   * engagement or the ones ticked. Its entries for engagements no longer ticked go, each ticked one is written (an entry
+   * that engagement already had for the name is changed), all in one transaction. A workspace entry kept for every
+   * engagement is a plain change, so a rename still takes its engagements' entries with it.
+   */
+  async saveGroup(caller: Caller, workspaceId: string, given: unknown): Promise<LineAliasesDto> {
+    this.keeper(caller, workspaceId)
+    const g = (given && typeof given === 'object' ? given : {}) as Partial<LineAliasGroupInput>
+    const ids = Array.isArray(g.ids) ? g.ids.filter((x): x is string => typeof x === 'string') : []
+    const rows = ids.length
+      ? await this.prisma.lineAlias.findMany({ where: { id: { in: ids }, workspaceId } })
+      : []
+    if (rows.length !== ids.length) throw new NotFoundException()
+    const targets =
+      g.engagementIds === null
+        ? [null]
+        : Array.isArray(g.engagementIds)
+          ? [...new Set(g.engagementIds.filter((x): x is string => typeof x === 'string'))]
+          : undefined
+    if (!targets)
+      throw new BadRequestException('Choose every engagement, or the engagements it applies to')
+    if (
+      targets.length === 1 &&
+      targets[0] === null &&
+      rows.length === 1 &&
+      rows[0]!.engagementId === null
+    )
+      return this.update(caller, workspaceId, rows[0]!.id, { ...g, engagementId: null })
+    const names = new Map((await this.engagements(workspaceId)).map((e) => [e.id, e.name]))
+    const problems = new Set<string>()
+    const writes: AliasWrite[] = []
+    for (const engagementId of targets)
+      try {
+        writes.push(await this.clean(workspaceId, { ...g, engagementId }))
+      } catch (e) {
+        if (!(e instanceof BadRequestException)) throw e
+        for (const p of String(e.message).split('. ')) problems.add(p)
+      }
+    if (problems.size) throw new BadRequestException([...problems].join('. '))
+    const kept = new Set(targets)
+    const goes = writes[0]
+      ? writes[0].unallowable
+        ? 'Unallowable'
+        : writes[0].budgetLineName!
+      : ''
+    await this.log.change(
+      caller,
+      async (tx) => {
+        for (const r of rows)
+          if (!kept.has(r.engagementId)) await tx.lineAlias.delete({ where: { id: r.id } })
+        for (const w of writes) {
+          const own = rows.find((r) => r.engagementId === w.engagementId)
+          await this.put(tx, caller, workspaceId, w, own?.id)
+        }
+      },
+      {
+        workspaceId,
+        resource: 'workspace',
+        subjectId: workspaceId,
+        action: writes.length ? (rows.length ? 'update' : 'create') : 'delete',
+        description: writes.length
+          ? `Saved a financial category on the list for ${
+              targets[0] === null
+                ? 'every engagement'
+                : targets.map((id) => names.get(id!) ?? 'one engagement').join(', ')
+            }`
+          : 'Removed a financial category from the list',
+        changes: writes.length ? [{ field: 'Maps to', after: goes }] : [],
+      }
+    )
     return this.dto(workspaceId)
   }
 

@@ -40,6 +40,16 @@ export class AliasesController {
     return this.aliases.create(await this.callers.load(userId), id, body)
   }
 
+  /** A row of the list saved as a whole: its entries for the engagements ticked, or for every engagement. */
+  @Post('group')
+  async saveGroup(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Body() body: unknown
+  ): Promise<LineAliasesDto> {
+    return this.aliases.saveGroup(await this.callers.load(userId), id, body)
+  }
+
   /** A choice on Month End Close's expenses: kept as the workspace's entry or that engagement's override. */
   @Post('choose')
   async choose(
