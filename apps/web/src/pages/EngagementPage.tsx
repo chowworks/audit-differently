@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   ENGAGEMENT_KIND_LABELS,
   tagValueLabel,
@@ -37,8 +37,10 @@ import {
 import { DeleteModal } from '@/components/DeleteModal'
 import { AttachModal } from '@/components/AttachModal'
 import { AddParticipantModal } from '@/components/AddParticipantModal'
-import { BudgetLineModal, recheckNotice } from '@/components/BudgetLineModal'
+import { BudgetHistoryModal } from '@/components/BudgetHistoryModal'
 import { BudgetSummary, ManageBudgetModal } from '@/components/BudgetSummary'
+import { BudgetUploadModal } from '@/components/BudgetUploadModal'
+import { recheckNotice } from '@/lib/budget-recheck'
 import { ImportTransactionsModal } from '@/components/ImportTransactionsModal'
 import { DocumentMenuModal } from '@/components/DocumentMenuModal'
 import { EditEngagementModal } from '@/components/EditEngagementModal'
@@ -86,12 +88,11 @@ export function EngagementPage() {
   const [participantsOpen, setParticipantsOpen] = useState<{ fileFor?: string } | null>(null)
   const [monthsOpen, setMonthsOpen] = useState<'ledger' | 'submission' | null>(null)
   const [importing, setImporting] = useState(false)
-  // The budget line being changed, or 'new' to add one.
-  // Manage Budget is open; a line's dialog opened from it goes back to it when it closes.
-  const [managing, setManaging] = useState(false)
-  const [budgetLine, setBudgetLine] = useState<
-    EngagementDetail['budgetLines'][number] | 'new' | null
-  >(null)
+  // Manage Budget is open: also on arrival from a link that asks for it (Month End Close's "Open its budget").
+  const [searchParams] = useSearchParams()
+  const [managing, setManaging] = useState(searchParams.get('manage') === 'budget')
+  // The budget upload and the budget history (GitHub issue #98), opened from Manage Budget; it shows again after.
+  const [budgetDialog, setBudgetDialog] = useState<'upload' | 'history' | null>(null)
   const [menu, setMenu] = useState<{
     doc: DocumentDto
     kind: DocumentKind
@@ -586,27 +587,34 @@ export function EngagementPage() {
           onImported={(result) => setData(result.engagement)}
         />
       )}
-      {managing && !budgetLine && (
+      {managing && !budgetDialog && (
         <ManageBudgetModal
           lines={c.budgetLines}
           canManage={c.canManage}
-          onAdd={() => setBudgetLine('new')}
-          onEdit={(b) => setBudgetLine(b)}
+          onUpload={() => setBudgetDialog('upload')}
+          onHistory={() => setBudgetDialog('history')}
           onClose={() => setManaging(false)}
         />
       )}
-      {budgetLine && (
-        <BudgetLineModal
+      {budgetDialog === 'upload' && (
+        <BudgetUploadModal
           engagement={c}
-          line={budgetLine === 'new' ? undefined : budgetLine}
-          onClose={() => setBudgetLine(null)}
+          onClose={() => setBudgetDialog(null)}
           onSaved={(saved) => {
-            setBudgetLine(null)
+            setBudgetDialog(null)
+            setManaging(false)
             setData(saved)
-            const text = recheckNotice(saved)
-            setNotice(text ? { tone: 'danger', text } : null)
+            const did = `Budget uploaded: ${saved.added} added, ${saved.changed} changed, ${saved.removed} removed.`
+            const months = recheckNotice(saved)
+            setNotice({
+              tone: months ? 'danger' : 'ok',
+              text: [did, months].filter(Boolean).join(' '),
+            })
           }}
         />
+      )}
+      {budgetDialog === 'history' && (
+        <BudgetHistoryModal engagement={c} onClose={() => setBudgetDialog(null)} />
       )}
       {editing && (
         <EditEngagementModal

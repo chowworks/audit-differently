@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ReportSummary } from '@ad/types'
-import { recheckNotice, recheckWarning } from './BudgetLineModal'
+import { recheckNotice, recheckWarning } from './budget-recheck'
 
 const month = (period: string, status: ReportSummary['status']) =>
   ({ id: period, period, status }) as ReportSummary

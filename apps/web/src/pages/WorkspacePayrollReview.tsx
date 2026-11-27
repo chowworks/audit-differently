@@ -10,7 +10,6 @@ import {
   type WorkspacePayrollRunDto,
 } from '@ad/types'
 import { money, shortDate } from '@/lib/format'
-import { AddPayrollBudgetLine } from '@/components/AddPayrollBudgetLine'
 import {
   filesWords,
   kindWord,
@@ -39,7 +38,6 @@ export function PlanWords({
   chosen,
   proof,
   reopen,
-  onBudget,
 }: {
   run: WorkspacePayrollRunDto
   /** The owner's own choices on the table. */
@@ -47,8 +45,6 @@ export function PlanWords({
   /** The proof Save attaches, the owner's choices included (`proofList`). */
   proof: PlanProofDto[]
   reopen: WorkspacePayrollMonthDto[]
-  /** A budget line was added or changed here: the page reads the run again. */
-  onBudget?: () => void
 }) {
   const { plan } = run
   return (
@@ -75,16 +71,11 @@ export function PlanWords({
                   {x.missing.includes('people') && (
                     <Link to={`/workspaces/${run.workspaceId}/staff`}>Tag staff →</Link>
                   )}
-                  {x.missing.includes('budget') &&
-                    (onBudget ? (
-                      <AddPayrollBudgetLine
-                        engagementId={x.engagementId}
-                        kind="staff-pay"
-                        onAdded={onBudget}
-                      />
-                    ) : (
-                      <Link to={`/engagements/${x.engagementId}`}>Open its budget →</Link>
-                    ))}
+                  {x.missing.includes('budget') && (
+                    <Link to={`/engagements/${x.engagementId}?manage=budget`}>
+                      Open its budget →
+                    </Link>
+                  )}
                 </li>
               ))}
             </ul>
@@ -129,13 +120,7 @@ export function PlanWords({
                     {u.engagementName}: {money(u.amount)} of{' '}
                     {PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}
                   </span>
-                  {onBudget && (
-                    <AddPayrollBudgetLine
-                      engagementId={u.engagementId}
-                      kind={u.kind}
-                      onAdded={onBudget}
-                    />
-                  )}
+                  <Link to={`/engagements/${u.engagementId}?manage=budget`}>Open its budget →</Link>
                 </li>
               ))}
             </ul>
