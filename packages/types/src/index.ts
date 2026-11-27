@@ -126,6 +126,12 @@ export type LineAliasList = (typeof LINE_ALIAS_LISTS)[number]
 export const MAX_LINE_ALIASES = 2000
 
 /**
+ * A budget line's name as lines compare (owner's decision, 2026-11-27): case and surrounding spaces aside, punctuation
+ * kept, so "Program Costs" and "Program-Costs" are two lines. The database's unique index on a line's name says the same.
+ */
+export const lineKey = (name: string) => name.trim().toLowerCase()
+
+/**
  * A QuickBooks name as the list compares it: case, spacing and punctuation aside, nothing stripped ("60901 Rent
  * Expense" and "60901 rent expense" are one name; "Rent Expense" is another).
  */

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
   aliasKey,
+  lineKey,
   type LineAliasDto,
   type LineAliasesDto,
   type LineAliasesMergeDto,
@@ -55,7 +56,7 @@ interface Group {
 }
 
 function groupsOf(aliases: LineAliasDto[], nameOf: (id: string) => string): Group[] {
-  const target = (a: LineAliasDto) => (a.unallowable ? '!' : aliasKey(a.budgetLineName ?? ''))
+  const target = (a: LineAliasDto) => (a.unallowable ? '!' : lineKey(a.budgetLineName ?? ''))
   const byKey = new Map<string, LineAliasDto[]>()
   for (const a of aliases) {
     const k = `${aliasKey(a.name)}|${a.engagementId === null ? '*' : target(a)}`
@@ -361,11 +362,11 @@ function AliasModal({
     const seen = new Map<string, string>()
     if (!from.length) {
       for (const e of data.engagements)
-        for (const n of e.budgetLines) if (!seen.has(aliasKey(n))) seen.set(aliasKey(n), n)
+        for (const n of e.budgetLines) if (!seen.has(lineKey(n))) seen.set(lineKey(n), n)
     } else {
       for (const n of from[0]!.budgetLines)
-        if (from.every((e) => e.budgetLines.some((m) => aliasKey(m) === aliasKey(n))))
-          seen.set(aliasKey(n), n)
+        if (from.every((e) => e.budgetLines.some((m) => lineKey(m) === lineKey(n))))
+          seen.set(lineKey(n), n)
     }
     return [...seen.values()].sort((a, b) => a.localeCompare(b))
   }, [data.engagements, every, picked])
@@ -385,7 +386,7 @@ function AliasModal({
       aliasKey(a.name) === aliasKey(name) &&
       (every ? a.engagementId === null : !!a.engagementId && picked.includes(a.engagementId))
   )
-  const goesOk = goes === UNALLOWABLE || lineNames.some((n) => aliasKey(n) === aliasKey(goes))
+  const goesOk = goes === UNALLOWABLE || lineNames.some((n) => lineKey(n) === lineKey(goes))
   const problems = {
     name: !name.trim()
       ? 'Give the category as your financial system writes it'

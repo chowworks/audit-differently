@@ -12,7 +12,7 @@ import type {
   WorkspaceExpensesDto,
   WorkspaceExpensesSavedDto,
 } from '@ad/types'
-import { aliasKey, suggestAliases, zipFolder } from '@ad/types'
+import { aliasKey, lineKey, suggestAliases, zipFolder } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty, ErrorNote, Modal, Notice } from '@/components/ui'
@@ -815,7 +815,7 @@ function UnmappedNames({
           <tbody>
             {[...asks.values()].map((a) => {
               const lines = d.engagements.find((e) => e.id === a.engagementId)?.budgetLines ?? []
-              const has = (n: string) => lines.some((b) => aliasKey(b.name) === aliasKey(n))
+              const has = (n: string) => lines.some((b) => lineKey(b.name) === lineKey(n))
               const same = suggestAliases(a.name, d.aliases, inFile, a.engagementId).filter(
                 (s) => s.unallowable || has(s.budgetLineName ?? '')
               )

@@ -1,4 +1,4 @@
-import { aliasKey } from '@ad/types'
+import { aliasKey, lineKey } from '@ad/types'
 
 /** A row of the QuickBooks names list as the lookup reads it. */
 export interface AliasRow {
@@ -38,7 +38,7 @@ export function resolveAlias<L extends { name: string }>(
   // the list keeps each name as given, never shortened (owner's rule, 2026-11-27).
   const own = name.includes(':') ? aliasKey(name.split(':').pop()!) : ''
   const hit = find(key) ?? (own && own !== key ? find(own) : undefined)
-  const lineNamed = (n: string) => lines.find((l) => aliasKey(l.name) === aliasKey(n)) ?? null
+  const lineNamed = (n: string) => lines.find((l) => lineKey(l.name) === lineKey(n)) ?? null
   if (hit) {
     if (hit.unallowable) return { status: 'unallowable', alias: hit }
     const line = lineNamed(hit.budgetLineName ?? '')
@@ -75,12 +75,10 @@ export interface AliasWrite {
  */
 export function writeFor(choice: AliasChoice, aliases: AliasRow[]): AliasWrite | null {
   const key = aliasKey(choice.name)
-  const target = choice.budgetLineName ? aliasKey(choice.budgetLineName) : null
+  const target = choice.budgetLineName ? lineKey(choice.budgetLineName) : null
   const says = (a: AliasRow | undefined) =>
     !!a &&
-    (target === null
-      ? a.unallowable
-      : !a.unallowable && aliasKey(a.budgetLineName ?? '') === target)
+    (target === null ? a.unallowable : !a.unallowable && lineKey(a.budgetLineName ?? '') === target)
   const own = aliases.find(
     (a) => a.engagementId === choice.engagementId && aliasKey(a.name) === key
   )

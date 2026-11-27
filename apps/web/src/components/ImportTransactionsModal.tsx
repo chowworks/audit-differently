@@ -4,6 +4,7 @@ import {
   IMPORT_FIELDS,
   IMPORT_SKIP,
   aliasKey,
+  lineKey,
   suggestAliases,
   PAYROLL_BUDGET_KIND_LABELS,
   REPORT_LINE_LABELS,
@@ -214,9 +215,7 @@ export function ImportTransactionsModal({
     const inFile = preview.categories.map((c) => c.value.trim())
     return suggestAliases(value.trim(), info.aliases, inFile, engagementId).flatMap((s) => {
       if (s.unallowable) return [{ name: s.name, key: IMPORT_SKIP, label: 'Unallowable' }]
-      const o = info.budgetOptions.find(
-        (b) => aliasKey(b.label) === aliasKey(s.budgetLineName ?? '')
-      )
+      const o = info.budgetOptions.find((b) => lineKey(b.label) === lineKey(s.budgetLineName ?? ''))
       return o ? [{ name: s.name, key: o.key, label: o.label }] : []
     })
   }

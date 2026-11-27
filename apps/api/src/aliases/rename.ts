@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client'
-import { aliasKey } from '@ad/types'
+import { lineKey } from '@ad/types'
 
 /**
  * A budget line renamed (owner's decision, 2026-11-27, #132): the QuickBooks names that point at its old name follow it,
@@ -19,7 +19,7 @@ export async function carryRename(
   }
 ): Promise<number> {
   const { workspaceId, engagementId, from, to, changedById } = input
-  if (aliasKey(from) === aliasKey(to)) return 0
+  if (lineKey(from) === lineKey(to)) return 0
   const pointing = (
     await tx.lineAlias.findMany({
       where: {
@@ -29,13 +29,13 @@ export async function carryRename(
         OR: [{ engagementId: null }, { engagementId }],
       },
     })
-  ).filter((a) => aliasKey(a.budgetLineName ?? '') === aliasKey(from))
+  ).filter((a) => lineKey(a.budgetLineName ?? '') === lineKey(from))
   if (!pointing.length) return 0
   const others = await tx.budgetLine.findMany({
     where: { engagement: { workspaceId }, engagementId: { not: engagementId } },
     select: { name: true },
   })
-  const sharedOld = others.some((l) => aliasKey(l.name) === aliasKey(from))
+  const sharedOld = others.some((l) => lineKey(l.name) === lineKey(from))
   const now = { budgetLineName: to, changedById, changedAt: new Date() }
   let n = 0
   for (const a of pointing) {
@@ -69,7 +69,7 @@ export async function carryRename(
     select: { id: true, engagementId: true, key: true, budgetLineName: true },
   })
   const atNew = (a: { budgetLineName: string | null }) =>
-    aliasKey(a.budgetLineName ?? '') === aliasKey(to)
+    lineKey(a.budgetLineName ?? '') === lineKey(to)
   const everyAtNew = new Set(
     after.filter((a) => a.engagementId === null && atNew(a)).map((a) => a.key)
   )

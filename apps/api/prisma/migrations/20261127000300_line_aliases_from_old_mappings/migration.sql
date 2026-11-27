@@ -11,7 +11,9 @@
 --    a blank account, or a pick of 'skip', is Unallowable on that engagement. The first engagement (by when its mapping
 --    was saved) to name an account gives the workspace's entry; another engagement that sends it elsewhere gets its own.
 --
--- Names compare as aliasKey in packages/types does: lower case, every run of other characters one space, trimmed.
+-- QuickBooks names compare as aliasKey in packages/types does: lower case, every run of other characters one space,
+-- trimmed. A saved import answer names its budget line as the old import read it: case aside, punctuation kept
+-- (lineKey), so "Program-Costs" never becomes "Program Costs".
 
 CREATE OR REPLACE FUNCTION "pg_temp"."alias_key"(t TEXT) RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
   SELECT btrim(regexp_replace(lower(t), '[^[:alnum:]]+', ' ', 'g'))
@@ -25,9 +27,9 @@ CREATE OR REPLACE FUNCTION "pg_temp"."name_key"(t TEXT) RETURNS TEXT LANGUAGE sq
     's$', '')
 $$;
 
--- Every budget line, by workspace and engagement, with its name's key.
+-- Every budget line, by workspace and engagement, with its loose name key (Month End Close's old matching).
 CREATE TEMP TABLE "_lines" AS
-SELECT e."workspaceId", b."engagementId", b."id", b."name", b."amount", "pg_temp"."alias_key"(b."name") AS "key",
+SELECT e."workspaceId", b."engagementId", b."id", b."name", b."amount",
   "pg_temp"."name_key"(b."name") AS "loose"
 FROM "BudgetLine" b JOIN "Engagement" e ON e."id" = b."engagementId";
 
@@ -40,7 +42,7 @@ FROM (
     "pg_temp"."alias_key"(c.key) AS "key",
     CASE WHEN c.value #>> '{}' = 'skip' THEN NULL
       ELSE (SELECT l."name" FROM "_lines" l WHERE l."workspaceId" = m."workspaceId"
-              AND l."key" = "pg_temp"."alias_key"(c.value #>> '{}') ORDER BY l."name" LIMIT 1) END AS "line",
+              AND lower(btrim(l."name")) = lower(btrim(c.value #>> '{}')) ORDER BY l."name" LIMIT 1) END AS "line",
     c.value #>> '{}' = 'skip' AS "unallowable",
     COALESCE(m."createdById", 'migration') AS "by"
   FROM "ImportMapping" m, jsonb_each(m."categories") c

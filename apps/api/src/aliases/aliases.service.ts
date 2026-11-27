@@ -10,6 +10,7 @@ import {
   MAX_LINE_ALIASES,
   WRITE_ROLES,
   aliasKey,
+  lineKey,
   type LineAliasDto,
   type LineAliasGroupInput,
   type LineAliasInput,
@@ -140,10 +141,10 @@ export class AliasesService {
     if (engagementId && !e) problems.push('That engagement is not in this workspace')
     if (!unallowable) {
       const names = (e ? [e] : engagements).flatMap((x) =>
-        x.budgetLines.map((b) => aliasKey(b.name))
+        x.budgetLines.map((b) => lineKey(b.name))
       )
       if (!lineName) problems.push('Choose a budget line, or Unallowable')
-      else if (!names.includes(aliasKey(lineName)))
+      else if (!names.includes(lineKey(lineName)))
         problems.push(
           e
             ? `${e.name} has no budget line named ${lineName}`
@@ -490,7 +491,7 @@ export class AliasesService {
         : null
     )
     const known = new Set(
-      engagements.flatMap((x) => (x === e || !e ? x.budgetLines.map((b) => aliasKey(b.name)) : []))
+      engagements.flatMap((x) => (x === e || !e ? x.budgetLines.map((b) => lineKey(b.name)) : []))
     )
     let added = 0
     let same = 0
@@ -511,7 +512,7 @@ export class AliasesService {
             continue
           }
           // A category whose line is on no engagement it could go to waits for a person: never a name to nowhere.
-          if (target && !known.has(aliasKey(target))) {
+          if (target && !known.has(lineKey(target))) {
             skipped++
             continue
           }
@@ -580,7 +581,7 @@ export class AliasesService {
         [x.name, x.number, x.code].some((v) => v && aliasKey(v) === aliasKey(said))
       ) ?? null
     const lineOn = (lines: { name: string }[], said: string) =>
-      lines.find((b) => aliasKey(b.name) === aliasKey(said))?.name ?? null
+      lines.find((b) => lineKey(b.name) === lineKey(said))?.name ?? null
     let added = 0
     let same = 0
     let skipped = 0

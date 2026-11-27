@@ -87,6 +87,22 @@ describe('the QuickBooks names list', () => {
     expect(writeFor({ name: 'Meals', engagementId: 'e-1', budgetLineName: null }, LIST)).toBeNull()
   })
 
+  it('keeps budget lines whose names differ only in punctuation apart', () => {
+    const lines = [...LINES, { id: 'b-pc2', name: 'Program-Costs' }]
+    const list = [...LIST, row('Supplies', 'Program-Costs')]
+    const got = resolveAlias('Supplies', 'e-1', list, lines)
+    expect(got.status === 'line' && got.line.id).toBe('b-pc2')
+    const rent = resolveAlias('60901 Rent Expense', 'e-1', list, lines)
+    expect(rent.status === 'line' && rent.line.id).toBe('b-pc')
+    // Choosing the other line is a change, not what the list already says.
+    expect(
+      writeFor({ name: 'Supplies', engagementId: 'e-1', budgetLineName: 'Program Costs' }, list)
+    ).toMatchObject({ engagementId: 'e-1', budgetLineName: 'Program Costs' })
+    expect(
+      writeFor({ name: 'Supplies', engagementId: 'e-1', budgetLineName: 'program-costs' }, list)
+    ).toBeNull()
+  })
+
   it('reads an account with its parents exactly as written first, then by its own part', () => {
     const path = '60000 G&A:60901 Rent Expense'
     // No entry of the whole path: the entry of its own part, as a mapping sheet writes it.

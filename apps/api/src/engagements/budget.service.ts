@@ -12,7 +12,6 @@ import {
   REPORT_LINES,
   REPORT_LINE_LABELS,
   WRITE_ROLES,
-  aliasKey,
   type BudgetChange,
   type BudgetLineInput,
   type PayrollBudgetKind,
@@ -342,23 +341,14 @@ export class BudgetService {
     return { c, line, label: line.name, hasSpending }
   }
 
-  /**
-   * A name is the engagement's once, whatever its case (the database's unique index says the same) or punctuation: the
-   * financial categories list finds a line by its name that way (`aliasKey`, #132), so "Program-Costs" beside "Program
-   * Costs" would be two lines it can't tell apart.
-   */
+  /** A name is the engagement's once, whatever its case (the database's unique index says the same). */
   private async refuseTaken(engagementId: string, name: string) {
     const lines = await this.prisma.budgetLine.findMany({
       where: { engagementId },
       select: { name: true },
     })
-    const same = lines.find((l) => aliasKey(l.name) === aliasKey(name))
-    if (same)
-      throw new BadRequestException(
-        same.name.toLowerCase() === name.toLowerCase()
-          ? `${name} is already on the budget`
-          : `${name} is too close to ${same.name}, already on the budget: name it differently`
-      )
+    if (lines.some((l) => l.name.toLowerCase() === name.toLowerCase()))
+      throw new BadRequestException(`${name} is already on the budget`)
   }
 
   /**

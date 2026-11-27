@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import {
   aliasKey,
+  lineKey,
   type LineAliasesDto,
   PAYROLL_BUDGET_KINDS,
   PAYROLL_BUDGET_KIND_LABELS,
@@ -86,13 +87,13 @@ export function BudgetLineModal({
   const [busy, setBusy] = useState(false)
   // Renaming a line (decision 6 of #132): the QuickBooks names that go to its old name are shown, and follow it on Save.
   const list = useLoad<LineAliasesDto>(line ? `/workspaces/${c.workspaceId}/line-aliases` : null)
-  const renamed = !!line && !!name.trim() && aliasKey(name) !== aliasKey(line.name)
+  const renamed = !!line && !!name.trim() && lineKey(name) !== lineKey(line.name)
   const following = renamed
     ? (list.data?.aliases ?? []).filter(
         (a) =>
           !a.unallowable &&
           (a.engagementId === null || a.engagementId === c.id) &&
-          aliasKey(a.budgetLineName ?? '') === aliasKey(line!.name) &&
+          lineKey(a.budgetLineName ?? '') === lineKey(line!.name) &&
           // An override of this engagement wins over the workspace's entry of the same name.
           !(
             a.engagementId === null &&
@@ -103,11 +104,9 @@ export function BudgetLineModal({
       )
     : []
   const warning = recheckWarning(c)
-  // Two lines whose names differ only in case or punctuation can't both be on the budget (the financial categories list
-  // would not tell them apart).
-  const taken = new Set(c.budgetLines.filter((b) => b.id !== line?.id).map((b) => aliasKey(b.name)))
-  const suggestions = c.budgetNameSuggestions.filter((n) => !taken.has(aliasKey(n)))
-  const nameTaken = !!aliasKey(name) && taken.has(aliasKey(name))
+  const taken = new Set(c.budgetLines.filter((b) => b.id !== line?.id).map((b) => lineKey(b.name)))
+  const suggestions = c.budgetNameSuggestions.filter((n) => !taken.has(lineKey(n)))
+  const nameTaken = taken.has(lineKey(name))
   // A rename waits for the list of what follows it, so Save never moves names the screen didn't show.
   const renameWaits = renamed && (list.loading || !!list.error)
   // The name follows the report line until the person gives it one of its own.
