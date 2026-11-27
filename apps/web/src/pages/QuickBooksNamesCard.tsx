@@ -449,7 +449,11 @@ function AliasModal({
             </option>
           </select>
         </Field>
-        <Field label="Applies to" error={shown(problems.applies, false)}>
+        <fieldset
+          className="ad-field"
+          aria-describedby={problems.applies ? 'applies-error' : undefined}
+        >
+          <legend className="mb-1">Applies to</legend>
           <div className="grid gap-1 rounded-md border border-line p-2 text-sm">
             <label className="flex items-center gap-2 font-semibold">
               <input type="checkbox" checked={every} onChange={(e) => setEvery(e.target.checked)} />
@@ -475,7 +479,12 @@ function AliasModal({
               </label>
             ))}
           </div>
-        </Field>
+          {shown(problems.applies, false) && (
+            <small id="applies-error" className="ad-field-error" role="alert">
+              {problems.applies}
+            </small>
+          )}
+        </fieldset>
         {followers.length > 0 && (
           <div className="text-sm">
             <p className="font-semibold">These use the old name and will move to the new one:</p>
