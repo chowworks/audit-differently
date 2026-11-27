@@ -196,6 +196,7 @@ model Engagement {
   updatedAt              DateTime          @updatedAt
   workspace              Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   budgetLines            BudgetLine[]
+  budgetFiles            BudgetFile[]
   monthlyReports         MonthlyReport[]
   expenses               Expense[]
   participants           Participant[]
@@ -225,6 +226,27 @@ model BudgetLine {
   engagement   Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
   expenses     Expense[]
 
+  @@index([workspaceId])
+}
+
+/// The budget history (GitHub issue #98; migration 20261127000100): each budget file uploaded, kept as uploaded. The
+/// newest is the current budget's. Append-only; it goes with its engagement. Never a Document: kept from the auditor.
+model BudgetFile {
+  id              String     @id @default(uuid())
+  workspaceId     String? // set by trigger
+  engagementId    String
+  fileName        String
+  contentType     String
+  size            Int
+  sha256          String
+  storageKey      String     @unique
+  lineCount       Int
+  uploadedAt      DateTime   @default(now())
+  uploadedById    String
+  uploadedByEmail String
+  engagement      Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+
+  @@index([engagementId, uploadedAt])
   @@index([workspaceId])
 }
 

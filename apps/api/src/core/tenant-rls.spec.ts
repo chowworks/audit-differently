@@ -67,6 +67,14 @@ suite('tenant isolation', () => {
         number: `N-${w}`,
       })
       await insert(db, 'BudgetLine', { id: `BL-${w}`, engagementId: `E-${w}`, name: 'WEX' })
+      await insert(db, 'BudgetFile', {
+        id: `BF-${w}`,
+        engagementId: `E-${w}`,
+        storageKey: `${w}/E-${w}/general/00000000-0000-0000-0000-000000000001.xlsx`,
+        size: 1,
+        lineCount: 1,
+        uploadedById: `owner-${w}`,
+      })
       await insert(db, 'MonthlyReport', { id: `R-${w}`, engagementId: `E-${w}`, period: '2026-07' })
       await insert(db, 'Expense', {
         id: `X-${w}`,
@@ -147,6 +155,7 @@ suite('tenant isolation', () => {
         )
       for (const [table, id] of [
         ['BudgetLine', 'BL-W1'],
+        ['BudgetFile', 'BF-W1'],
         ['MonthlyReport', 'R-W1'],
         ['Expense', 'X-W1'],
         ['ExpenseDocument', 'X-W1'],
@@ -250,6 +259,7 @@ suite('tenant isolation', () => {
         expect(await ids('Workspace')).toEqual(['W1'])
         expect(await ids('Engagement')).toEqual(['E-W1'])
         expect(await ids('BudgetLine')).toEqual(['BL-W1'])
+        expect(await ids('BudgetFile')).toEqual(['BF-W1'])
         expect(await ids('MonthlyReport')).toEqual(['R-W1'])
         expect(await ids('Expense')).toEqual(['X-W1'])
         expect(await ids('Document')).toEqual(['D-W1'])
@@ -1246,6 +1256,68 @@ suite('tenant isolation', () => {
         ).toBe(1)
         expect((await tryInsert('Expense', line)).error).toBeUndefined()
         expect((await attempt(`UPDATE "Expense" SET vendor = 'v3' WHERE id = 'X-W1'`)).rows).toBe(1)
+      })
+    })
+  })
+
+  describe('budget history (migration 20261127000100)', () => {
+    const file = (id: string, engagement: string, by: string, key?: string) =>
+      `INSERT INTO "BudgetFile" ("id","engagementId","fileName","contentType","size","sha256","storageKey",
+         "lineCount","uploadedById","uploadedByEmail")
+       VALUES ('${id}','${engagement}','budget.xlsx','x',10,'s',
+         '${key ?? `W1/${engagement}/general/00000000-0000-0000-0000-00000000001${id.slice(-1)}.xlsx`}',
+         3,'${by}','${by}@example.org')`
+
+    it('lets a member add a budget file of their own workspace, in their own name, under its engagement', async () => {
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(file('BF-n1', 'E-W1', 'book-W1'))).rows).toBe(1)
+        expect(await one(`SELECT "workspaceId" FROM "BudgetFile" WHERE id = 'BF-n1'`)).toEqual({
+          workspaceId: 'W1',
+        })
+        // In someone else's name, or on another workspace's engagement: refused.
+        expect((await attempt(file('BF-n2', 'E-W1', 'owner-W1'))).error).toMatch(
+          /row-level security/
+        )
+        expect(
+          (
+            await attempt(
+              file(
+                'BF-n3',
+                'E-W2',
+                'book-W1',
+                'W2/E-W2/general/00000000-0000-0000-0000-000000000003.xlsx'
+              )
+            )
+          ).error
+        ).toMatch(/row-level security/)
+        // A key outside its own workspace and engagement: refused by the database.
+        expect(
+          (
+            await attempt(
+              file(
+                'BF-n4',
+                'E-W1',
+                'book-W1',
+                'W2/E-W1/general/00000000-0000-0000-0000-000000000004.xlsx'
+              )
+            )
+          ).error
+        ).toMatch(/BudgetFile_storageKey_check/)
+        expect((await attempt(file('BF-n5', 'nope', 'book-W1'))).error).toMatch(
+          /refers to no Engagement/
+        )
+      })
+    })
+
+    it('lets nobody change or remove a budget file, and shows none of another workspace', async () => {
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect(
+          (await attempt(`UPDATE "BudgetFile" SET "fileName" = 'x.xlsx' WHERE id = 'BF-W1'`)).rows
+        ).toBe(0)
+        expect((await attempt(`DELETE FROM "BudgetFile" WHERE id = 'BF-W1'`)).rows).toBe(0)
+      })
+      await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+        expect(await ids('BudgetFile')).toEqual(['BF-W2'])
       })
     })
   })

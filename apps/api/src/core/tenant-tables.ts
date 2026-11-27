@@ -12,6 +12,7 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   'Membership',
   'Engagement',
   'BudgetLine',
+  'BudgetFile',
   'MonthlyReport',
   'Expense',
   'Document',
