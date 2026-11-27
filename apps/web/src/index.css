@@ -1815,6 +1815,13 @@
     font-size: 14px;
     opacity: 0.88;
   }
+  /* A button waiting for input inside the navy card: dimmed on navy, not a muddy green */
+  .ad-hand form button:disabled {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: transparent;
+    color: rgba(255, 255, 255, 0.6);
+    opacity: 1;
+  }
   /* The encouragement card beside the tiles */
   .ad-cheer {
     display: grid;
