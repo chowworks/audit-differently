@@ -480,9 +480,8 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
   problem in one message; its `ErrorNote` is only for what the screen could not know. A choice the screen knows cannot work
   here (a saved mapping made for other columns) is not offered.
 
-- **Choosing several from a list that can grow** (engagements, people, tag values), on a new or reworked screen:
-  `MultiSelect` (`components/MultiSelect.tsx`; owner's decision, 2026-11-27, going forward only: existing screens are not
-  converted for its sake): a box showing the chosen ones as chips that opens a
+- **Choosing several from a list that can grow** (engagements, people, tag values):
+  `MultiSelect` (`components/MultiSelect.tsx`; owner's decision, 2026-11-27; Add to staff's engagements converted, #136): a box showing the chosen ones as chips that opens a
   searchable, tickable list drawn over the page. Never a column of checkboxes, which pushes the dialog down as the list
   grows. A short fixed list (`ENGAGEMENT_TRACKS`, `TAG_TARGETS`) may stay checkboxes; "every one" is its own checkbox
   beside the picker (the financial categories' Applies to).

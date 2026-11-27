@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { StaffListDto, WorkspacePayrollRunDto } from '@ad/types'
 import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/services/api'
+import { MultiSelect } from '@/components/MultiSelect'
 import { Button, ErrorNote, Field, Modal, inputClass } from '@/components/ui'
 import { besideField, checkStaff, problemsOf } from '@/pages/staffing/staff-paste'
 
@@ -28,19 +29,12 @@ export function AddStaffFoundModal({
   const api = useApi()
   const [name, setName] = useState(found)
   const [role, setRole] = useState('')
-  const [ticked, setTicked] = useState<Set<string>>(new Set())
+  const [ticked, setTicked] = useState<string[]>([])
   const [nameError, setNameError] = useState<string | null>(null)
   const [roleError, setRoleError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const engagements = list.engagements.filter((e) => e.status !== 'closed')
-  const tick = (id: string) =>
-    setTicked((t) => {
-      const next = new Set(t)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
   const showProblems = (problems: { field: 'name' | 'role'; message: string }[]) => {
     const of = (f: 'name' | 'role') => problems.find((p) => p.field === f)
     setNameError(of('name') ? besideField({ row: 1, ...of('name')! }) : null)
@@ -56,7 +50,7 @@ export function AddStaffFoundModal({
     try {
       const done = await api.post<{ run: WorkspacePayrollRunDto; staff: StaffListDto }>(
         `/workspace-payroll-match/${runId}/staff`,
-        { name, role: role || null, engagementIds: [...ticked] }
+        { name, role: role || null, engagementIds: ticked }
       )
       onAdded(done.run, done.staff)
     } catch (e) {
@@ -87,19 +81,16 @@ export function AddStaffFoundModal({
           />
         </Field>
         {engagements.length > 0 && (
-          // Not a <label>: it holds several checkboxes.
+          // Not a <label>: the picker is its own button and search box.
           <div className="ad-field">
             <span>Engagements they work on</span>
-            <ul className="grid gap-1">
-              {engagements.map((e) => (
-                <li key={e.id}>
-                  <label className="flex items-center gap-2 font-normal">
-                    <input type="checkbox" checked={ticked.has(e.id)} onChange={() => tick(e.id)} />
-                    {e.name}
-                  </label>
-                </li>
-              ))}
-            </ul>
+            <MultiSelect
+              label="Engagements they work on"
+              placeholder="Search and choose engagements"
+              options={engagements.map((e) => ({ value: e.id, label: e.name }))}
+              value={ticked}
+              onChange={setTicked}
+            />
           </div>
         )}
         <div className="flex justify-end gap-2">
