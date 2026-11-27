@@ -602,8 +602,8 @@
   color: #8a5a00;
 }
 /* The coloured bar is drawn inside the cell, so the words keep clear of it. */
-.sr-row-red > td:first-child,
-.sr-row-yellow > td:first-child {
+.sr-grid .sr-row-red > td:first-child,
+.sr-grid .sr-row-yellow > td:first-child {
   padding-left: 14px;
 }
 .sr-row-red > td:first-child {
