@@ -467,9 +467,9 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
 - **How to use a screen**, when it isn't obvious: a closed "How to …?" line under its controls with the navy `info` icon (a `<details>`, `.ss-help`), opened
   on a click, never on hover alone.
 - **Adding from a file** (Bulk Add Names, a mapping, a list): never a bare file button. The button opens a dialog
-  (`components/BulkAddModal.tsx`, owner's decision, 2026-11-27): one bold line on what the file adds, each column and
-  what goes in it, "Download the sample (CSV)" with fictional rows to replace, then "Choose your file"; a refusal shows
-  at the dialog's top. Import transactions' first step and the payroll match's upload follow the same order.
+  (`components/BulkAddModal.tsx`, owner's decision, 2026-11-27): the navy `HandCard` the payroll match's upload uses
+  (one bold line on what the file adds, the steps, then the columns and "Download a sample (CSV)" in its pill, fictional
+  rows to replace), each column explained under it, then "Choose your file"; a refusal shows at the dialog's top. Import transactions' first step and the payroll match's upload follow the same order.
 - **What went wrong** (a refusal, a failed save): `ErrorNote` (`ad-error`: a soft red band, ⚠️ then the message in
   bold red), at the top of the form, dialog or section; a problem with one field goes beside that field. Never wrap an
   error in `Notice` or style a new error box.

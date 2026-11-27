@@ -926,7 +926,7 @@ export function Tags({
   const t = editing == null ? undefined : types[editing]
   return (
     <Card
-      title="Manage Tag Values"
+      title="Manage Tags"
       aside={
         w.canManage && (
           <Button kind={solid} size="sm" onClick={() => setAdding(true)}>

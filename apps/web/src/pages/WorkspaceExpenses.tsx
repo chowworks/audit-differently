@@ -799,7 +799,7 @@ function UnmappedNames({
               <th>Financial Category</th>
               <th>Engagement</th>
               <th className="ad-num">Lines</th>
-              <th>Maps to Budget Category</th>
+              <th>Maps to</th>
             </tr>
           </thead>
           <tbody>

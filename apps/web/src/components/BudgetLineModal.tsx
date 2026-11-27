@@ -194,8 +194,8 @@ export function BudgetLineModal({
               ))}
             </ul>
             <p className="text-soft">
-              To send one somewhere else, change it under Map Financial Category to Budget Category
-              on the workspace page.
+              To send one somewhere else, change it under Map Financial Categories on the workspace
+              page.
             </p>
           </div>
         )}

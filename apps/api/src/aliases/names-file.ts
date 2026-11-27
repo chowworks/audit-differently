@@ -15,7 +15,7 @@ export interface NamesFileRow {
 // The sample's own headings, kept narrow so an account mapping (an "Account" column, a "Budget line" one) is never
 // taken for this file.
 const NAME = /^(financial category|quickbooks name)$/i
-const GOES_TO = /^(maps to budget category|goes to)$/i
+const GOES_TO = /^(maps to(?: budget category)?|goes to)$/i
 const ENGAGEMENT = /^(applies to|engagement)$/i
 const UNALLOWABLE = /^unallowable$/i
 

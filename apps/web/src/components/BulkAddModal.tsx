@@ -1,10 +1,12 @@
 import { useState } from 'react'
+import { HandCard } from '@/components/HandCard'
 import { Button, ErrorNote, Modal } from '@/components/ui'
 
 /**
  * Bulk Add Names (owner's decision, 2026-11-27): a file is never chosen from a bare button. The dialog says what the
- * file holds, column by column, offers a sample to download and fill in (fictional rows, meant to be replaced), and only
- * then the file picker. It closes when the file is read; a refusal stays at its top.
+ * file holds in the navy how-to card the payroll match's upload uses (steps, then the columns and the sample in its pill;
+ * fictional rows, meant to be replaced), each column explained under it, and only then the file picker. It closes when
+ * the file is read; a refusal stays at its top.
  */
 export function BulkAddModal({
   title,
@@ -29,14 +31,6 @@ export function BulkAddModal({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const download = () => {
-    const url = URL.createObjectURL(new Blob([sample.csv], { type: 'text/csv;charset=utf-8' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = sample.fileName
-    a.click()
-    URL.revokeObjectURL(url)
-  }
   const choose = async (file: File | undefined) => {
     if (!file) return
     setBusy(true)
@@ -52,24 +46,33 @@ export function BulkAddModal({
   return (
     <Modal title={title} onClose={onClose}>
       <ErrorNote message={error} />
-      <p className="mb-3 font-bold">{lead}</p>
-      <ol className="mb-4 grid list-decimal gap-3 pl-5 text-sm">
-        <li>
-          Download the sample and fill it in, one row each. Its rows are made up: replace them.
-          <ul className="mt-1 list-disc pl-5 text-soft">
-            {columns.map(([c, what]) => (
-              <li key={c}>
-                <strong className="text-ink">{c}</strong>: {what}
-              </li>
-            ))}
-          </ul>
-          {note && <p className="mt-1 text-soft">{note}</p>}
-          <Button kind="navy" size="sm" className="mt-2" onClick={download}>
-            Download the sample (CSV)
-          </Button>
-        </li>
-        <li>Save it as .csv or .xlsx, then choose it. The file is read and never kept.</li>
-      </ol>
+      <HandCard title="How it works" icon="📄" lead={lead}>
+        <ol className="ad-hand-steps">
+          <li>
+            Download the sample and fill it in, one row each. Its rows are made up: replace them.
+          </li>
+          <li>Save it as .csv or .xlsx.</li>
+          <li>Choose it below. The file is read and never kept.</li>
+        </ol>
+        {note && <p>{note}</p>}
+        <p className="ad-hand-address">
+          <span className="ad-hand-address-label">The file&apos;s columns</span>
+          <span>{columns.map(([c]) => c).join(' · ')}</span>
+          <a
+            href={`data:text/csv;charset=utf-8,${encodeURIComponent(sample.csv)}`}
+            download={sample.fileName}
+          >
+            Download a sample (CSV)
+          </a>
+        </p>
+      </HandCard>
+      <ul className="my-4 grid list-disc gap-1 pl-5 text-sm text-soft">
+        {columns.map(([c, what]) => (
+          <li key={c}>
+            <strong className="text-ink">{c}</strong>: {what}
+          </li>
+        ))}
+      </ul>
       <div className="flex justify-end gap-2">
         <Button kind="ghost" onClick={onClose}>
           Cancel

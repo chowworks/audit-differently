@@ -29,7 +29,7 @@ const NAMES_COLUMNS: [string, string][] = [
     'Financial category',
     'exactly what your financial system calls it (QuickBooks, FreshBooks, etc.), such as "60901 Rent Expense"',
   ],
-  ['Maps to budget category', 'the name of a budget line, or Unallowable'],
+  ['Maps to budget category', 'one of your budget categories, by its name, or Unallowable'],
   [
     'Applies to',
     "optional: an engagement's name, when only that engagement maps it there; blank for every engagement",
@@ -114,7 +114,7 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
 
   return (
     <Card
-      title="Map Financial Category to Budget Category"
+      title="Map Financial Categories"
       aside={
         <div className="flex flex-wrap items-center gap-2">
           <Button kind="navy" size="sm" onClick={() => setBulk(true)}>
@@ -157,7 +157,7 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
             <thead>
               <tr>
                 <th>Financial Category</th>
-                <th>Maps to Budget Category</th>
+                <th>Maps to</th>
                 <th>Applies to</th>
                 <th aria-label="Edit or remove" />
               </tr>
@@ -232,7 +232,6 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
           title="Bulk Add Names"
           lead="Add many financial categories at once, each with the budget category it maps to."
           columns={NAMES_COLUMNS}
-          note="An account mapping spreadsheet (accounts and the category each bills to) is read too."
           sample={{ fileName: 'financial-categories-sample.csv', csv: NAMES_SAMPLE }}
           onFile={addFile}
           onClose={() => setBulk(false)}
@@ -323,10 +322,7 @@ function AliasModal({
         ? `${goes} is no longer a budget line here. Choose another.`
         : null,
   }
-  const left = [
-    problems.name && 'Financial Category',
-    problems.goes && 'Maps to Budget Category',
-  ].filter(Boolean)
+  const left = [problems.name && 'Financial Category', problems.goes && 'Maps to'].filter(Boolean)
   // Every problem shows at once: as soon as there is something to say, and all of them once Save was pressed.
   const shown = (p: string | null, filled: boolean) => (tried || filled ? p : null)
   const save = async () => {
@@ -376,7 +372,7 @@ function AliasModal({
         >
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field label="Maps to Budget Category" required error={shown(problems.goes, !!goes)}>
+        <Field label="Maps to" required error={shown(problems.goes, !!goes)}>
           <select
             className={inputClass}
             value={goesOk ? goes : ''}
