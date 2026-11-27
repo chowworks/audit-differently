@@ -50,7 +50,6 @@ export function EditEngagementModal({
     name: c.name,
     solicitation: c.solicitation ?? '',
     funder: c.funder ?? '',
-    funderContact: c.funderContact ?? '',
     tags: c.tags,
     requestedAmount: c.requestedAmount,
     proposalSubmittedOn: day(c.proposalSubmittedOn),
@@ -158,7 +157,6 @@ export function EditEngagementModal({
           <>
             {text('solicitation', 'Proposal name', undefined, 'sm:col-span-2')}
             {text('funder', 'Funding organization', 'Who awards it and audits it')}
-            {text('funderContact', 'Funding organization contact')}
             <div className="ad-field sm:col-span-2">
               <span>Tags</span>
               <TagPicker

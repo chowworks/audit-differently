@@ -8,7 +8,6 @@ const form: EngagementInput = {
   name: 'Summer Youth Works',
   solicitation: 'RFP-0000',
   funder: 'Example Workforce Board',
-  funderContact: 'grants@example.org',
   tags: ['funding-source:source-a'],
   requestedAmount: 50000,
   proposalSubmittedOn: '2026-01-15',
@@ -32,7 +31,6 @@ describe('the new engagement as posted', () => {
       expect(b).not.toHaveProperty(k)
     expect(b).toMatchObject({
       funder: 'Example Workforce Board',
-      funderContact: 'grants@example.org',
       tags: ['funding-source:source-a'],
       awardAmount: 45000,
     })

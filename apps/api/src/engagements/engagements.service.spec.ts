@@ -17,7 +17,6 @@ const engagement = () => ({
   kind: 'grant',
   name: 'Coding Pathway',
   funder: 'Demo Workforce Board',
-  funderContact: null,
   solicitation: null,
   number: 'DEMO-1',
   status: 'active',
@@ -43,6 +42,7 @@ const engagement = () => ({
   monthlyReports: [],
   documents: [],
   budgetLines: [],
+  contacts: [],
   participants: [
     {
       id: 'p-1',
@@ -249,7 +249,7 @@ describe('EngagementsService', () => {
     const who = member('bookkeeper')
     await s.create(who, { ...input, awardAmount: 90000, preparerName: 'Pat Preparer' })
     await s.update(who, 'e-1', { waivers: { 'award-letter': 'Issued by phone to Pat' } })
-    await s.update(who, 'e-1', { awardAmount: 130000, funderContact: 'casey@funder.example' })
+    await s.update(who, 'e-1', { awardAmount: 130000, reportTo: 'casey@funder.example' })
     await s.createReport(who, 'e-1', '2026-09')
     await s.createParticipant(who, 'e-1', newcomer)
     // One line per action, and none for the engagement each change hands back: that is not the page being opened.
@@ -273,8 +273,8 @@ describe('EngagementsService', () => {
     )
     expect(changes[1]!.changes).toEqual([{ field: 'No award letter' }])
     expect(changes[2]!.changes).toEqual([
-      { field: 'Funding organization contact' },
       { field: 'Award amount', before: '125000.00', after: '130000.00' },
+      { field: 'Submitted to' },
     ])
     expect(changes[4]!.changes).toEqual([
       { field: 'Name' },
@@ -382,7 +382,6 @@ describe('EngagementsService', () => {
     name: 'Coding Pathway',
     solicitation: '',
     funder: 'Demo Workforce Board',
-    funderContact: '',
     tags: [],
     requestedAmount: null,
     proposalSubmittedOn: '',

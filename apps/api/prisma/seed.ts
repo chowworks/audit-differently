@@ -129,7 +129,6 @@ async function engagement(
     kind,
     name,
     funder: FUNDER,
-    funderContact: 'grants@demo-board.example',
     solicitation: 'FY27 Youth Programs RFP (demo)',
     requestedAmount: Math.round(award * 1.28),
     proposalSubmittedOn: d('2026-03-14'),
@@ -162,6 +161,34 @@ async function engagement(
     const data = { name, reportLine, amount, narrative, sortOrder: i, payroll: payroll[i]! }
     if (line) await prisma.budgetLine.update({ where: { id: line.id }, data })
     else await prisma.budgetLine.create({ data: { engagementId: c.id, ...data } })
+  }
+  // The award's contacts at the funder (G-09): a grants manager and a contract specialist. Fictional.
+  for (const [i, ct] of [
+    {
+      name: 'Dana Rivers',
+      organization: FUNDER,
+      jobTitle: 'Grants manager',
+      email: 'grants@demo-board.example',
+      phone: '(555) 010-2200',
+    },
+    {
+      name: 'Morgan Lee',
+      organization: FUNDER,
+      jobTitle: 'Contract specialist',
+      email: 'contracts@demo-board.example',
+      phone: '(555) 010-2255',
+    },
+  ].entries()) {
+    const found = await prisma.engagementContact.findFirst({
+      where: { engagementId: c.id, email: ct.email },
+    })
+    if (found)
+      await prisma.engagementContact.update({
+        where: { id: found.id },
+        data: { ...ct, sortOrder: i },
+      })
+    else
+      await prisma.engagementContact.create({ data: { engagementId: c.id, sortOrder: i, ...ct } })
   }
   return c
 }

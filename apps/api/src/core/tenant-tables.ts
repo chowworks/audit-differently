@@ -12,6 +12,9 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   'Membership',
   'Engagement',
   'BudgetLine',
+  // An award's contacts at the funder and partner organizations (migration 20261124000100, issue #94): members
+  // read and write; owners and bookkeepers change them, auditors read only.
+  'EngagementContact',
   'MonthlyReport',
   'Expense',
   'Document',
