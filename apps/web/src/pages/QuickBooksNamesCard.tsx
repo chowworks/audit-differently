@@ -521,8 +521,8 @@ function AliasModal({
         {lost.length > 0 && (
           <div className="text-sm">
             <p className="font-semibold">
-              <span aria-hidden="true">⚠️</span> {lost.map(nameOf).join(', ')}{' '}
-              {lost.length === 1 ? 'will' : 'will all'} no longer map {editing!.name} on this row.
+              <span aria-hidden="true">⚠️</span> {lost.map(nameOf).join(', ')} will no longer map{' '}
+              {editing!.name} on this row.
             </p>
             <p className="text-soft">
               {everyRow

@@ -29,13 +29,15 @@ export function moved(active: number, delta: 1 | -1, count: number): number {
  * Where the list opens: just under the trigger, as wide as it, over the page; above it when there is more room there
  * than below, and never taller than the room it has (it is fixed to the window, so nothing scrolls to the rest).
  */
-const spot = (el: HTMLElement | null): React.CSSProperties | undefined => {
+const spot = (el: HTMLElement | null, rows: number): React.CSSProperties | undefined => {
   const r = el?.getBoundingClientRect()
   if (!r) return undefined
   const below = window.innerHeight - r.bottom - 12
   const above = r.top - 12
+  // The list's own height: padding and search box, then its rows up to the list's 240px.
+  const tall = 70 + Math.min(240, Math.max(1, rows) * 34)
   const side = { position: 'fixed', left: r.left, width: r.width, right: 'auto' } as const
-  return below < 300 && above > below
+  return below < tall && above > below
     ? { ...side, top: 'auto', bottom: window.innerHeight - r.top + 4, maxHeight: above }
     : { ...side, top: r.bottom + 4, maxHeight: below }
 }
@@ -76,15 +78,15 @@ export function MultiSelect({
   // Placed before the first paint, so it never shows in the dialog's flow for a frame.
   // Placed again when a chip added or removed changes the trigger's height.
   useLayoutEffect(() => {
-    if (open) setAt(spot(trigger.current))
-  }, [open, value])
+    if (open) setAt(spot(trigger.current, options.length))
+  }, [open, value, options.length])
   const placed = !!at
   useEffect(() => {
     if (open && placed) search.current?.focus({ preventScroll: true })
   }, [open, placed])
   useEffect(() => {
     if (!open) return
-    const place = () => setAt(spot(trigger.current))
+    const place = () => setAt(spot(trigger.current, options.length))
     // Follows the trigger as the page or the dialog scrolls, and closes once the trigger scrolls out of that box's view.
     const scrolled = (e: Event) => {
       const box = e.target
@@ -110,7 +112,7 @@ export function MultiSelect({
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', scrolled, true)
     }
-  }, [open])
+  }, [open, options.length])
 
   const show = () => {
     setQuery('')
