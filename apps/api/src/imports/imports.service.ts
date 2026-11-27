@@ -253,7 +253,12 @@ export class ImportsService {
     const c = await this.writable(caller, engagementId)
     const table = await readTable(file.buffer, file.originalname)
     const { preview, ready, updates, columns, categories } = await this.plan(c, table, request)
-    const choices = this.choicesOf(c, columns, categories)
+    const choices = this.choicesOf(
+      c,
+      columns,
+      categories,
+      preview.categories.map((v) => v.value)
+    )
     let learning = 0
     const req = (request ?? {}) as ImportRequest
     const reportId = typeof req.reportId === 'string' ? req.reportId : null
@@ -676,13 +681,17 @@ export class ImportsService {
   private choicesOf(
     c: Engagement,
     columns: ImportColumns,
-    categories: ImportCategories
+    categories: ImportCategories,
+    /** The file's own category values: a choice left over from another column is never kept. */
+    inFile: string[]
   ): AliasChoice[] {
     if (!columns.category) return []
     const names = new Map(this.options(c).map((o) => [o.key, o.label]))
+    const here = new Set(inFile)
     return Object.entries(categories)
       .filter(
-        ([value, to]) => aliasKey(accountLeaf(value)) && (to === IMPORT_SKIP || names.has(to))
+        ([value, to]) =>
+          here.has(value) && aliasKey(accountLeaf(value)) && (to === IMPORT_SKIP || names.has(to))
       )
       .map(([value, to]) => ({
         name: accountLeaf(value),

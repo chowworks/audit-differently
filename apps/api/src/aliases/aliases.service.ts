@@ -181,7 +181,16 @@ export class AliasesService {
     if (target) return tx.lineAlias.update({ where: { id: target }, data })
     if ((await tx.lineAlias.count({ where: { workspaceId } })) >= MAX_LINE_ALIASES)
       throw new BadRequestException(`The list keeps at most ${MAX_LINE_ALIASES} names`)
-    return tx.lineAlias.create({ data: { ...data, workspaceId, list: 'quickbooks' } })
+    try {
+      return await tx.lineAlias.create({ data: { ...data, workspaceId, list: 'quickbooks' } })
+    } catch (err) {
+      // Someone added the same name a moment ago (two saves at once): said in plain words, not a server error.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')
+        throw new ConflictException(
+          `${w.name} was just added by someone else. Refresh the page and try again.`
+        )
+      throw err
+    }
   }
 
   private where(w: AliasWrite, names: Map<string, string>) {
@@ -304,6 +313,8 @@ export class AliasesService {
           : undefined
     if (!targets)
       throw new BadRequestException('Choose every engagement, or the engagements it applies to')
+    // Nothing to remove and nothing to write: nothing happened, so nothing is logged.
+    if (!rows.length && !targets.length) return this.dto(workspaceId)
     if (
       targets.length === 1 &&
       targets[0] === null &&
@@ -490,7 +501,8 @@ export class AliasesService {
       async (tx) => {
         const rows = await this.rows(workspaceId, tx)
         for (const { name, budgetLineName: target } of entries) {
-          if (!aliasKey(name)) {
+          // A blank name, or one longer than the list keeps (200 characters), is skipped, never a refused file.
+          if (!aliasKey(name) || name.length > 200) {
             skipped++
             continue
           }
@@ -583,7 +595,13 @@ export class AliasesService {
             r.goesTo === null
               ? null
               : lineOn(e ? e.budgetLines : engagements.flatMap((x) => x.budgetLines), r.goesTo)
-          if (!aliasKey(r.name) || r.goesTo === '' || (r.engagement && !e) || (r.goesTo && !line)) {
+          if (
+            !aliasKey(r.name) ||
+            r.name.length > 200 ||
+            r.goesTo === '' ||
+            (r.engagement && !e) ||
+            (r.goesTo && !line)
+          ) {
             skipped++
             continue
           }

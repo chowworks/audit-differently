@@ -254,7 +254,11 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
                       kind="ghost"
                       size="sm"
                       className="text-danger"
-                      onClick={() => setRemoving(g)}
+                      onClick={() => {
+                        setRemoveError(null)
+                        setRemoveBusy(false)
+                        setRemoving(g)
+                      }}
                       aria-label={`Remove ${g.name}`}
                     >
                       Remove
@@ -429,6 +433,19 @@ function AliasModal({
       (a) => !mine.has(a.id) && a.engagementId === id && aliasKey(a.name) === aliasKey(name)
     )
   const excepted = data.engagements.filter((e) => ownRow(e.id))
+  // What an edit takes away: the engagements this row covered and no longer will, and where each goes after.
+  const covered = (all: boolean, ids: string[]) =>
+    all ? data.engagements.filter((e) => !ownRow(e.id)).map((e) => e.id) : ids
+  const kept = new Set(covered(every, picked))
+  const lost = editing
+    ? covered(editing.every, editing.engagementIds).filter((id) => !kept.has(id))
+    : []
+  const everyRow = data.aliases.find(
+    (a) =>
+      !mine.has(a.id) &&
+      a.engagementId === null &&
+      aliasKey(a.name) === aliasKey(editing?.name ?? '')
+  )
   return (
     <Modal
       title={editing ? 'Edit a financial category' : 'Add a financial category'}
@@ -501,6 +518,19 @@ function AliasModal({
             </small>
           )}
         </fieldset>
+        {lost.length > 0 && (
+          <div className="text-sm">
+            <p className="font-semibold">
+              <span aria-hidden="true">⚠️</span> {lost.map(nameOf).join(', ')}{' '}
+              {lost.length === 1 ? 'will' : 'will all'} no longer map {editing!.name} on this row.
+            </p>
+            <p className="text-soft">
+              {everyRow
+                ? `From the next import or month end, ${lost.length === 1 ? 'it maps' : 'they map'} it to ${goesTo(everyRow)}, as on the every-engagement row.`
+                : 'Their next import or month end asks where it goes.'}
+            </p>
+          </div>
+        )}
         {followers.length > 0 && (
           <div className="text-sm">
             <p className="font-semibold">These use the old name and will move to the new one:</p>

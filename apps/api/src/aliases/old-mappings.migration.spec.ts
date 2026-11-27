@@ -34,6 +34,14 @@ suite('the QuickBooks names list from the old mappings', () => {
     })
     await insert(db, 'BudgetLine', { id: 'E2-tr', engagementId: 'E2', name: 'Travel', amount: 100 })
     // Two saved import mappings, the older first; they disagree on Travel.
+    // The oldest names a line that is gone: passed over, so the next one's answer counts.
+    await insert(db, 'ImportMapping', {
+      id: 'IM-0',
+      workspaceId: 'W1',
+      name: 'Old export',
+      createdAt: '2026-09-01T00:00:00Z',
+      categories: JSON.stringify({ Travel: 'Mileage' }),
+    })
     await insert(db, 'ImportMapping', {
       id: 'IM-1',
       workspaceId: 'W1',
@@ -61,7 +69,8 @@ suite('the QuickBooks names list from the old mappings', () => {
         accounts,
         names: { '60901': 'Rent Expense', '60202': 'Insurance', '63102': 'Salaries' },
         categories: [
-          { category: 'PROGRAM COSTS', line: 'Program Costs', amount: null },
+          // Named loosely, as Month End Close matched it: "Program" is the line "Program Costs".
+          { category: 'PROGRAM COSTS', line: 'Program', amount: null },
           { category: 'STAFF', line: null, amount: 1800 },
         ],
         budget: null,

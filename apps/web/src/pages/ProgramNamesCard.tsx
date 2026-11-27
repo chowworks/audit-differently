@@ -47,7 +47,8 @@ export function ProgramNamesCard({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [adding, setAdding] = useState(false)
-  const run = async (work: () => Promise<ProgramNamesDto>) => {
+  // A refusal shows on the card, or, from a dialog (`inDialog`), is thrown back for the dialog to show at its top.
+  const run = async (work: () => Promise<ProgramNamesDto>, inDialog = false) => {
     setBusy(true)
     setError(null)
     try {
@@ -58,15 +59,20 @@ export function ProgramNamesCard({
           `${out.conflicts.length === 1 ? '1 row was' : `${out.conflicts.length} rows were`} left out: each names programs linked to different engagements (${out.conflicts[0]!.join(' · ')}).`
         )
     } catch (e) {
+      if (inDialog) throw e
       setError((e as Error).message)
     } finally {
       setBusy(false)
     }
   }
-  const save = (programs: ProgramNames[]) =>
-    run(() => api.put<ProgramNamesDto>(`/workspaces/${workspaceId}/program-names`, { programs }))
+  const save = (programs: ProgramNames[], inDialog = false) =>
+    run(
+      () => api.put<ProgramNamesDto>(`/workspaces/${workspaceId}/program-names`, { programs }),
+      inDialog
+    )
   const [bulk, setBulk] = useState(false)
   const [removing, setRemoving] = useState<number | null>(null)
+  const [removeError, setRemoveError] = useState<string | null>(null)
   const addFile = async (file: File) => {
     const form = new FormData()
     form.append('file', file)
@@ -173,7 +179,10 @@ export function ProgramNamesCard({
                         className="text-danger"
                         disabled={busy}
                         aria-label={`Remove ${g.names[0]}`}
-                        onClick={() => setRemoving(i)}
+                        onClick={() => {
+                          setRemoveError(null)
+                          setRemoving(i)
+                        }}
                       >
                         Remove
                       </Button>
@@ -187,6 +196,7 @@ export function ProgramNamesCard({
       )}
       {removing !== null && programs[removing] && (
         <Modal title="Remove this program?" onClose={() => setRemoving(null)}>
+          <ErrorNote message={removeError} />
           <div className="grid gap-3 text-sm">
             <p className="font-bold">
               <span aria-hidden="true">⚠️</span> {programs[removing].names.join(' · ')} will no
@@ -204,9 +214,16 @@ export function ProgramNamesCard({
               <Button
                 kind="danger"
                 disabled={busy}
-                onClick={() =>
-                  void save(programs.filter((_, j) => j !== removing)).then(() => setRemoving(null))
-                }
+                onClick={() => {
+                  setRemoveError(null)
+                  save(
+                    programs.filter((_, j) => j !== removing),
+                    true
+                  ).then(
+                    () => setRemoving(null),
+                    (e: Error) => setRemoveError(e.message)
+                  )
+                }}
               >
                 Remove
               </Button>
@@ -231,7 +248,7 @@ export function ProgramNamesCard({
           engagements={engagements}
           onClose={() => setAdding(false)}
           onAdd={async (p) => {
-            await save([...programs, p])
+            await save([...programs, p], true)
             setAdding(false)
           }}
         />
@@ -256,6 +273,7 @@ function AddProgramModal({
   const [engagementId, setEngagementId] = useState('auto')
   const [tried, setTried] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const names = [
     ...new Set(
       text
@@ -275,15 +293,21 @@ function AddProgramModal({
     setTried(true)
     if (problem) return
     setBusy(true)
-    await onAdd({
-      names,
-      engagementId:
-        engagementId === 'auto' ? null : engagementId === 'none' ? NOT_OURS : engagementId,
-    })
+    setError(null)
+    try {
+      await onAdd({
+        names,
+        engagementId:
+          engagementId === 'auto' ? null : engagementId === 'none' ? NOT_OURS : engagementId,
+      })
+    } catch (e) {
+      setError((e as Error).message)
+    }
     setBusy(false)
   }
   return (
     <Modal title="Add a program" onClose={onClose}>
+      <ErrorNote message={error} />
       <div className="grid gap-3">
         <Field
           label="Names"

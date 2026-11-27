@@ -2441,12 +2441,15 @@
     border-radius: var(--radius);
     background: var(--surface);
     box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+    display: flex;
+    flex-direction: column;
   }
   .ad-ms-search {
     width: 100%;
     margin-bottom: 6px;
   }
   .ad-ms-pop ul {
+    min-height: 0;
     max-height: 240px;
     overflow-y: auto;
     margin: 0;

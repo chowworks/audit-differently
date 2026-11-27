@@ -25,12 +25,19 @@ export function moved(active: number, delta: 1 | -1, count: number): number {
   return (active + delta + count) % count
 }
 
-/** Where the list opens: just under the trigger, as wide as it, over the page. */
+/**
+ * Where the list opens: just under the trigger, as wide as it, over the page; above it when there is more room there
+ * than below, and never taller than the room it has (it is fixed to the window, so nothing scrolls to the rest).
+ */
 const spot = (el: HTMLElement | null): React.CSSProperties | undefined => {
   const r = el?.getBoundingClientRect()
-  return r
-    ? { position: 'fixed', top: r.bottom + 4, left: r.left, width: r.width, right: 'auto' }
-    : undefined
+  if (!r) return undefined
+  const below = window.innerHeight - r.bottom - 12
+  const above = r.top - 12
+  const side = { position: 'fixed', left: r.left, width: r.width, right: 'auto' } as const
+  return below < 300 && above > below
+    ? { ...side, top: 'auto', bottom: window.innerHeight - r.top + 4, maxHeight: above }
+    : { ...side, top: r.bottom + 4, maxHeight: below }
 }
 
 /**
@@ -67,17 +74,31 @@ export function MultiSelect({
   const words = (v: string) => options.find((o) => o.value === v)?.label ?? v
 
   // Placed before the first paint, so it never shows in the dialog's flow for a frame.
+  // Placed again when a chip added or removed changes the trigger's height.
   useLayoutEffect(() => {
     if (open) setAt(spot(trigger.current))
-  }, [open])
+  }, [open, value])
+  const placed = !!at
   useEffect(() => {
-    if (open && at) search.current?.focus()
-  }, [open, at])
+    if (open && placed) search.current?.focus({ preventScroll: true })
+  }, [open, placed])
   useEffect(() => {
     if (!open) return
     const place = () => setAt(spot(trigger.current))
+    // Follows the trigger as the page or the dialog scrolls, and closes once the trigger scrolls out of that box's view.
+    const scrolled = (e: Event) => {
+      const box = e.target
+      if (root.current?.contains(box as Node)) return
+      const r = trigger.current?.getBoundingClientRect()
+      const view =
+        box instanceof Element
+          ? box.getBoundingClientRect()
+          : { top: 0, bottom: window.innerHeight }
+      if (!r || r.bottom < view.top || r.top > view.bottom) setOpen(false)
+      else place()
+    }
     window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
+    window.addEventListener('scroll', scrolled, true)
     const outside = (e: MouseEvent | TouchEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false)
     }
@@ -87,7 +108,7 @@ export function MultiSelect({
       document.removeEventListener('mousedown', outside)
       document.removeEventListener('touchstart', outside)
       window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
+      window.removeEventListener('scroll', scrolled, true)
     }
   }, [open])
 

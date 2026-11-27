@@ -408,10 +408,13 @@ export class ExpensesService {
 
   /**
    * The lines Save wrote before that the books no longer bill there, on a month still a draft: what Save removes, and
-   * what the page lists before it does (review fix, 2026-11-12). A month no longer a draft keeps its lines.
+   * what the page lists before it does (review fix, 2026-11-12). A month no longer a draft keeps its lines, and so does
+   * a line whose account waits for an answer on the financial categories list (unmapped, or a budget line it lacks):
+   * it is asked about, never removed for it (#132).
    */
   private removable(plan: Awaited<ReturnType<ExpensesService['planOf']>>, period: string) {
-    const keys = new Set(plan.lines.filter((l) => l.status === 'billed').map((l) => l.key))
+    const waits = new Set(['billed', 'unmapped', 'no-budget-line'])
+    const keys = new Set(plan.lines.filter((l) => waits.has(l.status)).map((l) => l.key))
     return plan.existing.filter(
       (x) =>
         x.booksKey?.startsWith(`${period}:`) &&

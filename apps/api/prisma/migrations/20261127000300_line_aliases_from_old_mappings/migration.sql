@@ -4,7 +4,7 @@
 --
 -- 1. Each saved import mapping's categories (category -> budget line name, or 'skip') become the workspace's entries:
 --    a line name that is no line of any of the workspace's engagements is left out (a person answers it on the next
---    import). Where two saved mappings disagree on a category, the older mapping's answer is kept.
+--    import). Where two saved mappings disagree on a category, the older mapping's answer that still names a line is kept.
 -- 2. Each engagement's account mapping (account number -> category, and the owner's picks by category) becomes, per
 --    account, the name "<number> <name>" as QuickBooks writes it, going where Month End Close sent it: the owner's pick,
 --    else the line the file's side box names, else the line of the box's amount, else the line named as the category;
@@ -17,25 +17,38 @@ CREATE OR REPLACE FUNCTION "pg_temp"."alias_key"(t TEXT) RETURNS TEXT LANGUAGE s
   SELECT btrim(regexp_replace(lower(t), '[^[:alnum:]]+', ' ', 'g'))
 $$;
 
+-- Month End Close matched a category to a line more loosely (nameKey in account-mapping.ts): also without the word
+-- "cost(s)" and a trailing "s", so "Personnel Costs" was the line "Personnel".
+CREATE OR REPLACE FUNCTION "pg_temp"."name_key"(t TEXT) RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
+  SELECT regexp_replace(
+    btrim(regexp_replace(regexp_replace("pg_temp"."alias_key"(t), '\ycosts?\y', '', 'g'), ' +', ' ', 'g')),
+    's$', '')
+$$;
+
 -- Every budget line, by workspace and engagement, with its name's key.
 CREATE TEMP TABLE "_lines" AS
-SELECT e."workspaceId", b."engagementId", b."id", b."name", b."amount", "pg_temp"."alias_key"(b."name") AS "key"
+SELECT e."workspaceId", b."engagementId", b."id", b."name", b."amount", "pg_temp"."alias_key"(b."name") AS "key",
+  "pg_temp"."name_key"(b."name") AS "loose"
 FROM "BudgetLine" b JOIN "Engagement" e ON e."id" = b."engagementId";
 
 -- 1. Saved import mappings.
 CREATE TEMP TABLE "_from_imports" AS
-SELECT DISTINCT ON (m."workspaceId", "pg_temp"."alias_key"(c.key))
-  m."workspaceId",
-  btrim(c.key) AS "name",
-  "pg_temp"."alias_key"(c.key) AS "key",
-  CASE WHEN c.value #>> '{}' = 'skip' THEN NULL
-    ELSE (SELECT l."name" FROM "_lines" l WHERE l."workspaceId" = m."workspaceId"
-            AND l."key" = "pg_temp"."alias_key"(c.value #>> '{}') ORDER BY l."name" LIMIT 1) END AS "line",
-  c.value #>> '{}' = 'skip' AS "unallowable",
-  COALESCE(m."createdById", 'migration') AS "by"
-FROM "ImportMapping" m, jsonb_each(m."categories") c
-WHERE jsonb_typeof(c.value) = 'string' AND "pg_temp"."alias_key"(c.key) <> ''
-ORDER BY m."workspaceId", "pg_temp"."alias_key"(c.key), m."createdAt";
+SELECT DISTINCT ON (a."workspaceId", a."key") a.*
+FROM (
+  SELECT m."workspaceId", m."createdAt",
+    btrim(c.key) AS "name",
+    "pg_temp"."alias_key"(c.key) AS "key",
+    CASE WHEN c.value #>> '{}' = 'skip' THEN NULL
+      ELSE (SELECT l."name" FROM "_lines" l WHERE l."workspaceId" = m."workspaceId"
+              AND l."key" = "pg_temp"."alias_key"(c.value #>> '{}') ORDER BY l."name" LIMIT 1) END AS "line",
+    c.value #>> '{}' = 'skip' AS "unallowable",
+    COALESCE(m."createdById", 'migration') AS "by"
+  FROM "ImportMapping" m, jsonb_each(m."categories") c
+  WHERE jsonb_typeof(c.value) = 'string' AND "pg_temp"."alias_key"(c.key) <> ''
+) a
+-- An answer naming a line that is gone is passed over, so a newer mapping's answer is kept instead.
+WHERE a."unallowable" OR a."line" IS NOT NULL
+ORDER BY a."workspaceId", a."key", a."createdAt";
 
 INSERT INTO "LineAlias" ("id", "workspaceId", "engagementId", "name", "key", "budgetLineName", "unallowable", "changedById")
 SELECT gen_random_uuid()::TEXT, f."workspaceId", NULL, left(f."name", 200), left(f."key", 200), f."line", f."unallowable", f."by"
@@ -64,19 +77,19 @@ SELECT x.*, "pg_temp"."alias_key"(x."name") AS "key",
       -- the line the side box names, when exactly one line is named so
       (SELECT min(l."name") FROM "_lines" l, jsonb_array_elements(x."box") bx
         WHERE l."engagementId" = x."engagementId"
-          AND "pg_temp"."alias_key"(bx ->> 'category') = "pg_temp"."alias_key"(x."category")
-          AND l."key" = "pg_temp"."alias_key"(bx ->> 'line')
+          AND "pg_temp"."name_key"(bx ->> 'category') = "pg_temp"."name_key"(x."category")
+          AND l."loose" = "pg_temp"."name_key"(bx ->> 'line')
         HAVING count(*) = 1),
       -- the line of the box's amount, when exactly one line has it
       (SELECT min(l."name") FROM "_lines" l, jsonb_array_elements(x."box") bx
         WHERE l."engagementId" = x."engagementId"
-          AND "pg_temp"."alias_key"(bx ->> 'category') = "pg_temp"."alias_key"(x."category")
+          AND "pg_temp"."name_key"(bx ->> 'category') = "pg_temp"."name_key"(x."category")
           AND jsonb_typeof(bx -> 'amount') = 'number'
           AND abs(l."amount" - (bx ->> 'amount')::NUMERIC) < 0.5
         HAVING count(*) = 1),
       -- the line named as the category
       (SELECT min(l."name") FROM "_lines" l
-        WHERE l."engagementId" = x."engagementId" AND l."key" = "pg_temp"."alias_key"(x."category")
+        WHERE l."engagementId" = x."engagementId" AND l."loose" = "pg_temp"."name_key"(x."category")
         HAVING count(*) = 1))
   END AS "line",
   COALESCE(x."category" IS NULL OR btrim(x."category") = '' OR x."chosen" ->> x."category" = 'skip', false)

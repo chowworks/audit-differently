@@ -3,6 +3,7 @@ import {
   IMPORT_FIELD_LABELS,
   IMPORT_FIELDS,
   IMPORT_SKIP,
+  accountLeaf,
   aliasKey,
   suggestAliases,
   PAYROLL_BUDGET_KIND_LABELS,
@@ -211,8 +212,8 @@ export function ImportTransactionsModal({
    */
   const sameAs = (value: string) => {
     if (!info || !preview || !value) return []
-    const inFile = preview.categories.map((c) => c.value)
-    return suggestAliases(value, info.aliases, inFile, engagementId).flatMap((s) => {
+    const inFile = preview.categories.map((c) => accountLeaf(c.value))
+    return suggestAliases(accountLeaf(value), info.aliases, inFile, engagementId).flatMap((s) => {
       if (s.unallowable) return [{ name: s.name, key: IMPORT_SKIP, label: 'Unallowable' }]
       const o = info.budgetOptions.find(
         (b) => aliasKey(b.label) === aliasKey(s.budgetLineName ?? '')
@@ -315,9 +316,14 @@ export function ImportTransactionsModal({
         form({ columns, categories, lines: columns.category ? undefined : rowLines, payroll })
       )
       // Values that name a budget line are pre-filled; the person confirms them and maps the rest.
+      // Only this column's values: choices made for another column are dropped.
       setCategories((c) => {
-        const next = { ...c }
-        for (const v of got.categories) if (!next[v.value] && v.match) next[v.value] = v.match
+        const next: typeof c = {}
+        for (const v of got.categories) {
+          const was = c[v.value]
+          if (was) next[v.value] = was
+          else if (v.match) next[v.value] = v.match
+        }
         return next
       })
       setPreview(got)
