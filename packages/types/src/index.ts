@@ -113,6 +113,63 @@ export interface BudgetChange extends EngagementDetail {
   backToDraft: { id: string; period: string; was: 'closed' | 'submitted' }[]
 }
 
+/**
+ * The budget file's columns, in order (GitHub issue #98; owner's decisions, 2026-11-27): the template has them, and an
+ * uploaded file is read by them. The report line column takes the line's name as the screen shows it
+ * (REPORT_LINE_LABELS). Every cell is required but the note; an amount of $0 is written 0.
+ */
+export const BUDGET_FILE_COLUMNS = [
+  'Budget line',
+  'Monthly report line',
+  'Approved amount',
+  'Note',
+] as const
+
+/**
+ * What Save does with a line of the file: `new` adds it, `change` changes the budget line of the same name in place,
+ * `same` leaves it as it is.
+ */
+export type BudgetFileAction = 'new' | 'change' | 'same'
+
+/** A budget line read from an uploaded file: `row` is its row in the file. */
+export interface BudgetFileRow {
+  row: number
+  name: string
+  reportLine: ReportLine
+  amount: number
+  narrative: string | null
+  action: BudgetFileAction
+}
+
+/**
+ * An uploaded budget file, checked against the current budget and not saved: its lines and what Save does with each,
+ * the current lines Save removes (the file leaves them out), and every problem. A problem with a row has its row
+ * number; one with the budget (a line with spending that the file leaves out) has none. The file replaces the whole
+ * budget, so Save takes it only with no problem: the person corrects the file and uploads it again.
+ */
+export interface BudgetFileDto {
+  rows: BudgetFileRow[]
+  removed: string[]
+  problems: { row: number | null; reason: string }[]
+}
+
+/** What an upload saved: the lines it added, changed and removed. */
+export interface BudgetUploadChange extends BudgetChange {
+  added: number
+  changed: number
+  removed: number
+}
+
+/** A budget file uploaded earlier (the budget history): the newest is the current budget's. */
+export interface BudgetFileVersionDto {
+  id: string
+  fileName: string
+  uploadedAt: string
+  uploadedByEmail: string
+  lineCount: number
+  current: boolean
+}
+
 // ── Expenses and documents ──────────────────────────────────────────────────
 
 export const ALLOCATION_TYPES = ['direct', 'payroll', 'usage', 'books'] as const
