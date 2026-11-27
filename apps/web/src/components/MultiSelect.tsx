@@ -49,6 +49,8 @@ export function MultiSelect({
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(-1)
+  // Drawn over the page at the trigger, so a dialog's scrolling body never clips it.
+  const [at, setAt] = useState<React.CSSProperties | undefined>()
   const root = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const search = useRef<HTMLInputElement>(null)
@@ -59,6 +61,14 @@ export function MultiSelect({
   useEffect(() => {
     if (!open) return
     search.current?.focus()
+    const place = () => {
+      const r = trigger.current?.getBoundingClientRect()
+      if (r)
+        setAt({ position: 'fixed', top: r.bottom + 4, left: r.left, width: r.width, right: 'auto' })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
     const outside = (e: MouseEvent | TouchEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false)
     }
@@ -67,6 +77,8 @@ export function MultiSelect({
     return () => {
       document.removeEventListener('mousedown', outside)
       document.removeEventListener('touchstart', outside)
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
     }
   }, [open])
 
@@ -128,7 +140,7 @@ export function MultiSelect({
         </span>
       </button>
       {open && (
-        <div className="ad-ms-pop">
+        <div className="ad-ms-pop" style={at}>
           <input
             ref={search}
             type="search"
