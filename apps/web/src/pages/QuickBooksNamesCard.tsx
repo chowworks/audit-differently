@@ -453,7 +453,7 @@ function AliasModal({
           className="ad-field"
           aria-describedby={problems.applies ? 'applies-error' : undefined}
         >
-          <legend className="mb-1">Applies to</legend>
+          <legend className="mb-1 font-bold">Applies to</legend>
           <div className="grid gap-1 rounded-md border border-line p-2 text-sm">
             <label className="flex items-center gap-2 font-semibold">
               <input type="checkbox" checked={every} onChange={(e) => setEvery(e.target.checked)} />
