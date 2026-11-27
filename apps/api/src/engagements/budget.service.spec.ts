@@ -1,28 +1,46 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
-import type { Role } from '@ad/types'
 import { member, scoped, stranger, W } from '../core/testing/callers'
-import { expectNoneOf, fakeLog } from '../core/testing/log'
+import { fakeLog } from '../core/testing/log'
 import { BudgetService } from './budget.service'
 
-/** Who may change an engagement's approved budget, what each change logs, and that the checks run again. */
+/**
+ * The approved budget from an Excel file (GitHub issue #98): who may upload it, what Save does with each line, the
+ * budget history, what each save logs, and that a change puts closed and submitted months back to draft.
+ */
 const engagement = () => ({
   id: 'e-1',
   workspaceId: W,
   name: 'Coding Pathway',
   workspace: { id: W },
 })
-const travel = () => ({
-  id: 'b-1',
+
+/** A budget line as Prisma reads it, with how many expenses are spent against it. */
+const line = (
+  id: string,
+  name: string,
+  reportLine: string,
+  amount: number,
+  narrative: string | null,
+  expenses = 0,
+  payroll: string[] = []
+) => ({
+  id,
   workspaceId: W,
   engagementId: 'e-1',
-  name: 'Travel',
-  category: 'travel',
-  reportLine: 'program-costs',
-  amount: 1500,
-  narrative: 'Mileage for site visits',
-  sortOrder: 2,
-  payroll: [] as string[],
+  name,
+  reportLine,
+  amount,
+  narrative,
+  sortOrder: 0,
+  payroll,
+  _count: { expenses },
 })
+/** Travel (no spending), Staff Salaries (spending, holding staff pay) and Rent (no spending). */
+const budget = () => [
+  line('b-1', 'Travel', 'program-costs', 1500, 'Site visits'),
+  line('b-2', 'Staff Salaries', 'staff-salaries', 42000, null, 3, ['staff-pay']),
+  line('b-3', 'Rent', 'program-costs', 900, null),
+]
 
 /** A month of the engagement, as its row stands. */
 const month = (id: string, period: string, status: string, extra: object = {}) => ({
@@ -39,86 +57,53 @@ const month = (id: string, period: string, status: string, extra: object = {}) =
   sentBackReason: null as string | null,
   ...extra,
 })
-const drafts = () => [
-  month('r-1', '2026-08', 'draft'),
-  month('r-2', '2026-09', 'draft'),
-  month('r-3', '2026-10', 'draft'),
-]
+const drafts = () => [month('r-1', '2026-08', 'draft'), month('r-2', '2026-09', 'draft')]
 const approved = { authorizedByName: 'Dana Director', authorizedAt: new Date('2026-10-05') }
 /** A submitted August, a closed September and a draft October. */
 const mixed = () => [
   month('r-1', '2026-08', 'submitted', { ...approved, submittedAt: new Date('2026-09-10') }),
-  month('r-2', '2026-09', 'closed', {
-    ...approved,
-    closingNote: 'Signed off at the board meeting',
-  }),
+  month('r-2', '2026-09', 'closed', { ...approved }),
   month('r-3', '2026-10', 'draft'),
 ]
 
-/** A books' payroll row (imported, kept for payroll reconciliation) on a month, spent against a line. */
-const booksRow = (
-  id: string,
-  monthlyReportId: string,
-  payrollKind: string,
-  budgetLineId: string
-) => ({
-  id,
-  engagementId: 'e-1',
-  monthlyReportId,
-  payrollKind,
-  budgetLineId,
+/** A budget file as the template lays it out, as CSV (read the same way as an .xlsx). */
+const csv = (...rows: string[]) => ({
+  buffer: Buffer.from(['Budget line,Monthly report line,Approved amount,Note', ...rows].join('\n')),
+  originalname: 'budget.csv',
 })
+/** The current budget, unchanged. */
+const same = () =>
+  csv(
+    'Travel,Program Costs,1500,Site visits',
+    'Staff Salaries,Staff Salaries,42000,',
+    'Rent,Program Costs,900,'
+  )
 
-function service(
-  lines = [travel()],
-  months = drafts(),
-  spending = 0,
-  expenses: ReturnType<typeof booksRow>[] = []
-) {
-  const rows = scoped(...lines)
-  type Where = { payrollKind: { in: string[] }; monthlyReport?: { status: string } }
-  const others = (where: Where, lineId: string) =>
-    expenses.filter(
-      (e) =>
-        where.payrollKind.in.includes(e.payrollKind) &&
-        e.budgetLineId !== lineId &&
-        (!where.monthlyReport ||
-          months.find((m) => m.id === e.monthlyReportId)?.status === where.monthlyReport.status)
-    )
+function service(lines = budget(), months = drafts()) {
+  const files: object[] = [
+    {
+      id: 'f-1',
+      workspaceId: W,
+      engagementId: 'e-1',
+      fileName: 'budget-v1.xlsx',
+      contentType: 'x',
+      storageKey: `${W}/e-1/general/k1.xlsx`,
+      uploadedAt: new Date('2026-11-01T10:00:00Z'),
+      uploadedByEmail: 'pat@example.org',
+      lineCount: 3,
+    },
+  ]
   const prisma = {
     engagement: scoped(engagement()),
     budgetLine: {
-      findFirst: jest.fn(async (args: { where: Record<string, unknown> }) => {
-        const { category, engagementId, ...rest } = args.where
-        const found = await rows.findFirst({ where: rest })
-        if (!found) return null
-        if (category !== undefined && found.category !== category) return null
-        if (engagementId !== undefined && found.engagementId !== engagementId) return null
-        return found
-      }),
-      findMany: jest.fn(async () => lines.filter((l) => l.engagementId === 'e-1')),
-      count: jest.fn(async () => lines.filter((l) => l.engagementId === 'e-1').length),
-      create: jest.fn(async ({ data }: { data: object }) => ({ id: 'b-2', ...data })),
-      update: jest.fn(async ({ data }: { data: object }) => ({ ...travel(), ...data })),
-      delete: jest.fn(async () => travel()),
+      findMany: jest.fn(async () => lines),
+      create: jest.fn(async ({ data }: { data: object }) => ({ id: 'b-new', ...data })),
+      update: jest.fn(async ({ data }: { data: object }) => data),
+      delete: jest.fn(async () => ({})),
     },
-    // How many expenses are spent against the line.
-    expense: {
-      count: jest.fn(async (args?: { where: Where & { OR?: unknown } }) =>
-        args?.where.payrollKind
-          ? others(
-              args.where,
-              (args.where.OR as { budgetLineId: { not: string } }[])[1]!.budgetLineId.not
-            ).length
-          : spending
-      ),
-      updateMany: jest.fn(
-        async (args: { where: Where & { OR: unknown }; data: { budgetLineId: string } }) => {
-          const found = others(args.where, args.data.budgetLineId)
-          for (const e of found) e.budgetLineId = args.data.budgetLineId
-          return { count: found.length }
-        }
-      ),
+    budgetFile: {
+      ...scoped(...(files as { id: string }[])),
+      create: jest.fn(async ({ data }: { data: object }) => ({ id: 'f-2', ...data })),
     },
     monthlyReport: {
       findMany: jest.fn(async (args: { where: { status?: { in: string[] } } }) =>
@@ -126,7 +111,6 @@ function service(
           .filter((m) => !args.where.status || args.where.status.in.includes(m.status))
           .map((m) => ({ id: m.id }))
       ),
-      // A copy, as Prisma reads a row.
       findFirst: jest.fn(async (args: { where: { id: string } }) => {
         const m = months.find((x) => x.id === args.where.id)
         return m ? { ...m } : null
@@ -142,30 +126,34 @@ function service(
       findFirst: jest.fn(async () => null),
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'ro-1', ...data })),
     },
-    document: {
-      // The signed copy August was submitted with.
-      findMany: jest.fn(async () => [
-        {
-          id: 'd-signed',
-          kind: 'signed-report',
-          period: '2026-08',
-          uploadedAt: new Date('2026-09-09'),
-        },
-      ]),
-    },
+    document: { findMany: jest.fn(async () => []) },
+  }
+  const storage = {
+    upload: jest.fn(async () => undefined),
+    read: jest.fn(async () => Buffer.from('the file')),
+    delete: jest.fn(async () => undefined),
   }
   const engagements = { detail: jest.fn().mockResolvedValue({ id: 'e-1' }) }
   const checks = { refresh: jest.fn().mockResolvedValue([]) }
   const log = fakeLog(prisma)
-  const writes = [prisma.budgetLine.create, prisma.budgetLine.update, prisma.budgetLine.delete]
+  const writes = [
+    prisma.budgetLine.create,
+    prisma.budgetLine.update,
+    prisma.budgetLine.delete,
+    prisma.budgetFile.create,
+    prisma.monthlyReport.update,
+    storage.upload,
+  ]
   return {
     service: new BudgetService(
       prisma as never,
       engagements as never,
       checks as never,
-      log as never
+      log as never,
+      storage as never
     ),
     prisma,
+    storage,
     checks,
     log,
     writes,
@@ -174,366 +162,203 @@ function service(
 }
 
 describe('BudgetService', () => {
-  it('answers a member of another workspace with 404 and writes nothing', async () => {
-    const { service: s, log, writes } = service()
-    const who = stranger()
-    await expect(
-      s.add(who, 'e-1', { name: 'Rent', reportLine: 'program-costs', amount: 100 })
-    ).rejects.toThrow(NotFoundException)
-    await expect(s.update(who, 'e-1', 'b-1', { amount: 1 })).rejects.toThrow(NotFoundException)
-    await expect(s.remove(who, 'e-1', 'b-1')).rejects.toThrow(NotFoundException)
-    for (const w of writes) expect(w).not.toHaveBeenCalled()
-    expect(log.entries).toEqual([])
-  })
-
-  it('lets an auditor change nothing', async () => {
-    const { service: s, log, writes } = service()
-    const who = member('auditor')
-    await expect(s.add(who, 'e-1', { name: 'Rent', reportLine: 'program-costs' })).rejects.toThrow(
-      ForbiddenException
-    )
-    await expect(s.update(who, 'e-1', 'b-1', { amount: 1 })).rejects.toThrow(ForbiddenException)
-    await expect(s.remove(who, 'e-1', 'b-1')).rejects.toThrow(ForbiddenException)
-    for (const w of writes) expect(w).not.toHaveBeenCalled()
-    expect(log.entries).toEqual([])
-  })
-
-  it('answers a line of another engagement with 404', async () => {
-    const { service: s, writes } = service([{ ...travel(), engagementId: 'e-9' }])
-    await expect(s.update(member('owner'), 'e-1', 'b-1', { amount: 1 })).rejects.toThrow(
-      NotFoundException
-    )
-    await expect(s.remove(member('owner'), 'e-1', 'b-1')).rejects.toThrow(NotFoundException)
-    for (const w of writes) expect(w).not.toHaveBeenCalled()
-  })
-
-  it('takes a named line, once per engagement, with its form line and an amount of $0 or more', async () => {
+  it('lets owners and bookkeepers use the budget file, and refuses an auditor and another workspace', async () => {
     const { service: s, writes } = service()
-    const who = member('bookkeeper')
-    const rent = { name: 'Rent', reportLine: 'program-costs' as const }
-    for (const bad of [
-      { reportLine: 'program-costs' as const },
-      { name: '   ', reportLine: 'program-costs' as const },
-      { name: 'Rent' },
-      { name: 'Rent', reportLine: 'not-a-line' as never },
-      { name: ' travel ', reportLine: 'program-costs' as const, amount: 10 },
-      { ...rent, amount: -5 },
-      { ...rent, amount: 'lots' as unknown as number },
-      { ...rent, narrative: 'x'.repeat(2001) },
+    for (const run of [
+      (who: never) => s.template(who, 'e-1'),
+      (who: never) => s.readFile(who, 'e-1', same()),
+      (who: never) => s.upload(who, 'e-1', same()),
+      (who: never) => s.history(who, 'e-1'),
+      (who: never) => s.historyFile(who, 'e-1', 'f-1'),
+    ]) {
+      // The budget history and the upload are working files: never the auditor's (owner's rule, 2026-11-27).
+      await expect(run(member('auditor') as never)).rejects.toThrow(ForbiddenException)
+      await expect(run(stranger() as never)).rejects.toThrow(NotFoundException)
+    }
+    for (const w of writes) expect(w).not.toHaveBeenCalled()
+    await expect(s.template(member('bookkeeper'), 'e-1')).resolves.toMatchObject({
+      name: 'Coding Pathway - budget.xlsx',
+    })
+  })
+
+  it('reads a file against the budget: what Save does with each line, and what it removes', async () => {
+    const { service: s, writes } = service()
+    const read = await s.readFile(
+      member('owner'),
+      'e-1',
+      csv(
+        'Travel,Program Costs,2000,Site visits',
+        'staff salaries,Staff Salaries,42000,',
+        'Supplies,Program Costs,0,Laptops'
+      )
+    )
+    expect(read.rows.map((r) => [r.name, r.action])).toEqual([
+      ['Travel', 'change'],
+      // The same name in another case is the same line: Save changes its name in place.
+      ['staff salaries', 'change'],
+      ['Supplies', 'new'],
     ])
-      await expect(s.add(who, 'e-1', bad)).rejects.toThrow(BadRequestException)
-    await expect(s.update(who, 'e-1', 'b-1', { amount: -1 })).rejects.toThrow(BadRequestException)
+    expect(read.removed).toEqual(['Rent'])
+    expect(read.problems).toEqual([])
     for (const w of writes) expect(w).not.toHaveBeenCalled()
   })
 
-  it.each(['owner', 'bookkeeper'] as Role[])(
-    'lets the %s add, change and remove a line, each logged with the amount and the narrative by name',
-    async (role) => {
-      const { service: s, prisma, checks, log } = service()
-      const who = member(role)
-      await s.add(who, 'e-1', {
-        name: 'Rent',
-        reportLine: 'program-costs',
-        amount: 1200,
-        narrative: 'Classroom rent',
-      })
-      expect(prisma.budgetLine.create).toHaveBeenCalledWith({
-        data: {
-          engagementId: 'e-1',
-          sortOrder: 1,
-          name: 'Rent',
-          reportLine: 'program-costs',
-          amount: '1200.00',
-          narrative: 'Classroom rent',
-          // Program Costs takes no payroll by default.
-          payroll: [],
-        },
-      })
-      await s.update(who, 'e-1', 'b-1', { amount: 1800, narrative: 'Mileage for site visits' })
-      expect(prisma.budgetLine.update).toHaveBeenCalledWith({
-        where: { id: 'b-1' },
-        data: { amount: '1800.00', narrative: 'Mileage for site visits' },
-      })
-      // Nothing that differs: no write, no line.
-      await s.update(who, 'e-1', 'b-1', { amount: 1500 })
-      expect(prisma.budgetLine.update).toHaveBeenCalledTimes(1)
-      await s.remove(who, 'e-1', 'b-1')
-      expect(prisma.budgetLine.delete).toHaveBeenCalledWith({ where: { id: 'b-1' } })
-      expect(log.entries).toEqual([
-        {
-          workspaceId: W,
-          resource: 'engagement',
-          subjectId: 'e-1',
-          action: 'create',
-          description: 'Added Rent to the approved budget of Coding Pathway',
-          changes: [
-            { field: 'Name', after: 'Rent' },
-            { field: 'Rolls up to', after: 'Program Costs' },
-            { field: 'Amount', after: '1200.00' },
-            { field: 'Note' },
-          ],
-        },
-        {
-          workspaceId: W,
-          resource: 'engagement',
-          subjectId: 'e-1',
-          action: 'update',
-          description: 'Changed Travel on the approved budget of Coding Pathway',
-          changes: [{ field: 'Amount', before: '1500.00', after: '1800.00' }],
-        },
-        {
-          workspaceId: W,
-          resource: 'engagement',
-          subjectId: 'e-1',
-          action: 'delete',
-          description: 'Removed Travel from the approved budget of Coding Pathway',
-          changes: [
-            { field: 'Name', before: 'Travel' },
-            { field: 'Rolls up to', before: 'Program Costs' },
-            { field: 'Amount', before: '1500.00' },
-            { field: 'Note' },
-          ],
-        },
-      ])
-      expectNoneOf(log.entries, ['Classroom rent', 'Mileage'])
-      // Each change runs every month's checks again, closed and submitted ones included: they compare spending
-      // with the budget.
-      expect(checks.refresh).toHaveBeenCalledTimes(9)
-      expect(checks.refresh).toHaveBeenCalledWith('r-3')
-      expect(prisma.monthlyReport.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { engagementId: 'e-1' } })
-      )
-    }
-  )
-
-  it('puts every closed and submitted month back to draft in the change, one line each, drafts untouched', async () => {
-    const { service: s, prisma, checks, log, months } = service([travel()], mixed())
-    const who = member('bookkeeper')
-    const answer = await s.update(who, 'e-1', 'b-1', { amount: 100 })
-    expect(answer.backToDraft).toEqual([
-      { id: 'r-1', period: '2026-08', was: 'submitted' },
-      { id: 'r-2', period: '2026-09', was: 'closed' },
+  it('refuses to leave out or move a line with spending, and counts a refused row as in the file', async () => {
+    const { service: s } = service()
+    const left = await s.readFile(member('owner'), 'e-1', csv('Travel,Program Costs,1500,'))
+    expect(left.problems).toEqual([
+      { row: null, reason: 'Staff Salaries has spending, so it must stay in the file' },
     ])
-    // September is sent back, as the Send back button does it, with the reason on the month.
-    expect(months[1]).toMatchObject({
-      status: 'draft',
-      authorizedByName: null,
-      authorizedAt: null,
-      closingNote: null,
-      sentBackReason: expect.stringMatching(
-        /^Sent back because the approved budget changed on [A-Z][a-z]+ \d{1,2}, \d{4}\.$/
-      ),
-      // The person who changed the budget, and when, for the month's page.
-      sentBackAt: expect.any(Date),
-      sentBackByEmail: who.email,
-    })
-    // August is reopened, as Reopen to correct does it: its submission, approval and signed copy kept for good.
-    expect(months[0]).toMatchObject({
-      status: 'draft',
-      submittedAt: null,
-      authorizedByName: null,
-      authorizedAt: null,
-      sentBackReason: null,
-    })
-    expect(prisma.reportReopening.create).toHaveBeenCalledTimes(1)
-    expect(prisma.reportReopening.create).toHaveBeenCalledWith({
+    const moved = await s.readFile(
+      member('owner'),
+      'e-1',
+      csv('Travel,Program Costs,1500,', 'Staff Salaries,WEX,42000,', 'Rent,,900,')
+    )
+    expect(moved.problems).toEqual([
+      {
+        row: 3,
+        reason: 'Staff Salaries has spending, so it keeps the monthly report line Staff Salaries',
+      },
+      { row: 4, reason: 'Monthly report line is blank' },
+    ])
+    // Rent's row is refused, but the file names it: it is not "left out".
+    expect(moved.removed).toEqual([])
+  })
+
+  it('replaces the budget: changes a line in place, adds and removes, keeps the file, and logs each line', async () => {
+    const { service: s, prisma, storage, log } = service()
+    const saved = await s.upload(
+      member('bookkeeper'),
+      'e-1',
+      csv(
+        'Travel,Program Costs,2000,Site visits',
+        'Staff Salaries,Staff Salaries,42000,',
+        'Supplies,Program Costs,350,'
+      )
+    )
+    expect(saved).toMatchObject({ added: 1, changed: 1, removed: 1, backToDraft: [] })
+    // Changed in place, never removed and added again (CLAUDE.md, "A budget line's name is its key").
+    expect(prisma.budgetLine.update).toHaveBeenCalledWith({
+      where: { id: 'b-1' },
       data: {
-        monthlyReportId: 'r-1',
-        reopenedById: who.userId,
-        reopenedByEmail: who.email,
-        reason: expect.stringMatching(
-          /^The approved budget changed on [A-Z][a-z]+ \d{1,2}, \d{4}\.$/
-        ),
-        submittedAt: new Date('2026-09-10'),
-        approvedByName: 'Dana Director',
-        approvedAt: new Date('2026-10-05'),
-        signedDocumentId: 'd-signed',
+        name: 'Travel',
+        reportLine: 'program-costs',
+        amount: '2000.00',
+        narrative: 'Site visits',
       },
     })
-    // October was a draft: untouched.
-    expect(months[2]!.status).toBe('draft')
-    expect(prisma.monthlyReport.update).toHaveBeenCalledTimes(2)
-    expect(prisma.monthlyReport.update).not.toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'r-3' } })
-    )
-    // One line per month in the person's name, then the budget's own; the approver and note by name alone.
+    expect(prisma.budgetLine.delete).toHaveBeenCalledWith({ where: { id: 'b-3' } })
+    // A new line takes no payroll: the upload leaves payroll as it is (#132).
+    expect(prisma.budgetLine.create.mock.calls[0]![0].data).toEqual({
+      engagementId: 'e-1',
+      sortOrder: 3,
+      name: 'Supplies',
+      reportLine: 'program-costs',
+      amount: '350.00',
+      narrative: null,
+    })
+    // The file as uploaded, under its engagement, kept as the budget history.
+    const key = (storage.upload.mock.calls[0] as unknown[])[0] as string
+    expect(key).toMatch(new RegExp(`^${W}/e-1/general/[0-9a-f-]{36}\\.csv$`))
+    expect(prisma.budgetFile.create.mock.calls[0]![0].data).toMatchObject({
+      engagementId: 'e-1',
+      fileName: 'budget.csv',
+      storageKey: key,
+      lineCount: 3,
+      uploadedById: expect.any(String),
+    })
     expect(log.entries.map((e) => e.description)).toEqual([
-      'Reopened August 2026 of Coding Pathway because the approved budget changed',
-      'Sent back the month-end closing of September 2026 of Coding Pathway because the approved budget changed',
+      'Removed Rent from the approved budget of Coding Pathway',
       'Changed Travel on the approved budget of Coding Pathway',
+      'Added Supplies to the approved budget of Coding Pathway',
+      'Uploaded a budget file to Coding Pathway, replacing its approved budget: 1 added, 1 changed, 1 removed',
     ])
-    expect(log.entries[0]).toMatchObject({
-      workspaceId: W,
-      resource: 'report',
-      subjectId: 'r-1',
-      action: 'review',
-      changes: expect.arrayContaining([
-        { field: 'Status', before: 'submitted', after: 'draft' },
-        { field: 'Submitted on', before: '2026-09-10', after: null },
-        { field: 'Approved by' },
-        { field: 'Why it was reopened' },
-      ]),
-    })
-    expect(log.entries[1]).toMatchObject({
-      resource: 'report',
-      subjectId: 'r-2',
-      changes: expect.arrayContaining([
-        { field: 'Status', before: 'closed', after: 'draft' },
-        { field: 'Note' },
-        { field: 'Why it was sent back' },
-      ]),
-    })
-    expect(log.actors).toEqual([who, who, who])
-    expectNoneOf(log.entries, ['Dana Director', 'board meeting'])
-    // The checks ran again after, on every month.
-    expect(checks.refresh).toHaveBeenCalledTimes(3)
   })
 
-  it('does it on adding and removing a line too, and not when nothing changed', async () => {
-    const add = service([travel()], mixed())
-    expect(
-      (await add.service.add(member('owner'), 'e-1', { name: 'Rent', reportLine: 'program-costs' }))
-        .backToDraft
-    ).toHaveLength(2)
-    const remove = service([travel()], mixed())
-    expect((await remove.service.remove(member('owner'), 'e-1', 'b-1')).backToDraft).toHaveLength(2)
-    const same = service([travel()], mixed())
-    expect(
-      (await same.service.update(member('owner'), 'e-1', 'b-1', { amount: 1500 })).backToDraft
-    ).toEqual([])
-    expect(same.months.map((m) => m.status)).toEqual(['submitted', 'closed', 'draft'])
-    const none = service()
-    expect(
-      (await none.service.update(member('owner'), 'e-1', 'b-1', { amount: 100 })).backToDraft
-    ).toEqual([])
-    expect(none.prisma.monthlyReport.update).not.toHaveBeenCalled()
-  })
-
-  it('writes the months inside the budget change, so a failure there fails the change and logs nothing', async () => {
-    const { service: s, prisma, checks, log } = service([travel()], mixed())
-    // Every write goes through the change's transaction: the fake log throws on a write through the outer client.
-    prisma.reportReopening.create.mockRejectedValueOnce(new Error('the database refused'))
-    await expect(s.update(member('owner'), 'e-1', 'b-1', { amount: 100 })).rejects.toThrow(
-      'the database refused'
+  it('puts every closed and submitted month back to draft on a change, and writes nothing for a file that changes nothing', async () => {
+    const changed = service(budget(), mixed())
+    const saved = await changed.service.upload(
+      member('owner'),
+      'e-1',
+      csv(
+        'Travel,Program Costs,1500,Site visits',
+        'Staff Salaries,Staff Salaries,40000,',
+        'Rent,Program Costs,900,'
+      )
     )
-    // The change's write threw before its line: the real transaction keeps neither the budget nor the months.
-    expect(log.change).toHaveBeenCalledTimes(1)
+    expect(saved.backToDraft.map((m) => m.period)).toEqual(['2026-08', '2026-09'])
+    expect(changed.months.map((m) => m.status)).toEqual(['draft', 'draft', 'draft'])
+
+    const unchanged = service(budget(), mixed())
+    expect(await unchanged.service.upload(member('owner'), 'e-1', same())).toMatchObject({
+      added: 0,
+      changed: 0,
+      removed: 0,
+      backToDraft: [],
+    })
+    for (const w of unchanged.writes) expect(w).not.toHaveBeenCalled()
+    expect(unchanged.months.map((m) => m.status)).toEqual(['submitted', 'closed', 'draft'])
+    expect(unchanged.log.entries).toEqual([])
+  })
+
+  it('refuses a file with any problem whole, with every problem, and stores and writes nothing', async () => {
+    const { service: s, writes, log } = service()
+    const refused = await s
+      .upload(member('owner'), 'e-1', csv('Travel,Program Costs,,', 'Supplies,Rent,abc,'))
+      .catch((e: unknown) => e)
+    expect(refused).toBeInstanceOf(BadRequestException)
+    expect((refused as BadRequestException).getResponse()).toMatchObject({
+      message: 'The file has 3 problems: correct the file and upload it again',
+      problems: [
+        { row: 2, reason: 'Approved amount is blank' },
+        {
+          row: 3,
+          reason: expect.stringMatching(
+            /^"abc" is not an amount\. Choose one of the monthly report lines/
+          ),
+        },
+        { row: null, reason: 'Staff Salaries has spending, so it must stay in the file' },
+      ],
+    })
+    for (const w of writes) expect(w).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
+  })
+
+  it('removes the stored file when the save fails, and logs nothing', async () => {
+    const { service: s, prisma, storage, log, checks } = service()
+    prisma.budgetFile.create.mockRejectedValueOnce(new Error('the database refused'))
+    await expect(
+      s.upload(
+        member('owner'),
+        'e-1',
+        csv('Travel,Program Costs,1500,', 'Staff Salaries,Staff Salaries,1,')
+      )
+    ).rejects.toThrow('the database refused')
+    expect(storage.delete).toHaveBeenCalledWith((storage.upload.mock.calls[0] as unknown[])[0])
     expect(log.entries).toEqual([])
     expect(checks.refresh).not.toHaveBeenCalled()
   })
 
-  it('renames a line, and keeps a line with spending on its form line and on the budget', async () => {
-    const { service: s, prisma, log } = service([travel()], drafts(), 3)
-    const who = member('owner')
-    await s.update(who, 'e-1', 'b-1', { name: 'Staff travel' })
-    expect(prisma.budgetLine.update).toHaveBeenCalledWith({
-      where: { id: 'b-1' },
-      data: { name: 'Staff travel' },
-    })
-    expect(log.entries.at(-1)?.changes).toEqual([
-      { field: 'Name', before: 'Travel', after: 'Staff travel' },
+  it('lists the budget history newest first, and logs each download of an earlier file', async () => {
+    const { service: s, storage, log } = service()
+    expect(await s.history(member('owner'), 'e-1')).toEqual([
+      {
+        id: 'f-1',
+        fileName: 'budget-v1.xlsx',
+        uploadedAt: '2026-11-01T10:00:00.000Z',
+        uploadedByEmail: 'pat@example.org',
+        lineCount: 3,
+        current: true,
+      },
     ])
-    await expect(s.update(who, 'e-1', 'b-1', { reportLine: 'indirect' })).rejects.toThrow(
-      /keeps the line it rolls up to/
-    )
-    await expect(s.remove(who, 'e-1', 'b-1')).rejects.toThrow(/has spending/)
-    expect(prisma.budgetLine.delete).not.toHaveBeenCalled()
-  })
-
-  it('enters a blank amount as $0 until the contract says', async () => {
-    const { service: s, prisma } = service()
-    await s.add(member('owner'), 'e-1', { name: 'Rent', reportLine: 'program-costs', amount: null })
-    expect(prisma.budgetLine.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ amount: '0.00', narrative: null }),
-    })
-  })
-
-  it("moves a payroll kind to the line that takes it, and logs the line's payroll in the screen's words", async () => {
-    const { service: s, prisma, log } = service([{ ...travel(), payroll: ['staff-pay'] }])
-    await s.add(member('owner'), 'e-1', {
-      name: 'Program Costs',
-      reportLine: 'program-costs',
-      amount: 5000,
-      payroll: ['staff-pay', 'staff-taxes'],
-    })
-    // The line that held staff pay gives it up; the new line holds both kinds.
-    expect(prisma.budgetLine.update).toHaveBeenCalledWith({
-      where: { id: 'b-1' },
-      data: { payroll: [] },
-    })
-    expect(prisma.budgetLine.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ payroll: ['staff-pay', 'staff-taxes'] }),
-    })
-    expect(log.entries.at(-1)!.changes).toEqual(
-      expect.arrayContaining([
-        {
-          field: 'Payroll from the match on this line',
-          after: 'Staff pay, Staff taxes and benefits',
-        },
-      ])
-    )
-    await expect(
-      s.update(member('owner'), 'e-1', 'b-1', { payroll: ['salary'] as never })
-    ).rejects.toThrow('Choose payroll this line can hold')
-  })
-
-  it("moves the books' payroll rows of a kind to the line that takes it, in the change, with the months it reopened", async () => {
-    const salaries = {
-      ...travel(),
-      id: 'b-2',
-      name: 'Salaries',
-      reportLine: 'staff-salaries',
-      payroll: [] as string[],
-    }
-    const rows = [
-      booksRow('x-1', 'r-1', 'staff-pay', 'b-1'),
-      booksRow('x-2', 'r-2', 'staff-pay', 'b-1'),
-      booksRow('x-3', 'r-3', 'staff-pay', 'b-1'),
-      booksRow('x-4', 'r-3', 'staff-taxes', 'b-1'),
-    ]
-    const {
-      service: s,
-      prisma,
-      log,
-    } = service(
-      [{ ...travel(), payroll: ['staff-pay', 'staff-taxes'] }, salaries],
-      mixed(),
-      0,
-      rows
-    )
-    await s.update(member('owner'), 'e-1', 'b-2', { payroll: ['staff-pay'] })
-    // Staff pay follows its line, on the submitted and closed months too (the change put them back to draft first);
-    // staff taxes stay with the line that still holds them.
-    expect(rows.map((r) => r.budgetLineId)).toEqual(['b-2', 'b-2', 'b-2', 'b-1'])
-    expect(prisma.expense.updateMany).toHaveBeenCalledWith({
-      where: expect.objectContaining({ payrollKind: { in: ['staff-pay'] } }),
-      data: { budgetLineId: 'b-2' },
-    })
-    expect(log.entries.at(-1)!.description).toBe(
-      'Changed Salaries on the approved budget of Coding Pathway; moved 3 imported payroll rows to Salaries'
-    )
-  })
-
-  it("says how many books' payroll rows stayed on a month still locked, and moves nothing when no kind moves", async () => {
-    const {
-      service: s,
-      prisma,
-      log,
-    } = service([{ ...travel(), payroll: ['staff-pay'] }], drafts(), 0, [
-      booksRow('x-1', 'r-1', 'staff-pay', 'b-9'),
+    const file = await s.historyFile(member('bookkeeper'), 'e-1', 'f-1')
+    expect(file).toMatchObject({ name: 'budget-v1.xlsx', bytes: Buffer.from('the file') })
+    expect(storage.read).toHaveBeenCalledWith(`${W}/e-1/general/k1.xlsx`)
+    expect(log.entries.map((e) => [e.action, e.description])).toEqual([
+      ['read', 'Opened the budget file budget-v1.xlsx of Coding Pathway, uploaded 2026-11-01'],
     ])
-    // A closing approved meanwhile: the row's month is locked, so the database keeps it where it was.
-    prisma.expense.updateMany.mockResolvedValueOnce({ count: 0 })
-    await s.add(member('owner'), 'e-1', {
-      name: 'Salaries',
-      reportLine: 'staff-salaries',
-      payroll: ['staff-pay'],
-    })
-    expect(log.entries.at(-1)!.description).toBe(
-      'Added Salaries to the approved budget of Coding Pathway; 1 imported payroll row on a closed or submitted month stayed where it was'
+    await expect(s.historyFile(member('owner'), 'e-1', 'f-other')).rejects.toThrow(
+      NotFoundException
     )
-    prisma.expense.updateMany.mockClear()
-    await s.update(member('owner'), 'e-1', 'b-1', { amount: 2000 })
-    expect(prisma.expense.updateMany).not.toHaveBeenCalled()
   })
 })

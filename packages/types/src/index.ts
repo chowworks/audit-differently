@@ -93,19 +93,6 @@ export interface BudgetOption {
 }
 
 /**
- * A budget line as the budget section adds or changes it: the line as the contract's approved budget names it, the line
- * of the funder's monthly form it rolls up to (fixed once it has spending), its approved amount and a short note.
- */
-export interface BudgetLineInput {
-  name?: string
-  reportLine?: ReportLine
-  amount?: number | null
-  narrative?: string | null
-  /** The payroll from the match this line holds; ticking a kind here moves it off the line that held it. */
-  payroll?: PayrollBudgetKind[]
-}
-
-/**
  * What a budget change answers: the engagement, and the closed and submitted months it put back to draft (a closed one
  * sent back, a submitted one reopened), whose closing is approved again and which are sent again.
  */
