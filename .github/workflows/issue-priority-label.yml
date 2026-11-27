@@ -1,0 +1,28 @@
+name: Issue priority label
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply priority label from the issue form
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body || '';
+            const match = body.match(/### Priority\s+(critical|high|medium|low)/i);
+            if (!match) return;
+            const level = match[1].toLowerCase();
+            const name = level === 'critical' ? 'priority: critical 😱' : `priority: ${level}`;
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [name],
+            });
