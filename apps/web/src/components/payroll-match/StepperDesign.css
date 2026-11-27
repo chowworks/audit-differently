@@ -533,6 +533,20 @@
     grid-column: 1 / -1;
     padding-top: 0;
   }
+  /* The engagement's name first, its link or Complete chip under it. */
+  .sr-grid tr.wpd-group {
+    display: block;
+  }
+  .sr-grid tr.wpd-group > td {
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .sr-grid tr.wpd-group .wpd-group-end {
+    float: none;
+    margin: 0;
+  }
 }
 .sr-chipbtn {
   font: inherit;
@@ -586,6 +600,11 @@
 .sr-amber,
 .sr-amber .sr-problem-words {
   color: #8a5a00;
+}
+/* The coloured bar is drawn inside the cell, so the words keep clear of it. */
+.sr-row-red > td:first-child,
+.sr-row-yellow > td:first-child {
+  padding-left: 14px;
 }
 .sr-row-red > td:first-child {
   box-shadow: inset 3px 0 0 var(--danger, #b42318);

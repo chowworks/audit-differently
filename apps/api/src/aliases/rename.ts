@@ -5,7 +5,8 @@ import { aliasKey } from '@ad/types'
  * A budget line renamed (owner's decision, 2026-11-27, #132): the QuickBooks names that point at its old name follow it,
  * in the rename's own transaction. The engagement's own overrides move to the new name. A workspace entry moves too,
  * unless another engagement still has a line of the old name: then it stays for that one, and this engagement gets an
- * override to the new name. Returns how many names now point at the new name.
+ * override to the new name. An override that ends up saying what the workspace entry says goes (renaming a line back
+ * leaves no duplicates). Returns how many names now point at the new name.
  */
 export async function carryRename(
   tx: Prisma.TransactionClient,
@@ -57,5 +58,24 @@ export async function carryRename(
     })
     n++
   }
+  // This engagement's overrides of the new name that now say what the workspace entry says are dropped.
+  const after = await tx.lineAlias.findMany({
+    where: {
+      workspaceId,
+      list: 'quickbooks',
+      unallowable: false,
+      OR: [{ engagementId: null }, { engagementId }],
+    },
+    select: { id: true, engagementId: true, key: true, budgetLineName: true },
+  })
+  const atNew = (a: { budgetLineName: string | null }) =>
+    aliasKey(a.budgetLineName ?? '') === aliasKey(to)
+  const everyAtNew = new Set(
+    after.filter((a) => a.engagementId === null && atNew(a)).map((a) => a.key)
+  )
+  const same = after.filter(
+    (a) => a.engagementId === engagementId && atNew(a) && everyAtNew.has(a.key)
+  )
+  if (same.length) await tx.lineAlias.deleteMany({ where: { id: { in: same.map((a) => a.id) } } })
   return n
 }

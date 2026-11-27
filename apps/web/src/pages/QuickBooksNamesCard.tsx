@@ -116,6 +116,11 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
       ? `Every engagement${g.except.length ? ` except ${g.except.join(', ')}` : ''}`
       : g.engagementIds.map(nameOf).join(', ')
 
+  // Where an engagement's own row falls back to once removed: the every-engagement row of the same name.
+  const fallback = (g: Group) =>
+    g.every
+      ? undefined
+      : aliases.find((a) => a.engagementId === null && aliasKey(a.name) === aliasKey(g.name))
   const groups = useMemo(() => {
     // The search counts only while its box shows.
     const q = aliases.length > 8 ? aliasKey(search) : ''
@@ -270,8 +275,11 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
               {goesTo(removing)} for {removing.every ? 'every engagement' : appliesTo(removing)}.
             </p>
             <p>
-              Its expenses already imported keep their budget lines. The next import or month end
-              that finds it asks where it goes. The removal is recorded in the workspace history.
+              Its expenses already imported keep their budget lines.{' '}
+              {fallback(removing)
+                ? `From the next import or month end, it maps to ${goesTo(fallback(removing)!)} there, as on the every-engagement row.`
+                : 'The next import or month end that finds it asks where it goes.'}{' '}
+              The removal is recorded in the workspace history.
             </p>
             <div className="flex justify-end gap-2">
               <Button kind="ghost" onClick={() => setRemoving(null)}>
