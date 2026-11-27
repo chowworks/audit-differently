@@ -1,3 +1,4 @@
+import { carryRename } from '../aliases/rename'
 import {
   BadRequestException,
   ConflictException,
@@ -196,10 +197,20 @@ export class BudgetService {
       return { ...(await this.engagements.detail(caller, c.id)), backToDraft: [] }
     let backed: Sent = []
     let rows = { moved: 0, stayed: 0 }
+    let carried = 0
     await this.log.change(
       caller,
       async (tx) => {
         if (payroll) await this.takePayroll(tx, engagementId, line.id, payroll)
+        // The QuickBooks names that point at its old name follow it (#132).
+        if (values.name)
+          carried = await carryRename(tx, {
+            workspaceId: c.workspaceId,
+            engagementId,
+            from: line.name,
+            to: values.name,
+            changedById: caller.userId,
+          })
         const row = await tx.budgetLine.update({
           where: { id: line.id },
           data: { ...values, ...(payroll ? { payroll } : {}) },
@@ -220,7 +231,12 @@ export class BudgetService {
         subjectId: c.id,
         action: 'update',
         description: `Changed ${label} on the approved budget of ${c.name}${movedWords(rows, values.name ?? label)}`,
-        changes,
+        changes: carried
+          ? [
+              ...changes,
+              { field: 'QuickBooks names moved to the new name', after: String(carried) },
+            ]
+          : changes,
       })
     )
     return this.done(caller, c.id, backed)

@@ -1,13 +1,8 @@
 import type { ProgramNames } from '@ad/types'
 import { booksTransactions } from './books'
-import {
-  allocationNote,
-  planBooks,
-  savedBills,
-  type PlanEngagement,
-  type PlanMapping,
-} from './books-plan'
+import { allocationNote, planBooks, savedBills, type PlanEngagement } from './books-plan'
 import { BOOKS, rows } from './books.testing'
+import type { AliasRow } from '../aliases/resolve'
 
 /** A fictional workspace: two programs, one of them an engagement of the app, and its account mapping. */
 const programs: ProgramNames[] = [
@@ -26,32 +21,31 @@ const youth: PlanEngagement = {
   ],
   months: [{ period: '2026-09', status: 'draft' }],
 }
-const mapping: PlanMapping = {
-  id: 'm-1',
-  engagementId: 'e-ycp',
-  read: {
-    title: 'YCP',
-    accounts: {
-      '60901': 'INDIRECT COSTS',
-      '60301': 'INDIRECT COSTS',
-      '63301': 'FRINGE BENEFITS',
-      '60202': null,
-    },
-    names: {},
-    categories: [{ category: 'FRINGE BENEFITS', line: 'Fringe', amount: 5000 }],
-    budget: null,
-    start: null,
-    end: null,
-  },
-  chosen: {},
-}
+const ws = (
+  name: string,
+  budgetLineName: string | null,
+  engagementId: string | null = null
+): AliasRow => ({
+  id: `a-${name}`,
+  engagementId,
+  name,
+  budgetLineName,
+  unallowable: budgetLineName === null,
+})
+/** The QuickBooks names list: each account as QuickBooks writes it (its own last part), and its budget line. */
+const aliases: AliasRow[] = [
+  ws('60901 Rent Expense', 'Indirect Costs'),
+  ws('60301 Software and Subscription', 'Indirect Costs'),
+  ws('63301 Payroll Fees', 'Fringe'),
+  ws('60202 Insurance', null, 'e-ycp'),
+]
 const plan = (over: Partial<Parameters<typeof planBooks>[0]> = {}) =>
   planBooks({
     period: '2026-09',
     transactions: booksTransactions(BOOKS),
     programs,
     engagements: [youth],
-    mappings: [mapping],
+    aliases,
     existing: [],
     ...over,
   })
@@ -139,25 +133,48 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
     expect(pixel!.split).toBeNull()
   })
 
-  it('needs the engagement’s mapping, an account it bills and a budget line for the category', () => {
+  it('goes by the QuickBooks names list: an override, the workspace entry, a line of the same name, or unmapped', () => {
     expect(
-      plan({ mappings: [] })
+      plan({ aliases: [] })
         .filter((l) => l.engagementId === 'e-ycp')
-        .map((l) => l.status)
-    ).toEqual(['no-mapping', 'no-mapping', 'no-mapping'])
+        .map((l) => [l.category, l.status])
+    ).toEqual([
+      ['60901 Rent Expense', 'unmapped'],
+      ['60301 Software and Subscription', 'unmapped'],
+      ['63301 Payroll Fees', 'unmapped'],
+    ])
     const noFringe = plan({
       engagements: [{ ...youth, budgetLines: youth.budgetLines.slice(0, 1) }],
     })
     expect(noFringe.find((l) => l.transactionId === '9005' && l.amount === 50)?.status).toBe(
       'no-budget-line'
     )
-    const skipped = plan({ mappings: [{ ...mapping, chosen: { 'INDIRECT COSTS': 'skip' } }] })
-    expect(skipped.filter((l) => l.status === 'billed').map((l) => l.transactionId)).toEqual([
+    const unallowable = plan({
+      aliases: [
+        ...aliases,
+        ws('60901 Rent Expense', null, 'e-ycp'),
+        ws('60301 Software and Subscription', null, 'e-ycp'),
+      ],
+    })
+    expect(unallowable.filter((l) => l.status === 'billed').map((l) => l.transactionId)).toEqual([
       '9005',
     ])
-    const chosen = plan({ mappings: [{ ...mapping, chosen: { 'FRINGE BENEFITS': 'b-ind' } }] })
-    expect(chosen.find((l) => l.transactionId === '9005' && l.amount === 50)?.budgetLineName).toBe(
-      'Indirect Costs'
+    expect(unallowable.filter((l) => l.status === 'unallowable')).toHaveLength(2)
+    const override = plan({
+      aliases: [...aliases, ws('63301 Payroll Fees', 'Indirect Costs', 'e-ycp')],
+    })
+    expect(
+      override.find((l) => l.transactionId === '9005' && l.amount === 50)?.budgetLineName
+    ).toBe('Indirect Costs')
+    // An account named as a budget line goes to it with no entry at all.
+    const byName = plan({
+      aliases: [],
+      engagements: [
+        { ...youth, budgetLines: [{ id: 'b-fees', name: '63301 Payroll Fees', amount: 100 }] },
+      ],
+    })
+    expect(byName.find((l) => l.transactionId === '9005' && l.amount === 50)?.budgetLineName).toBe(
+      '63301 Payroll Fees'
     )
   })
 

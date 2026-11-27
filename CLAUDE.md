@@ -69,10 +69,19 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   (`Expense.budgetLineId`; its `reportLine` follows from it, trigger `Expense_4_budget_line`, migration
   `20261017000200`), so spending is compared with the approved budget line by line: the month's budget tile, the
   `budget-overrun` check, a blocking `no-budget-line` check, and the audit package's `Budget vs actual.csv`. A line with
-  spending keeps its report line and is not removed. Imports map categories to budget lines, saved by line name.
+  spending keeps its report line and is not removed. **The QuickBooks names list** (`LineAlias`, migration
+  `20261127000100`, #132; owner's decisions, 2026-11-27) says where each QuickBooks account or category goes: the name
+  exactly as QuickBooks writes it (number included, the last part of a parent:child path, nothing stripped) to a budget
+  line's NAME or to Unallowable, for the workspace, with an engagement's own override. Import transactions and Month End
+  Close both resolve a name through it alone (`apps/api/src/aliases/resolve.ts`: override, then workspace entry, then a
+  line of the same name); a name on neither is asked about ("Is it the same as one of these?", `suggestAliases`) and
+  the answer is kept on the list. Owners and bookkeepers keep it under Configuration Data; an auditor and a platform
+  admin never see it. Unallowable rows are not saved at all: only listed in the import's "not imported" and Month End
+  Close's review. An account mapping spreadsheet only fills the list, read in memory. `ImportMapping.categories` and the
+  `AccountMapping` table are no longer read and stay undropped.
   The workspace's own list of budget items is gone (migration `20261017000300`); names are suggested from the
-  workspace's other engagements. **A budget line's name is its key; keep its row** (owner's rule, 2026-11-27): saved
-  import mappings find lines by name, and the account mapping's picks and the payroll ticks hang on the row's id. Any
+  workspace's other engagements. **A budget line's name is its key; keep its row** (owner's rule, 2026-11-27): the
+  QuickBooks names list finds lines by name, and the payroll ticks hang on the row's id. Any
   bulk change (an upload, a replace, a copy) updates a line of the same name in place and never deletes and recreates
   it; renaming a line shows what uses the old name before it is saved (#132).
 - **Payroll on the budget** (owner's decisions, 2026-10-20): the pay the payroll match proves is the staff and

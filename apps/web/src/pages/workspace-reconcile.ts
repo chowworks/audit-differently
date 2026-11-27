@@ -156,7 +156,7 @@ function engagementOfReport(d: PayrollReconciliationDto, reportId: string) {
 }
 
 /** The books' reasons for a line on no engagement that leave grant spending unbilled: an owner should look. */
-const OFF_TO_LOOK_AT = new Set<BooksLineStatus>(['no-program', 'no-mapping', 'no-budget-line'])
+const OFF_TO_LOOK_AT = new Set<BooksLineStatus>(['no-program', 'unmapped', 'no-budget-line'])
 
 /**
  * The expenses grid's rows: each engagement month's expenses as its month page shows them (red while a proof is

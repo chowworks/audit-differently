@@ -3,6 +3,8 @@ import {
   IMPORT_FIELD_LABELS,
   IMPORT_FIELDS,
   IMPORT_SKIP,
+  aliasKey,
+  suggestAliases,
   PAYROLL_BUDGET_KIND_LABELS,
   REPORT_LINE_LABELS,
   type ImportCategories,
@@ -182,7 +184,12 @@ export function ImportTransactionsModal({
     : columns.category
       ? preview.categories.filter((c) => !categories[c.value]).length
       : preview.assignable.filter((r) => !rowLines[String(r.line)]).length
-  const lineSelect = (value: string, onChange: (v: string) => void, label: string) =>
+  const lineSelect = (
+    value: string,
+    onChange: (v: string) => void,
+    label: string,
+    skip = 'Skip (do not import)'
+  ) =>
     info && (
       <select
         className={inputClass}
@@ -196,9 +203,24 @@ export function ImportTransactionsModal({
             {i.label} ({REPORT_LINE_LABELS[i.reportLine]})
           </option>
         ))}
-        <option value={IMPORT_SKIP}>Skip (do not import)</option>
+        <option value={IMPORT_SKIP}>{skip}</option>
       </select>
     )
+  /**
+   * "Is it the same as one of these?" (#132): names on the QuickBooks names list a value not on it may be, first those
+   * this file no longer has (an account renamed in QuickBooks), each with the budget line it goes to here.
+   */
+  const sameAs = (value: string) => {
+    if (!info || !preview || !value) return []
+    const inFile = preview.categories.map((c) => c.value)
+    return suggestAliases(value, info.aliases, inFile, engagementId).flatMap((s) => {
+      if (s.unallowable) return [{ name: s.name, key: IMPORT_SKIP, label: 'Unallowable' }]
+      const o = info.budgetOptions.find(
+        (b) => aliasKey(b.label) === aliasKey(s.budgetLineName ?? '')
+      )
+      return o ? [{ name: s.name, key: o.key, label: o.label }] : []
+    })
+  }
   /** One line at the top of step 3: how many are done, how many still need a budget line. */
   const lineSummary = (left: number, matched: number, what: 'value' | 'row') =>
     left > 0 ? (
@@ -573,16 +595,37 @@ export function ImportTransactionsModal({
                             {lineSelect(
                               categories[c.value] ?? '',
                               (v) => setCategories({ ...categories, [c.value]: v }),
-                              `Budget line for ${c.value || 'blank rows'}`
+                              `Budget line for ${c.value || 'blank rows'}`,
+                              'Unallowable (not imported)'
                             )}
                             {!categories[c.value] ? (
-                              <small className="ad-field-error">
-                                Choose a budget line or skip.
-                              </small>
+                              <>
+                                <small className="ad-field-error">
+                                  {c.value
+                                    ? `"${c.value}" isn't on the QuickBooks names list yet. Choose where it goes.`
+                                    : 'Choose a budget line, or Unallowable.'}
+                                </small>
+                                {sameAs(c.value).map((s) => (
+                                  <button
+                                    key={s.name}
+                                    type="button"
+                                    className="ad-chip ad-chip-info mr-1 mt-1"
+                                    onClick={() =>
+                                      setCategories({ ...categories, [c.value]: s.key })
+                                    }
+                                  >
+                                    Same as {s.name} → {s.label}?
+                                  </button>
+                                ))}
+                              </>
                             ) : (
                               c.match &&
                               categories[c.value] === c.match && (
-                                <small className="text-soft">✓ Matched by name</small>
+                                <small className="text-soft">
+                                  {c.from === 'list'
+                                    ? '✓ From the QuickBooks names list'
+                                    : '✓ Matched by name'}
+                                </small>
                               )
                             )}
                           </td>

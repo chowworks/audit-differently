@@ -652,6 +652,51 @@ suite('tenant isolation', () => {
       ).rejects.toThrow(/ImportMapping.workspaceId cannot be changed/)
     })
 
+    it("keeps the QuickBooks names list to its workspace's owners and bookkeepers (migration 20261127000100)", async () => {
+      const add = (id: string, w: string, by: string, extra = '') =>
+        `INSERT INTO "LineAlias" ("id","workspaceId","name","key","budgetLineName","changedById"${extra ? ',"engagementId"' : ''})
+         VALUES ('${id}','${w}','60901 Rent Expense','60901 rent expense','WEX','${by}'${extra ? `,'${extra}'` : ''})`
+      await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
+        expect((await attempt(add('LA-1', 'W1', 'book-W1'))).rows).toBe(1)
+        // One name once per list and engagement: an override of it is another row.
+        expect((await attempt(add('LA-dup', 'W1', 'book-W1'))).error).toMatch(/LineAlias_name_key/)
+        expect((await attempt(add('LA-own', 'W1', 'book-W1', 'E-W1'))).rows).toBe(1)
+        // Never another workspace's engagement, another workspace, or in someone else's name.
+        expect((await attempt(add('LA-x', 'W1', 'book-W1', 'E-W2'))).error).toBeDefined()
+        expect((await attempt(add('LA-w2', 'W2', 'book-W1'))).error).toMatch(/row-level security/)
+        expect((await attempt(add('LA-as', 'W1', 'owner-W1'))).error).toMatch(/row-level security/)
+        expect(
+          (await attempt(`UPDATE "LineAlias" SET "budgetLineName" = NULL WHERE id = 'LA-1'`)).error
+        ).toMatch(/LineAlias_target_check/)
+        expect(
+          (
+            await attempt(
+              `UPDATE "LineAlias" SET "unallowable" = true, "budgetLineName" = NULL WHERE id = 'LA-1'`
+            )
+          ).rows
+        ).toBe(1)
+        expect((await attempt(`DELETE FROM "LineAlias" WHERE id = 'LA-own'`)).rows).toBe(1)
+      })
+      // An auditor neither reads nor writes it.
+      await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+        expect((await attempt(add('LA-aud', 'W1', 'aud-W1'))).error).toMatch(/row-level security/)
+      })
+      await db.query(add('LA-W1', 'W1', 'owner-W1'))
+      await as({ workspaces: ['W1'], user: 'aud-W1' }, async () => {
+        expect(await ids('LineAlias')).toEqual([])
+      })
+      await as({ workspaces: ['W2'], user: 'owner-W2' }, async () => {
+        expect(await ids('LineAlias')).toEqual([])
+      })
+      await as({ workspaces: ['W1'], user: 'owner-W1' }, async () => {
+        expect(await ids('LineAlias')).toEqual(['LA-W1'])
+      })
+      await expect(
+        db.query(`UPDATE "LineAlias" SET "workspaceId" = 'W2' WHERE id = 'LA-W1'`)
+      ).rejects.toThrow(/LineAlias.workspaceId cannot be changed/)
+      await db.query(`DELETE FROM "LineAlias" WHERE id = 'LA-W1'`)
+    })
+
     it('makes an imported row once per engagement: the fingerprint is unique', async () => {
       await as({ workspaces: ['W1'], user: 'book-W1' }, async () => {
         const row = (id: string, item: string) =>

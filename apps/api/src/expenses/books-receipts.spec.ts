@@ -1,6 +1,7 @@
 import type { ProgramNames } from '@ad/types'
 import { booksTransactions } from './books'
-import { allocationNote, planBooks, type PlanEngagement, type PlanMapping } from './books-plan'
+import { allocationNote, planBooks, type PlanEngagement } from './books-plan'
+import type { AliasRow } from '../aliases/resolve'
 import { receiptsOfBills, type PlanBill, type PlanReceipt } from './books-receipts'
 import { BOOKS, rows } from './books.testing'
 
@@ -21,27 +22,24 @@ const youth: PlanEngagement = {
   ],
   months: [{ period: '2026-09', status: 'draft' }],
 }
-const mapping: PlanMapping = {
-  id: 'm-1',
-  engagementId: 'e-ycp',
-  read: {
-    title: 'YCP',
-    accounts: { '60901': 'INDIRECT COSTS', '60301': 'INDIRECT COSTS', '63301': 'FRINGE BENEFITS' },
-    names: {},
-    categories: [{ category: 'FRINGE BENEFITS', line: 'Fringe', amount: 5000 }],
-    budget: null,
-    start: null,
-    end: null,
-  },
-  chosen: {},
-}
+const aliases: AliasRow[] = [
+  ['60901 Rent Expense', 'Indirect Costs'],
+  ['60301 Software and Subscription', 'Indirect Costs'],
+  ['63301 Payroll Fees', 'Fringe'],
+].map(([name, budgetLineName]) => ({
+  id: `a-${name}`,
+  engagementId: null,
+  name: name!,
+  budgetLineName: budgetLineName!,
+  unallowable: false,
+}))
 const plan = (over: Partial<Parameters<typeof planBooks>[0]> = {}) =>
   planBooks({
     period: '2026-09',
     transactions: booksTransactions(BOOKS),
     programs,
     engagements: [youth],
-    mappings: [mapping],
+    aliases,
     existing: [],
     ...over,
   }).filter((l) => l.engagementId === 'e-ycp')

@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import {
+  aliasKey,
+  type LineAliasesDto,
   PAYROLL_BUDGET_KINDS,
   PAYROLL_BUDGET_KIND_LABELS,
   REPORT_LINES,
@@ -9,7 +11,7 @@ import {
   type PayrollBudgetKind,
   type ReportLine,
 } from '@ad/types'
-import { useApi } from '@/hooks/useApi'
+import { useApi, useLoad } from '@/hooks/useApi'
 import { periodLabel } from '@/lib/format'
 import { Button, ErrorNote, Field, Modal, MoneyInput, inputClass } from '@/components/ui'
 
@@ -82,6 +84,24 @@ export function BudgetLineModal({
     c.budgetLines.find((b) => b.id !== line?.id && b.payroll.includes(k))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Renaming a line (decision 6 of #132): the QuickBooks names that go to its old name are shown, and follow it on Save.
+  const list = useLoad<LineAliasesDto>(line ? `/workspaces/${c.workspaceId}/line-aliases` : null)
+  const renamed = !!line && !!name.trim() && aliasKey(name) !== aliasKey(line.name)
+  const following = renamed
+    ? (list.data?.aliases ?? []).filter(
+        (a) =>
+          !a.unallowable &&
+          (a.engagementId === null || a.engagementId === c.id) &&
+          aliasKey(a.budgetLineName ?? '') === aliasKey(line!.name) &&
+          // An override of this engagement wins over the workspace's entry of the same name.
+          !(
+            a.engagementId === null &&
+            (list.data?.aliases ?? []).some(
+              (o) => o.engagementId === c.id && aliasKey(o.name) === aliasKey(a.name)
+            )
+          )
+      )
+    : []
   const warning = recheckWarning(c)
   const taken = new Set(
     c.budgetLines.filter((b) => b.id !== line?.id).map((b) => b.name.toLowerCase())
@@ -157,6 +177,25 @@ export function BudgetLineModal({
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
           <NameSuggestions names={suggestions} typed={name} onPick={setName} />
         </Field>
+        {following.length > 0 && (
+          <div className="text-sm">
+            <p className="font-semibold">
+              {following.length === 1 ? 'This QuickBooks name goes' : 'These QuickBooks names go'}{' '}
+              to {line!.name} and will go to {name.trim()} after Save:
+            </p>
+            <ul className="ml-5 list-disc">
+              {following.map((a) => (
+                <li key={a.id}>
+                  {a.name}
+                  {a.engagementId ? ' (this engagement only)' : ''}
+                </li>
+              ))}
+            </ul>
+            <p className="text-soft">
+              To send one somewhere else, change it under QuickBooks names on the workspace page.
+            </p>
+          </div>
+        )}
         <Field
           label="Payroll from the match on this line"
           hint={

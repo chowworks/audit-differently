@@ -110,13 +110,15 @@ function service(
   const checks = { refresh: jest.fn().mockResolvedValue([]) }
   const engagements = { detail: jest.fn().mockResolvedValue({ id: 'e-1' }) }
   const reports = { fresh: jest.fn().mockResolvedValue({ id: 'r-sep' }) }
+  const aliases = { rows: jest.fn().mockResolvedValue([]), learn: jest.fn().mockResolvedValue(0) }
   const log = fakeLog(prisma)
   const s = new ImportsService(
     prisma as never,
     checks as never,
     log as never,
     engagements as never,
-    reports as never
+    reports as never,
+    aliases as never
   )
   const writes = [
     prisma.expense.createMany,
@@ -278,25 +280,18 @@ describe('ImportsService', () => {
     expect(file.mappings[0]).toMatchObject({ name: 'QuickBooks mapping', matches: true })
   })
 
-  it("leaves out a saved mapping's choices for budget lines this engagement does not use", async () => {
+  it('gives a saved mapping back with its columns only: where each category goes is on the QuickBooks names list', async () => {
     const saved = {
       id: 'm-other',
-      name: 'Made on another engagement',
+      name: 'Made before the list',
       headers: ['Date'],
       columns: COLUMNS,
-      categories: {
-        'Office supplies': 'supplies',
-        'Equipment rental': 'equipment',
-        Fees: 'skip',
-      },
+      categories: { 'Office supplies': 'supplies' },
     }
     const { s } = service(undefined, [], [saved])
     const file = await s.read(member('owner'), 'e-1', SAMPLE)
-    // Equipment is no budget line here: that category waits for the person in step 3 rather than refusing the import.
-    expect(file.mappings[0]!.categories).toEqual({
-      'Office supplies': 'supplies',
-      Fees: 'skip',
-    })
+    expect(file.mappings[0]!.categories).toEqual({})
+    expect(file.aliases).toEqual([])
   })
 
   it('places each row in its month, and says why every other row stays out', async () => {
@@ -322,7 +317,7 @@ describe('ImportsService', () => {
       10: 'August 2026 is submitted; only a draft month takes new lines',
       11: 'August 2026 is submitted; only a draft month takes new lines',
       12: 'A negative amount (a refund or credit): enter it by hand if it belongs',
-      19: 'Skipped: its category is set to skip',
+      19: 'Unallowable',
       21: 'Choose a budget line for "Rent"',
       22: 'A heading or total line, not a transaction',
       23: 'A heading or total line, not a transaction',
@@ -331,6 +326,7 @@ describe('ImportsService', () => {
     expect(p.categories.find((c) => c.value === 'Office Supplies')).toEqual({
       value: 'Office Supplies',
       match: null,
+      from: null,
       rows: 4,
       total: 415.28,
     })
@@ -556,14 +552,8 @@ describe('ImportsService', () => {
         workspaceId: W,
         name: 'QuickBooks mapping',
         columns: COLUMNS,
-        // By the budget lines' names, so the mapping carries to another engagement with lines of the same names.
-        categories: {
-          'Office Supplies': 'Supplies',
-          'Contract Services': 'Contractual / Subawards',
-          'Participant Training': 'Participant / Training Costs',
-          Travel: 'Travel',
-          Meals: 'skip',
-        },
+        // The columns only: the categories go on the QuickBooks names list (#132).
+        categories: {},
         headers: expect.arrayContaining(['Date', 'Split']),
       }),
     })
@@ -571,10 +561,6 @@ describe('ImportsService', () => {
       resource: 'workspace',
       action: 'create',
       description: 'Saved the import mapping QuickBooks mapping',
-    })
-    expect(log.entries[0].changes?.[1]).toEqual({
-      field: 'Categories',
-      after: '5 categories mapped',
     })
     expect(log.entries).toHaveLength(2)
     await expect(

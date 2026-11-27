@@ -1,4 +1,5 @@
 import {
+  accountLeaf,
   DEFAULT_EXPENSE_MATCHING,
   programKey,
   type BooksAllocationDto,
@@ -12,7 +13,7 @@ import {
 } from '@ad/types'
 import { isPayrollRow } from '../imports/imports.service'
 import { programIn } from '../payroll/payroll-details'
-import { budgetLineOfCategory, type AccountMappingRead } from './account-mapping'
+import { resolveAlias, type AliasRow } from '../aliases/resolve'
 import type { BooksLine, BooksTransaction } from './books'
 import {
   paymentChoices,
@@ -30,7 +31,7 @@ import {
 
 /**
  * Where each of the month's books lines goes (owner's decision, 2026-11-09): to an engagement by its class (the
- * workspace's program names, as payroll reads them), to a budget line by its account (the engagement's account mapping),
+ * workspace's program names, as payroll reads them), to a budget line by its account (the QuickBooks names list),
  * and to the month of its date; or why not. A shared cost is one engagement's share: a journal entry that shares out a
  * pool ("Allocation Required" on an account, moved to each program), or a transaction split by class. Pure.
  */
@@ -43,14 +44,6 @@ export interface PlanEngagement {
   periodEnd: string | null
   budgetLines: { id: string; name: string; amount: number }[]
   months: { period: string; status: string }[]
-}
-
-export interface PlanMapping {
-  id: string
-  engagementId: string | null
-  read: AccountMappingRead
-  /** An owner's choice of budget line for a category (a line's id, or 'skip': not billed). */
-  chosen: Record<string, string>
 }
 
 /** An expense line already on an engagement's month. */
@@ -69,8 +62,6 @@ export interface PlanExisting {
   /** The split Save kept with it (Expense.booksSplit); null on a line written before splits were kept. */
   booksSplit?: BooksSplitDto | null
 }
-
-export const SKIP = 'skip'
 
 const cents = (n: number) => Math.round(n * 100) / 100
 const near = (a: number, b: number) => Math.abs(a - b) < 0.015
@@ -243,7 +234,8 @@ export function planBooks(input: {
   transactions: BooksTransaction[]
   programs: ProgramNames[]
   engagements: PlanEngagement[]
-  mappings: PlanMapping[]
+  /** The QuickBooks names list, overrides included (#132). */
+  aliases: AliasRow[]
   existing: PlanExisting[]
   /** The month's workspace receipts, and owners' words on bills (owner's decision, 2026-11-12). */
   receipts?: PlanReceipt[]
@@ -375,29 +367,23 @@ export function planBooks(input: {
       }
       line.engagementId = e.id
       line.engagementName = e.name
-      const mapping = input.mappings.find((m) => m.engagementId === e.id)
-      if (!mapping) {
-        set('no-mapping')
+      // Its budget line by the QuickBooks names list: the account as QuickBooks writes it (owner's decision, 2026-11-27).
+      const name = accountLeaf(l.account)
+      line.category = name || null
+      const found = resolveAlias(name, e.id, input.aliases, e.budgetLines)
+      if (found.status === 'unmapped') {
+        set('unmapped')
         continue
       }
-      const category = l.accountNo ? (mapping.read.accounts[l.accountNo] ?? null) : null
-      line.category = category
-      if (!category) {
-        set('not-billable')
+      if (found.status === 'unallowable') {
+        set('unallowable')
         continue
       }
-      const chosen = mapping.chosen[category]
-      if (chosen === SKIP) {
-        set('not-billable')
-        continue
-      }
-      const budgetLine = chosen
-        ? (e.budgetLines.find((b) => b.id === chosen) ?? null)
-        : budgetLineOfCategory(category, mapping.read, e.budgetLines)
-      if (!budgetLine) {
+      if (found.status === 'no-line') {
         set('no-budget-line')
         continue
       }
+      const budgetLine = found.line
       line.budgetLineId = budgetLine.id
       line.budgetLineName = budgetLine.name
       if ((e.periodStart && t.date < e.periodStart) || (e.periodEnd && t.date > e.periodEnd)) {

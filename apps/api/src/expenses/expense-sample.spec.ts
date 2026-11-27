@@ -1,3 +1,4 @@
+import { listOfMappings } from '../aliases/mapping-names'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ProgramNames } from '@ad/types'
@@ -111,12 +112,9 @@ suite("the workspace payroll sample's expenses", () => {
       transactions: booksTransactions(await sheetLines(books!.bytes)),
       programs: PROGRAMS,
       engagements: ENGAGEMENTS,
-      mappings: maps.map((read, i) => ({
-        id: `m-${i}`,
-        engagementId: engagementOfMapping(read, ENGAGEMENTS)?.id ?? null,
-        read,
-        chosen: {},
-      })),
+      aliases: listOfMappings(
+        maps.map((read) => ({ read: read, engagement: engagementOfMapping(read, ENGAGEMENTS) }))
+      ),
       existing: [],
     })
     expect(
@@ -142,7 +140,7 @@ suite("the workspace payroll sample's expenses", () => {
       ['7104', 'billed', 'e-isy', 'Program Costs', 412.6, 'bank', null],
       ['7105', 'billed', 'e-ait', 'Program Costs', 450, 'card', null],
       ['7106', 'not-ours', null, null, 300, 'card', null],
-      ['7107', 'not-billable', 'e-isy', null, 65, 'card', null],
+      ['7107', 'unallowable', 'e-isy', null, 65, 'card', null],
       ['7108', 'allocation-pool', null, null, -210, null, null],
       ['7108', 'billed', 'e-isy', 'Program Costs', 140, null, '66.67% of 210 (entry)'],
       ['7108', 'billed', 'e-ait', 'Program Costs', 70, null, '33.33% of 210 (entry)'],
@@ -182,12 +180,9 @@ suite("the workspace payroll sample's expenses", () => {
       transactions: booksTransactions(await sheetLines(books!.bytes)),
       programs: PROGRAMS,
       engagements: ENGAGEMENTS,
-      mappings: maps.map((r, i) => ({
-        id: `m-${i}`,
-        engagementId: engagementOfMapping(r, ENGAGEMENTS)?.id ?? null,
-        read: r,
-        chosen: {},
-      })),
+      aliases: listOfMappings(
+        maps.map((r) => ({ read: r, engagement: engagementOfMapping(r, ENGAGEMENTS) }))
+      ),
       existing: [],
       receipts: read,
     })
@@ -235,12 +230,9 @@ suite("the workspace payroll sample's expenses", () => {
       transactions: booksTransactions(await sheetLines(books!.bytes)),
       programs: PROGRAMS,
       engagements: ENGAGEMENTS,
-      mappings: maps.map((r, i) => ({
-        id: `m-${i}`,
-        engagementId: engagementOfMapping(r, ENGAGEMENTS)?.id ?? null,
-        read: r,
-        chosen: {},
-      })),
+      aliases: listOfMappings(
+        maps.map((r) => ({ read: r, engagement: engagementOfMapping(r, ENGAGEMENTS) }))
+      ),
       existing: [],
       statements,
     })
