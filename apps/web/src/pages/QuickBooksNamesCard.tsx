@@ -405,6 +405,11 @@ function AliasModal({
       setBusy(false)
     }
   }
+  // With every engagement ticked, an engagement with its own row for the name keeps it: shown unticked, with where.
+  const ownRow = (id: string) =>
+    data.aliases.find(
+      (a) => !mine.has(a.id) && a.engagementId === id && aliasKey(a.name) === aliasKey(name)
+    )
   const tick = (id: string, on: boolean) =>
     setPicked((p) => (on ? [...p, id] : p.filter((x) => x !== id)))
   return (
@@ -457,11 +462,16 @@ function AliasModal({
               >
                 <input
                   type="checkbox"
-                  checked={every || picked.includes(e.id)}
+                  checked={every ? !ownRow(e.id) : picked.includes(e.id)}
                   disabled={every}
                   onChange={(x) => tick(e.id, x.target.checked)}
                 />
                 {e.name}
+                {every && ownRow(e.id) && (
+                  <span className="text-soft">
+                    (maps it to {goesTo(ownRow(e.id)!)} on its own row)
+                  </span>
+                )}
               </label>
             ))}
           </div>
