@@ -7,6 +7,7 @@ import {
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { BulkAddModal } from '@/components/BulkAddModal'
+import { MultiSelect } from '@/components/MultiSelect'
 import { Button, Card, ErrorNote, Field, Modal, Notice, inputClass } from '@/components/ui'
 
 /** Where an entry goes, as the list shows it. */
@@ -410,8 +411,7 @@ function AliasModal({
     data.aliases.find(
       (a) => !mine.has(a.id) && a.engagementId === id && aliasKey(a.name) === aliasKey(name)
     )
-  const tick = (id: string, on: boolean) =>
-    setPicked((p) => (on ? [...p, id] : p.filter((x) => x !== id)))
+  const excepted = data.engagements.filter((e) => ownRow(e.id))
   return (
     <Modal
       title={editing ? 'Edit a financial category' : 'Add a financial category'}
@@ -454,30 +454,29 @@ function AliasModal({
           aria-describedby={problems.applies ? 'applies-error' : undefined}
         >
           <legend className="mb-1 font-bold">Applies to</legend>
-          <div className="grid gap-1 rounded-md border border-line p-2 text-sm">
-            <label className="flex items-center gap-2 font-semibold">
+          <div className="grid gap-2 text-sm">
+            <label className="flex items-center gap-2">
               <input type="checkbox" checked={every} onChange={(e) => setEvery(e.target.checked)} />
               Every engagement
             </label>
-            {data.engagements.map((e) => (
-              <label
-                key={e.id}
-                className={`flex items-center gap-2 pl-5 ${every ? 'text-soft' : ''}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={every ? !ownRow(e.id) : picked.includes(e.id)}
-                  disabled={every}
-                  onChange={(x) => tick(e.id, x.target.checked)}
-                />
-                {e.name}
-                {every && ownRow(e.id) && (
-                  <span className="text-soft">
-                    (maps it to {goesTo(ownRow(e.id)!)} on its own row)
-                  </span>
-                )}
-              </label>
-            ))}
+            {every ? (
+              excepted.length > 0 && (
+                <p className="text-soft">
+                  Except{' '}
+                  {excepted
+                    .map((e) => `${e.name} (maps it to ${goesTo(ownRow(e.id)!)} on its own row)`)
+                    .join(', ')}
+                </p>
+              )
+            ) : (
+              <MultiSelect
+                label="Engagements"
+                placeholder="Search and choose engagements"
+                options={data.engagements.map((e) => ({ value: e.id, label: e.name }))}
+                value={picked}
+                onChange={setPicked}
+              />
+            )}
           </div>
           {shown(problems.applies, false) && (
             <small id="applies-error" className="ad-field-error" role="alert">
