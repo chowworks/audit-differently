@@ -180,7 +180,9 @@ export function BudgetLineModal({
         {following.length > 0 && (
           <div className="text-sm">
             <p className="font-semibold">
-              {following.length === 1 ? 'This QuickBooks name goes' : 'These QuickBooks names go'}{' '}
+              {following.length === 1
+                ? 'This financial category maps'
+                : 'These financial categories map'}{' '}
               to {line!.name} and will go to {name.trim()} after Save:
             </p>
             <ul className="ml-5 list-disc">
@@ -192,7 +194,8 @@ export function BudgetLineModal({
               ))}
             </ul>
             <p className="text-soft">
-              To send one somewhere else, change it under QuickBooks names on the workspace page.
+              To send one somewhere else, change it under Map Financial Category to Budget Category
+              on the workspace page.
             </p>
           </div>
         )}

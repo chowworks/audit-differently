@@ -6,6 +6,7 @@ import {
   type LineAliasesMergeDto,
 } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
+import { BulkAddModal } from '@/components/BulkAddModal'
 import { Button, Card, ErrorNote, Field, Modal, Notice, inputClass } from '@/components/ui'
 
 /** Where an entry goes, as the list shows it. */
@@ -13,6 +14,27 @@ const goesTo = (a: Pick<LineAliasDto, 'unallowable' | 'budgetLineName'>) =>
   a.unallowable ? 'Unallowable' : (a.budgetLineName ?? '')
 
 const UNALLOWABLE = '__unallowable__'
+
+/** Bulk Add Names' sample (the headings `names-file.ts` reads): fictional rows, meant to be replaced. */
+const NAMES_SAMPLE = [
+  'Financial category,Maps to budget category,Applies to',
+  '61200 Program Supplies,Program Costs,',
+  'Staff Payroll,Staff Salaries,',
+  'Entertainment,Unallowable,',
+  'Local Travel,Program Costs,Summer Youth Works 2026',
+].join('\r\n')
+
+const NAMES_COLUMNS: [string, string][] = [
+  [
+    'Financial category',
+    'exactly what your financial system calls it (QuickBooks, FreshBooks, etc.), such as "60901 Rent Expense"',
+  ],
+  ['Maps to budget category', 'the name of a budget line, or Unallowable'],
+  [
+    'Applies to',
+    "optional: an engagement's name, when only that engagement maps it there; blank for every engagement",
+  ],
+]
 
 /**
  * The QuickBooks names list (owner's decisions, 2026-11-27, #132): each account or category as QuickBooks writes it,
@@ -25,9 +47,25 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
   const { data, error: loadError, setData } = useLoad<LineAliasesDto>(path)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState<LineAliasDto | 'new' | null>(null)
   const [search, setSearch] = useState('')
+  const [removing, setRemoving] = useState<LineAliasDto | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
+  const [removeError, setRemoveError] = useState<string | null>(null)
+  const remove = async (a: LineAliasDto) => {
+    setRemoveBusy(true)
+    setRemoveError(null)
+    try {
+      setData(await api.del<LineAliasesDto>(`${path}/${a.id}`))
+      setRemoving(null)
+      setError(null)
+      setDone(`${a.name} removed.`)
+    } catch (e) {
+      setRemoveError((e as Error).message)
+    } finally {
+      setRemoveBusy(false)
+    }
+  }
 
   const aliases = data?.aliases ?? []
   const engagements = data?.engagements ?? []
@@ -56,58 +94,43 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aliases, search, engagements])
 
-  const addFile = async (file: File | undefined) => {
-    if (!file) return
+  const [bulk, setBulk] = useState(false)
+  const addFile = async (file: File) => {
     const form = new FormData()
     form.append('file', file)
-    setBusy(true)
     setError(null)
     setDone(null)
-    try {
-      const out = await api.upload<LineAliasesMergeDto>(`${path}/file`, form)
-      setData(out)
-      const parts = [
-        `${out.added} ${out.added === 1 ? 'name' : 'names'} added or changed`,
-        out.same ? `${out.same} already on the list` : '',
-        out.skipped ? `${out.skipped} left blank and not added (the file names no engagement)` : '',
-      ].filter(Boolean)
-      setDone(`${parts.join(', ')}${out.engagementName ? `, for ${out.engagementName}` : ''}.`)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
+    const out = await api.upload<LineAliasesMergeDto>(`${path}/file`, form)
+    setData(out)
+    const parts = [
+      `${out.added} ${out.added === 1 ? 'name' : 'names'} added or changed`,
+      out.same ? `${out.same} already on the list` : '',
+      out.skipped
+        ? `${out.skipped} not added (blank, or a budget line or engagement not found)`
+        : '',
+    ].filter(Boolean)
+    setDone(`${parts.join(', ')}${out.engagementName ? `, for ${out.engagementName}` : ''}.`)
   }
 
   return (
     <Card
-      title="QuickBooks names"
+      title="Map Financial Category to Budget Category"
       aside={
         <div className="flex flex-wrap items-center gap-2">
-          <label className="ad-btn ad-btn-navy ad-btn-sm cursor-pointer focus-within:outline focus-within:outline-2 focus-within:outline-offset-2">
-            Add from a file
-            <input
-              type="file"
-              accept=".xlsx,.csv"
-              className="sr-only"
-              disabled={busy}
-              onChange={(e) => {
-                void addFile(e.target.files?.[0])
-                e.target.value = ''
-              }}
-            />
-          </label>
-          <Button kind="primary" size="sm" onClick={() => setEditing('new')} disabled={busy}>
+          <Button kind="navy" size="sm" onClick={() => setBulk(true)}>
+            Bulk Add Names
+          </Button>
+          <Button kind="primary" size="sm" onClick={() => setEditing('new')}>
             + Add a name
           </Button>
         </div>
       }
     >
       <p className="mb-3 text-sm text-soft">
-        Each QuickBooks account or category, written as QuickBooks writes it, and the budget line it
-        goes to. Import transactions and Month End Close both read this list. An engagement can send
-        a name somewhere else, or mark it Unallowable there. An account mapping spreadsheet adds its
-        accounts here and is not kept.
+        Each financial category, written exactly as your financial system writes it, and the budget
+        category it maps to. Import transactions and Month End Close both read this list. An
+        engagement can send a name somewhere else, or mark it Unallowable there. An account mapping
+        spreadsheet adds its accounts here and is not kept.
       </p>
       <ErrorNote message={error ?? loadError} />
       {done && (
@@ -118,8 +141,8 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
       {aliases.length > 8 && (
         <input
           className={`${inputClass} mb-3 max-w-xs`}
-          placeholder="Search names"
-          aria-label="Search QuickBooks names"
+          placeholder="Search categories"
+          aria-label="Search financial categories"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -133,10 +156,10 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
           <table className="ad-table">
             <thead>
               <tr>
-                <th>QuickBooks name</th>
-                <th>For</th>
-                <th>Goes to</th>
-                <th aria-label="Change" />
+                <th>Financial Category</th>
+                <th>Maps to Budget Category</th>
+                <th>Applies to</th>
+                <th aria-label="Edit or remove" />
               </tr>
             </thead>
             <tbody>
@@ -146,7 +169,6 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
                     <td className={i > 0 && rows[0]!.engagementId === null ? 'pl-8 text-soft' : ''}>
                       {i > 0 && rows[0]!.engagementId === null ? '↳ same name' : a.name}
                     </td>
-                    <td>{engagementName(a.engagementId)}</td>
                     <td>
                       {a.unallowable ? (
                         <span className="ad-chip ad-chip-warn">Unallowable</span>
@@ -154,14 +176,24 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
                         a.budgetLineName
                       )}
                     </td>
-                    <td className="text-right">
+                    <td>{engagementName(a.engagementId)}</td>
+                    <td className="whitespace-nowrap text-right">
                       <Button
                         kind="navy"
                         size="sm"
                         onClick={() => setEditing(a)}
-                        aria-label={`Change ${a.name}`}
+                        aria-label={`Edit ${a.name}`}
                       >
-                        Change
+                        Edit
+                      </Button>
+                      <Button
+                        kind="ghost"
+                        size="sm"
+                        className="text-danger"
+                        onClick={() => setRemoving(a)}
+                        aria-label={`Remove ${a.name}`}
+                      >
+                        Remove
                       </Button>
                     </td>
                   </tr>
@@ -170,6 +202,41 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
             </tbody>
           </table>
         </div>
+      )}
+      {removing && (
+        <Modal title="Remove this financial category?" onClose={() => setRemoving(null)}>
+          <ErrorNote message={removeError} />
+          <div className="grid gap-3 text-sm">
+            <p className="font-bold">
+              <span aria-hidden="true">⚠️</span> {removing.name} will no longer map to{' '}
+              {goesTo(removing)} for{' '}
+              {removing.engagementId ? engagementName(removing.engagementId) : 'every engagement'}.
+            </p>
+            <p>
+              Its expenses already imported keep their budget lines. The next import or month end
+              that finds it asks where it goes. The removal is recorded in the workspace history.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button kind="ghost" onClick={() => setRemoving(null)}>
+                Cancel
+              </Button>
+              <Button kind="danger" onClick={() => void remove(removing)} disabled={removeBusy}>
+                Remove
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {bulk && (
+        <BulkAddModal
+          title="Bulk Add Names"
+          lead="Add many financial categories at once, each with the budget category it maps to."
+          columns={NAMES_COLUMNS}
+          note="An account mapping spreadsheet (accounts and the category each bills to) is read too."
+          sample={{ fileName: 'financial-categories-sample.csv', csv: NAMES_SAMPLE }}
+          onFile={addFile}
+          onClose={() => setBulk(false)}
+        />
       )}
       {editing && (
         <AliasModal
@@ -246,17 +313,20 @@ function AliasModal({
   const goesOk = goes === UNALLOWABLE || lineNames.some((n) => aliasKey(n) === aliasKey(goes))
   const problems = {
     name: !name.trim()
-      ? 'Give the name as QuickBooks writes it'
+      ? 'Give the category as your financial system writes it'
       : taken
-        ? 'That name is on the list already: change that entry instead'
+        ? 'That category is on the list already: edit that entry instead'
         : null,
     goes: !goes
-      ? 'Choose a budget line, or Unallowable'
+      ? 'Choose a budget category, or Unallowable'
       : !goesOk
         ? `${goes} is no longer a budget line here. Choose another.`
         : null,
   }
-  const left = [problems.name && 'QuickBooks name', problems.goes && 'Goes to'].filter(Boolean)
+  const left = [
+    problems.name && 'Financial Category',
+    problems.goes && 'Maps to Budget Category',
+  ].filter(Boolean)
   // Every problem shows at once: as soon as there is something to say, and all of them once Save was pressed.
   const shown = (p: string | null, filled: boolean) => (tried || filled ? p : null)
   const save = async () => {
@@ -280,20 +350,11 @@ function AliasModal({
       setBusy(false)
     }
   }
-  const remove = async () => {
-    if (!editing) return
-    setBusy(true)
-    setError(null)
-    try {
-      onSaved(await api.del<LineAliasesDto>(`${path}/${editing.id}`), `${editing.name} removed.`)
-    } catch (e) {
-      setError((e as Error).message)
-      setBusy(false)
-    }
-  }
-
   return (
-    <Modal title={editing ? 'Change a QuickBooks name' : 'Add a QuickBooks name'} onClose={onClose}>
+    <Modal
+      title={editing ? 'Edit a financial category' : 'Add a financial category'}
+      onClose={onClose}
+    >
       <ErrorNote message={error} />
       {tried && left.length > 0 && (
         <p className="ad-field-error-sum" role="status">
@@ -302,38 +363,20 @@ function AliasModal({
       )}
       {editing && (
         <p className="mb-3 text-sm text-soft">
-          Now: <strong>{editing.name}</strong> goes to <strong>{goesTo(editing)}</strong> for{' '}
+          Now: <strong>{editing.name}</strong> maps to <strong>{goesTo(editing)}</strong> for{' '}
           {editing.engagementId ? engagementName(editing.engagementId) : 'every engagement'}.
         </p>
       )}
       <div className="grid gap-3">
         <Field
-          label="QuickBooks name"
+          label="Financial Category"
           required
-          hint='As QuickBooks writes it, number included when there is one ("60901 Rent Expense")'
+          hint='Whatever your financial system calls it (QuickBooks, FreshBooks, etc.). Add exactly what it calls it, such as "60901 Rent Expense".'
           error={shown(problems.name, !!name.trim())}
         >
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field label="For">
-          <select
-            className={inputClass}
-            value={engagementId}
-            onChange={(e) => {
-              setEngagementId(e.target.value)
-              setGoes((g) => (g === UNALLOWABLE ? g : ''))
-            }}
-            disabled={!!editing}
-          >
-            <option value="">Every engagement</option>
-            {data.engagements.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.name} only
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Goes to" required error={shown(problems.goes, !!goes)}>
+        <Field label="Maps to Budget Category" required error={shown(problems.goes, !!goes)}>
           <select
             className={inputClass}
             value={goesOk ? goes : ''}
@@ -346,6 +389,29 @@ function AliasModal({
               </option>
             ))}
             <option value={UNALLOWABLE}>Unallowable (not imported, no proof, in no total)</option>
+          </select>
+        </Field>
+        <Field label="Applies to">
+          <select
+            className={inputClass}
+            value={engagementId}
+            onChange={(e) => {
+              const id = e.target.value
+              setEngagementId(id)
+              // A budget category chosen first stays when the engagement has it too.
+              const has = (
+                id ? data.engagements.filter((x) => x.id === id) : data.engagements
+              ).some((x) => x.budgetLines.some((n) => aliasKey(n) === aliasKey(goes)))
+              setGoes((g) => (g === UNALLOWABLE || has ? g : ''))
+            }}
+            disabled={!!editing}
+          >
+            <option value="">Every engagement</option>
+            {data.engagements.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name} only
+              </option>
+            ))}
           </select>
         </Field>
         {followers.length > 0 && (
@@ -362,18 +428,7 @@ function AliasModal({
         )}
       </div>
       <div className="mt-4 flex items-center justify-between gap-2">
-        {editing ? (
-          <button
-            type="button"
-            className="text-sm font-semibold text-danger"
-            onClick={() => void remove()}
-            disabled={busy}
-          >
-            Remove from the list
-          </button>
-        ) : (
-          <span />
-        )}
+        <span />
         <div className="flex gap-2">
           <Button kind="ghost" onClick={onClose}>
             Cancel

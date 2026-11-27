@@ -49,7 +49,7 @@ const BILLS_SHOWN = 3
 const PLAIN_REASON: Partial<Record<BooksLineStatus, string>> = {
   'allocation-pool': 'Allocation entries: their shares are the lines billed',
   'not-ours': 'Other programs: their class has no engagement here',
-  unmapped: 'Not on the QuickBooks names list yet',
+  unmapped: 'Not mapped to a budget category yet',
   unallowable: 'Unallowable: no proof, in no total',
   'no-budget-line': "The list's budget line is not on the engagement",
   'payroll-account': 'Payroll: done in Payroll matching',
@@ -127,7 +127,7 @@ export function WorkspaceExpenses({
 
   const chooseLine = async (body: Record<string, unknown>) => {
     setError(null)
-    setBusy('Saving to the QuickBooks names list…')
+    setBusy('Saving the mapping…')
     try {
       await api.post(`/workspaces/${workspaceId}/line-aliases/choose`, body)
       await load.reload()
@@ -251,9 +251,10 @@ export function WorkspaceExpenses({
 
       {!d.file ? (
         <Empty>
-          The month&apos;s files have no books export with expenses. Put the month&apos;s QuickBooks
-          Transaction List with Splits in the zip&apos;s{' '}
-          {zipFolder('payroll-proof', 'payroll-details').name} folder, and upload again.
+          The month&apos;s files have no books export with expenses. Put the month&apos;s
+          transaction list from your financial system (in QuickBooks, the Transaction List with
+          Splits) in the zip&apos;s {zipFolder('payroll-proof', 'payroll-details').name} folder, and
+          upload again.
         </Empty>
       ) : (
         <>
@@ -381,7 +382,7 @@ export function WorkspaceExpenses({
       <MatchPanel
         label="How the books were read"
         title="How the books were read"
-        sub="Why each line of the books was billed, or why not, and the QuickBooks names not mapped yet."
+        sub="Why each line of the books was billed, or why not, and the categories not mapped yet."
       >
         <div className="grid gap-4 pt-3">
           {d.file && (
@@ -784,21 +785,21 @@ function UnmappedNames({
   if (asks.size === 0)
     return (
       <p className="text-sm text-soft">
-        Every account in the books goes to a budget line or is Unallowable, by the QuickBooks names
-        list on the workspace page.
+        Every account in the books goes to a budget line or is Unallowable, by Map Financial
+        Category to Budget Category on the workspace page.
       </p>
     )
   return (
     <div className="grid gap-2">
-      <h4 className="font-bold">QuickBooks names not mapped yet</h4>
+      <h4 className="font-bold">Categories not mapped to a budget category yet</h4>
       <div className="ad-tablewrap">
         <table className="ad-table">
           <thead>
             <tr>
-              <th>QuickBooks name</th>
+              <th>Financial Category</th>
               <th>Engagement</th>
               <th className="ad-num">Lines</th>
-              <th>Goes to</th>
+              <th>Maps to Budget Category</th>
             </tr>
           </thead>
           <tbody>

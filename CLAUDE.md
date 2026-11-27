@@ -78,7 +78,8 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   the answer is kept on the list. Owners and bookkeepers keep it under Configuration Data; an auditor and a platform
   admin never see it. Unallowable rows are not saved at all: only listed in the import's "not imported" and Month End
   Close's review. An account mapping spreadsheet only fills the list, read in memory. `ImportMapping.categories` and the
-  `AccountMapping` table are no longer read and stay undropped.
+  `AccountMapping` table are no longer read and stay undropped; migration `20261127000300` copied them onto the list
+  once (add-only).
   The workspace's own list of budget items is gone (migration `20261017000300`); names are suggested from the
   workspace's other engagements. **A budget line's name is its key; keep its row** (owner's rule, 2026-11-27): the
   QuickBooks names list finds lines by name, and the payroll ticks hang on the row's id. Any
@@ -465,6 +466,10 @@ instruction, 2026-10-16, after several plain boxes that looked bad):
   `ErrorNote` at the top).
 - **How to use a screen**, when it isn't obvious: a closed "How to …?" line under its controls with the navy `info` icon (a `<details>`, `.ss-help`), opened
   on a click, never on hover alone.
+- **Adding from a file** (Bulk Add Names, a mapping, a list): never a bare file button. The button opens a dialog
+  (`components/BulkAddModal.tsx`, owner's decision, 2026-11-27): one bold line on what the file adds, each column and
+  what goes in it, "Download the sample (CSV)" with fictional rows to replace, then "Choose your file"; a refusal shows
+  at the dialog's top. Import transactions' first step and the payroll match's upload follow the same order.
 - **What went wrong** (a refusal, a failed save): `ErrorNote` (`ad-error`: a soft red band, ⚠️ then the message in
   bold red), at the top of the form, dialog or section; a problem with one field goes beside that field. Never wrap an
   error in `Notice` or style a new error box.

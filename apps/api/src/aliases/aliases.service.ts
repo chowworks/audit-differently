@@ -19,7 +19,9 @@ import { AccessLogService } from '../core/access-log.service'
 import { allow, workspaceRole, type Caller } from '../core/caller'
 import { howMany } from '../core/changes'
 import { PrismaService } from '../prisma/prisma.service'
-import { engagementOfMapping, readAccountMapping } from '../expenses/account-mapping'
+import { accountMappingOf, engagementOfMapping } from '../expenses/account-mapping'
+import { readGrid } from '../imports/table'
+import { namesFileOf, type NamesFileRow } from './names-file'
 import { mappingNames } from './mapping-names'
 import { writeFor, type AliasChoice, type AliasRow, type AliasWrite } from './resolve'
 
@@ -366,8 +368,11 @@ export class AliasesService {
     file: { buffer: Buffer; originalname: string } | undefined
   ): Promise<LineAliasesMergeDto> {
     this.keeper(caller, workspaceId)
-    if (!file) throw new BadRequestException('Choose the account mapping file')
-    const read = await readAccountMapping(file.buffer, file.originalname)
+    if (!file) throw new BadRequestException('Choose the file of names')
+    const grid = await readGrid(file.buffer, file.originalname)
+    const listed = namesFileOf(grid)
+    if (listed) return this.mergeNames(caller, workspaceId, file, listed)
+    const read = accountMappingOf(grid, file.originalname)
     const accounts = Object.keys(read.accounts)
     if (!accounts.length)
       throw new BadRequestException(
@@ -432,6 +437,10 @@ export class AliasesService {
             same++
             continue
           }
+          if (rows.length >= MAX_LINE_ALIASES && !this.has(rows, w)) {
+            skipped++
+            continue
+          }
           this.keep(rows, await this.put(tx, caller, workspaceId, w))
           added++
         }
@@ -460,5 +469,85 @@ export class AliasesService {
       skipped,
       engagementName: e?.name ?? null,
     }
+  }
+
+  /**
+   * The Bulk Add Names file: each row's name to its budget line or Unallowable, on the workspace or, when the row names
+   * one, on that engagement. It adds and never changes: a name already on the workspace's list stays as it is (on an
+   * engagement, `writeFor` keeps only an answer that differs). A row whose line or engagement isn't found is left out.
+   */
+  private async mergeNames(
+    caller: Caller,
+    workspaceId: string,
+    file: { buffer: Buffer; originalname: string },
+    listed: NamesFileRow[]
+  ): Promise<LineAliasesMergeDto> {
+    if (!listed.length)
+      throw new BadRequestException(
+        `${file.originalname}: no categories found under "Financial category"`
+      )
+    if (listed.length > MAX_ACCOUNTS) throw new BadRequestException('The file has too many names')
+    const engagements = await this.engagements(workspaceId)
+    const engagementOf = (said: string) =>
+      engagements.find((x) =>
+        [x.name, x.number, x.code].some((v) => v && aliasKey(v) === aliasKey(said))
+      ) ?? null
+    const lineOn = (lines: { name: string }[], said: string) =>
+      lines.find((b) => aliasKey(b.name) === aliasKey(said))?.name ?? null
+    let added = 0
+    let same = 0
+    let skipped = 0
+    const sha256 = createHash('sha256').update(file.buffer).digest('hex')
+    await this.log.change(
+      caller,
+      async (tx) => {
+        const rows = await this.rows(workspaceId, tx)
+        for (const r of listed) {
+          const e = r.engagement ? engagementOf(r.engagement) : null
+          const line =
+            r.goesTo === null
+              ? null
+              : lineOn(e ? e.budgetLines : engagements.flatMap((x) => x.budgetLines), r.goesTo)
+          if (!aliasKey(r.name) || r.goesTo === '' || (r.engagement && !e) || (r.goesTo && !line)) {
+            skipped++
+            continue
+          }
+          const w: AliasWrite | null = e
+            ? writeFor({ name: r.name, engagementId: e.id, budgetLineName: line }, rows)
+            : rows.some((x) => x.engagementId === null && aliasKey(x.name) === aliasKey(r.name))
+              ? null
+              : {
+                  name: r.name,
+                  engagementId: null,
+                  budgetLineName: line,
+                  unallowable: line === null,
+                }
+          if (!w) {
+            same++
+            continue
+          }
+          if (rows.length >= MAX_LINE_ALIASES && !this.has(rows, w)) {
+            skipped++
+            continue
+          }
+          this.keep(rows, await this.put(tx, caller, workspaceId, w))
+          added++
+        }
+      },
+      () => ({
+        workspaceId,
+        resource: 'workspace',
+        subjectId: workspaceId,
+        action: 'update',
+        description: 'Added QuickBooks names from a Bulk Add Names file',
+        changes: [
+          { field: 'Names in the file', after: String(listed.length) },
+          { field: 'Names added or changed', after: String(added) },
+          { field: 'File SHA-256', after: sha256 },
+        ],
+      }),
+      { timeout: 30_000 }
+    )
+    return { ...(await this.dto(workspaceId)), added, same, skipped, engagementName: null }
   }
 }

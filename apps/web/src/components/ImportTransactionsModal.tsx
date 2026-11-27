@@ -112,7 +112,7 @@ export function ImportTransactionsModal({
   const [categories, setCategories] = useState<ImportCategories>({})
   const [preview, setPreview] = useState<ImportPreviewDto | null>(null)
   const [save, setSave] = useState(true)
-  const [saveAs, setSaveAs] = useState('QuickBooks mapping')
+  const [saveAs, setSaveAs] = useState('Books export mapping')
   const [result, setResult] = useState<ImportResultDto | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -364,9 +364,9 @@ export function ImportTransactionsModal({
       {step === 'File' && (
         <div className="grid gap-4">
           <p className="text-sm text-soft">
-            Export the transactions from your accounting system (in QuickBooks: Reports, Transaction
-            Report, then Export to CSV or Excel). Each row becomes an expense line in the month of
-            its date. The file is read, never stored.
+            Export the transactions from your accounting system (for example, in QuickBooks:
+            Reports, Transaction Report, then Export to CSV or Excel). Each row becomes an expense
+            line in the month of its date. The file is read, never stored.
           </p>
           <details className="ad-import-sample">
             <summary>No accounting system? Start from a sample file</summary>
@@ -602,7 +602,7 @@ export function ImportTransactionsModal({
                               <>
                                 <small className="ad-field-error">
                                   {c.value
-                                    ? `"${c.value}" isn't on the QuickBooks names list yet. Choose where it goes.`
+                                    ? `"${c.value}" isn't mapped to a budget category yet. Choose where it goes.`
                                     : 'Choose a budget line, or Unallowable.'}
                                 </small>
                                 {sameAs(c.value).map((s) => (
@@ -623,7 +623,7 @@ export function ImportTransactionsModal({
                               categories[c.value] === c.match && (
                                 <small className="text-soft">
                                   {c.from === 'list'
-                                    ? '✓ From the QuickBooks names list'
+                                    ? '✓ Mapped on the workspace page'
                                     : '✓ Matched by name'}
                                 </small>
                               )

@@ -1276,7 +1276,7 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
     ['Travel', 'program-costs'],
     ['Payroll - staff', 'staff-salaries'],
     ['Payroll - WEX', 'wex'],
-    ['Bank fees', null],
+    ['Entertainment', null],
   ]
   for (const [name, line] of names) {
     const key = aliasKey(name)
