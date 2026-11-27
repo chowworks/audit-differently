@@ -19,6 +19,7 @@ import { useApi, useLoad } from '@/hooks/useApi'
 import { usePeopleSearch } from '@/hooks/usePeopleSearch'
 import { TagsTable } from '@/pages/TagsTable'
 import { ProgramNamesCard } from '@/pages/ProgramNamesCard'
+import { PayrollRollupCard } from '@/pages/PayrollRollupCard'
 import { QuickBooksNamesCard } from '@/pages/QuickBooksNamesCard'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { nextDue, workflow } from '@/lib/workflow'
@@ -361,6 +362,9 @@ export function WorkspacePage() {
             )}
             {(w.myRole === 'owner' || w.myRole === 'bookkeeper') && (
               <QuickBooksNamesCard workspaceId={w.id} />
+            )}
+            {(w.myRole === 'owner' || w.myRole === 'bookkeeper') && (
+              <PayrollRollupCard workspaceId={w.id} />
             )}
             <MoreLists w={w} onChange={reload} />
           </div>

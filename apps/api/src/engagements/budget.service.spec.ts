@@ -69,11 +69,27 @@ const booksRow = (
   budgetLineId,
 })
 
+/** An entry of the payroll rollup (#138): a kind to a line's name, the workspace's or an engagement's own. */
+const rollup = (
+  kind: string,
+  budgetLineName: string | null,
+  engagementId: string | null = null
+) => ({
+  id: `p-${kind}-${engagementId ?? 'ws'}`,
+  engagementId,
+  list: 'payroll',
+  name: kind,
+  key: kind.replace('-', ' '),
+  budgetLineName,
+  unallowable: budgetLineName === null,
+})
+
 function service(
   lines = [travel()],
   months = drafts(),
   spending = 0,
-  expenses: ReturnType<typeof booksRow>[] = []
+  expenses: ReturnType<typeof booksRow>[] = [],
+  payrollList: ReturnType<typeof rollup>[] = []
 ) {
   const rows = scoped(...lines)
   type Where = { payrollKind: { in: string[] }; monthlyReport?: { status: string } }
@@ -87,23 +103,42 @@ function service(
     )
   const prisma = {
     engagement: scoped(engagement()),
-    // The QuickBooks names list: one workspace entry goes to Travel (#132).
+    // The QuickBooks names list (one workspace entry goes to Travel, #132) and the payroll rollup (#138).
     lineAlias: {
-      findMany: jest.fn(async () => [
-        {
-          id: 'a-1',
-          engagementId: null,
-          name: '62000 Travel',
-          key: '62000 travel',
-          budgetLineName: 'Travel',
-          unallowable: false,
-        },
-      ]),
+      findMany: jest.fn(async (args?: { where?: { list?: string } }) =>
+        [
+          {
+            id: 'a-1',
+            engagementId: null,
+            list: 'quickbooks',
+            name: '62000 Travel',
+            key: '62000 travel',
+            budgetLineName: 'Travel',
+            unallowable: false,
+          },
+          ...payrollList,
+        ].filter((a) => !args?.where?.list || a.list === args.where.list)
+      ),
+      findFirst: jest.fn(
+        async (args: { where: { engagementId?: string | null; list?: string; name?: string } }) =>
+          payrollList.find(
+            (a) =>
+              (!args.where.list || a.list === args.where.list) &&
+              a.engagementId === (args.where.engagementId ?? null) &&
+              (!args.where.name || a.name === args.where.name)
+          ) ?? null
+      ),
       update: jest.fn(async () => ({})),
-      create: jest.fn(async () => ({})),
+      create: jest.fn(async ({ data }: { data: ReturnType<typeof rollup> }) => {
+        payrollList.push({ ...data, id: `p-new-${payrollList.length}` })
+        return data
+      }),
     },
     budgetLine: {
       findFirst: jest.fn(async (args: { where: Record<string, unknown> }) => {
+        // A line as saved in this change (its payroll after the rollup).
+        if (Object.keys(args.where).length === 1 && args.where.id)
+          return lines.find((l) => l.id === args.where.id) ?? null
         const { category, engagementId, ...rest } = args.where
         const found = await rows.findFirst({ where: rest })
         if (!found) return null
@@ -118,8 +153,16 @@ function service(
           : lines.filter((l) => l.engagementId === 'e-1')
       ),
       count: jest.fn(async () => lines.filter((l) => l.engagementId === 'e-1').length),
-      create: jest.fn(async ({ data }: { data: object }) => ({ id: 'b-2', ...data })),
-      update: jest.fn(async ({ data }: { data: object }) => ({ ...travel(), ...data })),
+      create: jest.fn(async ({ data }: { data: object }) => {
+        const row = { ...travel(), id: 'b-new', ...data }
+        lines.push(row as (typeof lines)[number])
+        return row
+      }),
+      // A line's payroll (the rollup's) is kept; other fields answer as written, the row as it was.
+      update: jest.fn(async ({ where, data }: { where: { id: string }; data: object }) => {
+        const l = lines.find((x) => x.id === where.id) ?? travel()
+        return 'payroll' in data ? Object.assign(l, data) : { ...l, ...data }
+      }),
       delete: jest.fn(async () => travel()),
     },
     // How many expenses are spent against the line.
@@ -474,21 +517,40 @@ describe('BudgetService', () => {
     })
   })
 
-  it("moves a payroll kind to the line that takes it, and logs the line's payroll in the screen's words", async () => {
-    const { service: s, prisma, log } = service([{ ...travel(), payroll: ['staff-pay'] }])
+  it("puts a kind on the line the payroll page asks for, as this engagement's own entry, and logs it", async () => {
+    const {
+      service: s,
+      prisma,
+      log,
+    } = service(
+      [{ ...travel(), payroll: ['staff-pay'] }],
+      drafts(),
+      0,
+      [],
+      [rollup('staff-pay', 'Travel')]
+    )
     await s.add(member('owner'), 'e-1', {
       name: 'Program Costs',
       reportLine: 'program-costs',
       amount: 5000,
       payroll: ['staff-pay', 'staff-taxes'],
     })
-    // The line that held staff pay gives it up; the new line holds both kinds.
+    // Kept as the engagement's own entries; the line that held staff pay gives it up, the new line holds both.
+    expect(prisma.lineAlias.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        engagementId: 'e-1',
+        list: 'payroll',
+        name: 'staff-pay',
+        budgetLineName: 'Program Costs',
+      }),
+    })
     expect(prisma.budgetLine.update).toHaveBeenCalledWith({
       where: { id: 'b-1' },
       data: { payroll: [] },
     })
-    expect(prisma.budgetLine.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ payroll: ['staff-pay', 'staff-taxes'] }),
+    expect(prisma.budgetLine.update).toHaveBeenCalledWith({
+      where: { id: 'b-new' },
+      data: { payroll: ['staff-pay', 'staff-taxes'] },
     })
     expect(log.entries.at(-1)!.changes).toEqual(
       expect.arrayContaining([
@@ -501,6 +563,22 @@ describe('BudgetService', () => {
     await expect(
       s.update(member('owner'), 'e-1', 'b-1', { payroll: ['salary'] as never })
     ).rejects.toThrow('Choose payroll this line can hold')
+  })
+
+  it("gives a new line the payroll the workspace list names it for, and its report line's with no entry", async () => {
+    const { service: s, prisma } = service(
+      [travel()],
+      drafts(),
+      0,
+      [],
+      [rollup('staff-pay', 'Salaries')]
+    )
+    await s.add(member('owner'), 'e-1', { name: 'salaries', reportLine: 'staff-fringe' })
+    // Staff pay by its name (case aside); staff taxes by its report line, as the workspace has no entry for them.
+    expect(prisma.budgetLine.update).toHaveBeenCalledWith({
+      where: { id: 'b-new' },
+      data: { payroll: ['staff-pay', 'staff-taxes'] },
+    })
   })
 
   it("moves the books' payroll rows of a kind to the line that takes it, in the change, with the months it reopened", async () => {
@@ -525,7 +603,8 @@ describe('BudgetService', () => {
       [{ ...travel(), payroll: ['staff-pay', 'staff-taxes'] }, salaries],
       mixed(),
       0,
-      rows
+      rows,
+      [rollup('staff-pay', 'Travel'), rollup('staff-taxes', 'Travel')]
     )
     await s.update(member('owner'), 'e-1', 'b-2', { payroll: ['staff-pay'] })
     // Staff pay follows its line, on the submitted and closed months too (the change put them back to draft first);
@@ -545,9 +624,13 @@ describe('BudgetService', () => {
       service: s,
       prisma,
       log,
-    } = service([{ ...travel(), payroll: ['staff-pay'] }], drafts(), 0, [
-      booksRow('x-1', 'r-1', 'staff-pay', 'b-9'),
-    ])
+    } = service(
+      [{ ...travel(), payroll: ['staff-pay'] }],
+      drafts(),
+      0,
+      [booksRow('x-1', 'r-1', 'staff-pay', 'b-9')],
+      [rollup('staff-pay', 'Travel')]
+    )
     // A closing approved meanwhile: the row's month is locked, so the database keeps it where it was.
     prisma.expense.updateMany.mockResolvedValueOnce({ count: 0 })
     await s.add(member('owner'), 'e-1', {

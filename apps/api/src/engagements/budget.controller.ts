@@ -1,8 +1,15 @@
-import { Body, Controller, Delete, Param, Patch, Post, UseGuards } from '@nestjs/common'
-import type { BudgetChange, BudgetLineInput } from '@ad/types'
+import { Body, Controller, Delete, Get, Param, Post, Patch, Put, UseGuards } from '@nestjs/common'
+import type {
+  BudgetChange,
+  BudgetLineInput,
+  PayrollRollupDto,
+  PayrollRollupPreviewDto,
+  PayrollRollupSaved,
+} from '@ad/types'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
 import { BudgetService } from './budget.service'
+import { PayrollRollupService } from './payroll-rollup.service'
 
 /**
  * The approved budget's lines (step 4). Each answers with the engagement as its page shows it, and the closed or
@@ -42,5 +49,41 @@ export class BudgetController {
     @Param('lineId') lineId: string
   ): Promise<BudgetChange> {
     return this.budget.remove(await this.callers.load(userId), id, lineId)
+  }
+}
+
+/** The payroll rollup (#138): which budget line holds each kind of payroll, on the workspace page. */
+@Controller('workspaces/:id/payroll-rollup')
+@UseGuards(AuthenticatedGuard)
+export class PayrollRollupController {
+  constructor(
+    private readonly rollup: PayrollRollupService,
+    private readonly callers: CallerService
+  ) {}
+
+  @Get()
+  async list(@UserId() userId: string, @Param('id') id: string): Promise<PayrollRollupDto> {
+    return this.rollup.list(await this.callers.load(userId), id)
+  }
+
+  /** What saving a kind would change: the engagements whose line changes and their months that go back to draft. */
+  @Post(':kind/preview')
+  async preview(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('kind') kind: string,
+    @Body() body: unknown
+  ): Promise<PayrollRollupPreviewDto> {
+    return this.rollup.preview(await this.callers.load(userId), id, kind, body)
+  }
+
+  @Put(':kind')
+  async save(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('kind') kind: string,
+    @Body() body: unknown
+  ): Promise<PayrollRollupSaved> {
+    return this.rollup.save(await this.callers.load(userId), id, kind, body)
   }
 }

@@ -4,6 +4,7 @@ import { carryRename } from './rename'
 type Row = {
   id: string
   engagementId: string | null
+  list?: string
   name: string
   key: string
   budgetLineName: string | null
@@ -15,13 +16,15 @@ function fakeTx(rows: Row[], otherLines: string[]) {
   const of = (where: {
     engagementId?: string | null
     key?: string
+    list?: string
     OR?: { engagementId: string | null }[]
   }) =>
     rows.filter(
       (r) =>
         (!where.OR || where.OR.some((o) => o.engagementId === r.engagementId)) &&
         (where.engagementId === undefined || r.engagementId === where.engagementId) &&
-        (where.key === undefined || r.key === where.key)
+        (where.key === undefined || r.key === where.key) &&
+        (where.list === undefined || (r.list ?? 'quickbooks') === where.list)
     )
   const tx = {
     lineAlias: {
@@ -82,5 +85,42 @@ describe('carryRename', () => {
     ])
     await carryRename(tx, input('Staff Pay', 'Staff Salaries'))
     expect(rows.map((r) => [r.engagementId, r.budgetLineName])).toEqual([[null, 'Staff Salaries']])
+  })
+
+  it("carries the payroll rollup's entries too, each on its own list", async () => {
+    const rows: Row[] = [
+      {
+        id: 'a-1',
+        engagementId: null,
+        list: 'quickbooks',
+        name: 'Staff Pay',
+        key: 'staff pay',
+        budgetLineName: 'Staff Salaries',
+        unallowable: false,
+      },
+      {
+        id: 'p-1',
+        engagementId: null,
+        list: 'payroll',
+        name: 'staff-pay',
+        key: 'staff pay',
+        budgetLineName: 'Staff Salaries',
+        unallowable: false,
+      },
+    ]
+    const tx = fakeTx(rows, ['Staff Salaries'])
+    expect(await carryRename(tx, input('Staff Salaries', 'Personnel'))).toBe(2)
+    expect(rows.map((r) => [r.list, r.engagementId, r.budgetLineName])).toEqual([
+      ['quickbooks', null, 'Staff Salaries'],
+      ['payroll', null, 'Staff Salaries'],
+      ['quickbooks', 'e-1', 'Personnel'],
+      ['payroll', 'e-1', 'Personnel'],
+    ])
+    // Back again: each list's own entry goes, though the two share a key.
+    await carryRename(tx, input('Personnel', 'Staff Salaries'))
+    expect(rows.map((r) => [r.list, r.engagementId])).toEqual([
+      ['quickbooks', null],
+      ['payroll', null],
+    ])
   })
 })

@@ -101,7 +101,10 @@ export interface BudgetLineInput {
   reportLine?: ReportLine
   amount?: number | null
   narrative?: string | null
-  /** The payroll from the match this line holds; ticking a kind here moves it off the line that held it. */
+  /**
+   * Payroll kinds to put on this line for this engagement (the payroll page's "Add budget line"): kept as the
+   * engagement's own entries of the payroll rollup (#138), which then moves each kind off the line that held it.
+   */
   payroll?: PayrollBudgetKind[]
 }
 
@@ -113,13 +116,78 @@ export interface BudgetChange extends EngagementDetail {
   backToDraft: { id: string; period: string; was: 'closed' | 'submitted' }[]
 }
 
+// ── The payroll rollup (owner's decisions, 2026-11-27, #138) ─────────────────
+// Which budget line holds each kind of payroll from the match, by the line's NAME, for the workspace, with an
+// engagement's own entry; "Not on the budget" is an entry too. Kept on the QuickBooks names table as the list 'payroll'.
+
+/** One entry: a kind of payroll to a budget line's name, or nowhere (null: Not on the budget). */
+export interface PayrollRollupEntry {
+  kind: PayrollBudgetKind
+  /** null: the workspace's entry; otherwise that engagement's own. */
+  engagementId: string | null
+  budgetLineName: string | null
+}
+
+export interface PayrollRollupDto {
+  entries: PayrollRollupEntry[]
+  engagements: {
+    id: string
+    name: string
+    lines: { name: string; reportLine: ReportLine }[]
+  }[]
+}
+
+/** A kind's entries saved as a whole: the workspace's, and each engagement's own (none: as the workspace says). */
+export interface PayrollRollupInput {
+  every: string | null
+  own: { engagementId: string; budgetLineName: string | null }[]
+}
+
+/** What saving a kind would change, per engagement whose line changes, before Save. */
+export interface PayrollRollupPreviewDto {
+  changes: {
+    engagementId: string
+    name: string
+    from: string | null
+    to: string | null
+    /** Its closed and submitted months, which go back to draft. */
+    backToDraft: { period: string; was: 'closed' | 'submitted' }[]
+  }[]
+}
+
+/** What saving a kind answers: the list, and the months each changed engagement put back to draft. */
+export interface PayrollRollupSaved extends PayrollRollupDto {
+  backToDraft: { engagementName: string; period: string; was: 'closed' | 'submitted' }[]
+}
+
+/**
+ * The line of an engagement that holds a kind of payroll: its own entry, else the workspace's (a line of that name, or
+ * none), else, with no entry at all (a new workspace), its first-choice report line's line, as a new line took it before.
+ */
+export function payrollHolder<L extends { name: string; reportLine: string }>(
+  kind: PayrollBudgetKind,
+  engagementId: string,
+  entries: Pick<PayrollRollupEntry, 'kind' | 'engagementId' | 'budgetLineName'>[],
+  lines: L[]
+): L | null {
+  const hit =
+    entries.find((e) => e.kind === kind && e.engagementId === engagementId) ??
+    entries.find((e) => e.kind === kind && e.engagementId === null)
+  if (hit)
+    return hit.budgetLineName
+      ? (lines.find((l) => lineKey(l.name) === lineKey(hit.budgetLineName!)) ?? null)
+      : null
+  const at = payrollDefaults(lines).findIndex((kinds) => kinds.includes(kind))
+  return at >= 0 ? lines[at]! : null
+}
+
 // ── QuickBooks names (owner's decision, 2026-11-27, #132) ────────────────────
 // One list on the workspace says which budget line each QuickBooks account or category goes to, read by Import
 // transactions and Month End Close alike. A name points at a budget line's name (so it carries to every engagement with
 // a line of that name) or is Unallowable; an engagement may override a name for itself.
 
-/** The kinds of list a name is on: QuickBooks names today, the payroll rollup next (#132). */
-export const LINE_ALIAS_LISTS = ['quickbooks'] as const
+/** The kinds of list a name is on: QuickBooks names, and the payroll rollup (#138), whose names are the payroll kinds. */
+export const LINE_ALIAS_LISTS = ['quickbooks', 'payroll'] as const
 export type LineAliasList = (typeof LINE_ALIAS_LISTS)[number]
 
 /** The most names a workspace keeps, overrides included. */

@@ -2,8 +2,8 @@ import type { Prisma } from '@prisma/client'
 import { lineKey } from '@ad/types'
 
 /**
- * A budget line renamed (owner's decision, 2026-11-27, #132): the QuickBooks names that point at its old name follow it,
- * in the rename's own transaction. The engagement's own overrides move to the new name. A workspace entry moves too,
+ * A budget line renamed (owner's decision, 2026-11-27, #132): the QuickBooks names and the payroll rollup's entries
+ * (#138) that point at its old name follow it, in the rename's own transaction. The engagement's own overrides move to the new name. A workspace entry moves too,
  * unless another engagement still has a line of the old name: then it stays for that one, and this engagement gets an
  * override to the new name. An override that ends up saying what the workspace entry says goes (renaming a line back
  * leaves no duplicates). Returns how many names now point at the new name.
@@ -24,7 +24,6 @@ export async function carryRename(
     await tx.lineAlias.findMany({
       where: {
         workspaceId,
-        list: 'quickbooks',
         unallowable: false,
         OR: [{ engagementId: null }, { engagementId }],
       },
@@ -48,13 +47,13 @@ export async function carryRename(
     // (Any override of the name, wherever it goes: this engagement's own choice wins and stays.)
     if (
       await tx.lineAlias.findFirst({
-        where: { workspaceId, list: 'quickbooks', engagementId, key: a.key },
+        where: { workspaceId, list: a.list, engagementId, key: a.key },
         select: { id: true },
       })
     )
       continue
     await tx.lineAlias.create({
-      data: { ...now, workspaceId, engagementId, list: 'quickbooks', name: a.name, key: a.key },
+      data: { ...now, workspaceId, engagementId, list: a.list, name: a.name, key: a.key },
     })
     n++
   }
@@ -62,19 +61,18 @@ export async function carryRename(
   const after = await tx.lineAlias.findMany({
     where: {
       workspaceId,
-      list: 'quickbooks',
       unallowable: false,
       OR: [{ engagementId: null }, { engagementId }],
     },
-    select: { id: true, engagementId: true, key: true, budgetLineName: true },
+    select: { id: true, engagementId: true, list: true, key: true, budgetLineName: true },
   })
   const atNew = (a: { budgetLineName: string | null }) =>
     lineKey(a.budgetLineName ?? '') === lineKey(to)
   const everyAtNew = new Set(
-    after.filter((a) => a.engagementId === null && atNew(a)).map((a) => a.key)
+    after.filter((a) => a.engagementId === null && atNew(a)).map((a) => `${a.list}|${a.key}`)
   )
   const same = after.filter(
-    (a) => a.engagementId === engagementId && atNew(a) && everyAtNew.has(a.key)
+    (a) => a.engagementId === engagementId && atNew(a) && everyAtNew.has(`${a.list}|${a.key}`)
   )
   if (same.length) await tx.lineAlias.deleteMany({ where: { id: { in: same.map((a) => a.id) } } })
   return n
