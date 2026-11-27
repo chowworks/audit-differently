@@ -135,9 +135,6 @@ export const aliasKey = (name: string) =>
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
 
-/** An account as QuickBooks writes it with its parents ("60000 G&A:60901 Rent Expense"): its own last part. */
-export const accountLeaf = (account: string) => (account.split(':').pop() ?? '').trim()
-
 export interface LineAliasDto {
   id: string
   /** The QuickBooks account or category, as written. */

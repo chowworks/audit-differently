@@ -1,4 +1,4 @@
-import { accountLeaf, aliasKey, suggestAliases } from '@ad/types'
+import { aliasKey, suggestAliases } from '@ad/types'
 import { listOfMappings } from './mapping-names'
 import { resolveAlias, writeFor, type AliasRow } from './resolve'
 
@@ -60,13 +60,6 @@ describe('the QuickBooks names list', () => {
     expect(resolveAlias('Rent Expense', 'e-1', LIST, LINES).status).toBe('unmapped')
   })
 
-  it('takes the last part of an account written with its parents', () => {
-    expect(accountLeaf('60000 General & Administrative:60901 Rent Expense')).toBe(
-      '60901 Rent Expense'
-    )
-    expect(accountLeaf('Meals')).toBe('Meals')
-  })
-
   it("keeps a new name as the workspace's, and a different choice or Unallowable as that engagement's", () => {
     expect(
       writeFor({ name: 'Supplies', engagementId: 'e-1', budgetLineName: 'Program Costs' }, LIST)
@@ -92,6 +85,21 @@ describe('the QuickBooks names list', () => {
       writeFor({ name: 'salaries & wages', engagementId: 'e-1', budgetLineName: 'personnel' }, LIST)
     ).toBeNull()
     expect(writeFor({ name: 'Meals', engagementId: 'e-1', budgetLineName: null }, LIST)).toBeNull()
+  })
+
+  it('reads an account with its parents exactly as written first, then by its own part', () => {
+    const path = '60000 G&A:60901 Rent Expense'
+    // No entry of the whole path: the entry of its own part, as a mapping sheet writes it.
+    const byPart = resolveAlias(path, 'e-1', LIST, LINES)
+    expect(byPart.status === 'line' && byPart.line.id).toBe('b-pc')
+    // An entry of the whole path wins, so two parents with the same child can go to different lines.
+    const both = [...LIST, row(path, 'Travel')]
+    const exact = resolveAlias(path, 'e-1', both, LINES)
+    expect(exact.status === 'line' && exact.line.id).toBe('b-tr')
+    expect(resolveAlias('70000 Other:60901 Rent Expense', 'e-1', both, LINES)).toMatchObject({
+      status: 'line',
+      line: { id: 'b-pc' },
+    })
   })
 
   it('asks "is it the same as one of these?" with names missing from the file first', () => {

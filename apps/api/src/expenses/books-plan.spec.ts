@@ -32,9 +32,9 @@ const ws = (
   budgetLineName,
   unallowable: budgetLineName === null,
 })
-/** The QuickBooks names list: each account as QuickBooks writes it (its own last part), and its budget line. */
+/** The QuickBooks names list: each account exactly as the books write it, parent path included, and its budget line. */
 const aliases: AliasRow[] = [
-  ws('60901 Rent Expense', 'Indirect Costs'),
+  ws('60000 G&A:60901 Rent Expense', 'Indirect Costs'),
   ws('60301 Software and Subscription', 'Indirect Costs'),
   ws('63301 Payroll Fees', 'Fringe'),
   ws('60202 Insurance', null, 'e-ycp'),
@@ -139,7 +139,7 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
         .filter((l) => l.engagementId === 'e-ycp')
         .map((l) => [l.category, l.status])
     ).toEqual([
-      ['60901 Rent Expense', 'unmapped'],
+      ['60000 G&A:60901 Rent Expense', 'unmapped'],
       ['60301 Software and Subscription', 'unmapped'],
       ['63301 Payroll Fees', 'unmapped'],
     ])
@@ -152,7 +152,7 @@ describe("where each books line goes (owner's decision, 2026-11-09)", () => {
     const unallowable = plan({
       aliases: [
         ...aliases,
-        ws('60901 Rent Expense', null, 'e-ycp'),
+        ws('60000 G&A:60901 Rent Expense', null, 'e-ycp'),
         ws('60301 Software and Subscription', null, 'e-ycp'),
       ],
     })

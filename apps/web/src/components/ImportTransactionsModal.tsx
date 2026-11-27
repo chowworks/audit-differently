@@ -3,7 +3,6 @@ import {
   IMPORT_FIELD_LABELS,
   IMPORT_FIELDS,
   IMPORT_SKIP,
-  accountLeaf,
   aliasKey,
   suggestAliases,
   PAYROLL_BUDGET_KIND_LABELS,
@@ -212,8 +211,8 @@ export function ImportTransactionsModal({
    */
   const sameAs = (value: string) => {
     if (!info || !preview || !value) return []
-    const inFile = preview.categories.map((c) => accountLeaf(c.value))
-    return suggestAliases(accountLeaf(value), info.aliases, inFile, engagementId).flatMap((s) => {
+    const inFile = preview.categories.map((c) => c.value.trim())
+    return suggestAliases(value.trim(), info.aliases, inFile, engagementId).flatMap((s) => {
       if (s.unallowable) return [{ name: s.name, key: IMPORT_SKIP, label: 'Unallowable' }]
       const o = info.budgetOptions.find(
         (b) => aliasKey(b.label) === aliasKey(s.budgetLineName ?? '')

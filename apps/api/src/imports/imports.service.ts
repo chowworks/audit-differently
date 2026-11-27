@@ -10,7 +10,6 @@ import {
   IMPORT_FIELD_LABELS,
   IMPORT_FIELDS,
   IMPORT_SKIP,
-  accountLeaf,
   aliasKey,
   REPORT_STATUS_LABELS,
   WRITE_ROLES,
@@ -668,8 +667,8 @@ export class ImportsService {
   ): { match: string | null; from: 'list' | 'name' | null } {
     if (!columns.category) return { match: null, from: null }
     const lines = [...items.values()].map((i) => ({ id: i.key, name: i.label }))
-    // As Month End Close reads an account: its own last part ("60000 G&A:60901 Rent Expense" is "60901 Rent Expense").
-    const found = resolveAlias(accountLeaf(value), c.id, list, lines)
+    // As Month End Close reads an account: exactly as the books write it, parents included (owner's rule, 2026-11-27).
+    const found = resolveAlias(value.trim(), c.id, list, lines)
     if (found.status === 'unallowable') return { match: IMPORT_SKIP, from: 'list' }
     if (found.status === 'line')
       return { match: found.line.id, from: found.alias ? 'list' : 'name' }
@@ -690,11 +689,10 @@ export class ImportsService {
     const here = new Set(inFile)
     return Object.entries(categories)
       .filter(
-        ([value, to]) =>
-          here.has(value) && aliasKey(accountLeaf(value)) && (to === IMPORT_SKIP || names.has(to))
+        ([value, to]) => here.has(value) && aliasKey(value) && (to === IMPORT_SKIP || names.has(to))
       )
       .map(([value, to]) => ({
-        name: accountLeaf(value),
+        name: value.trim(),
         engagementId: c.id,
         budgetLineName: to === IMPORT_SKIP ? null : names.get(to)!,
       }))

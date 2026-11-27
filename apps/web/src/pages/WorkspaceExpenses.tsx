@@ -12,7 +12,7 @@ import type {
   WorkspaceExpensesDto,
   WorkspaceExpensesSavedDto,
 } from '@ad/types'
-import { accountLeaf, aliasKey, suggestAliases, zipFolder } from '@ad/types'
+import { aliasKey, suggestAliases, zipFolder } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty, ErrorNote, Modal, Notice } from '@/components/ui'
@@ -768,7 +768,7 @@ function UnmappedNames({
   onChoose: (body: Record<string, unknown>) => Promise<void>
 }) {
   // Every account of this month's books, wherever its line went: a listed name not among them may have been renamed.
-  const inFile = new Set(d.lines.map((l) => accountLeaf(l.account)).filter(Boolean))
+  const inFile = new Set(d.lines.map((l) => l.account.trim()).filter(Boolean))
   const asks = new Map<
     string,
     { name: string; engagementId: string; engagementName: string; lines: number }

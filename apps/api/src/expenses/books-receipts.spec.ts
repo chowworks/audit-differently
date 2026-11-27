@@ -23,7 +23,7 @@ const youth: PlanEngagement = {
   months: [{ period: '2026-09', status: 'draft' }],
 }
 const aliases: AliasRow[] = [
-  ['60901 Rent Expense', 'Indirect Costs'],
+  ['60000 G&A:60901 Rent Expense', 'Indirect Costs'],
   ['60301 Software and Subscription', 'Indirect Costs'],
   ['63301 Payroll Fees', 'Fringe'],
 ].map(([name, budgetLineName]) => ({

@@ -1,5 +1,4 @@
 import {
-  accountLeaf,
   DEFAULT_EXPENSE_MATCHING,
   programKey,
   type BooksAllocationDto,
@@ -368,7 +367,7 @@ export function planBooks(input: {
       line.engagementId = e.id
       line.engagementName = e.name
       // Its budget line by the QuickBooks names list: the account as QuickBooks writes it (owner's decision, 2026-11-27).
-      const name = accountLeaf(l.account)
+      const name = l.account.trim()
       line.category = name || null
       const found = resolveAlias(name, e.id, input.aliases, e.budgetLines)
       if (found.status === 'unmapped') {

@@ -71,10 +71,11 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   `budget-overrun` check, a blocking `no-budget-line` check, and the audit package's `Budget vs actual.csv`. A line with
   spending keeps its report line and is not removed. **The QuickBooks names list** (`LineAlias`, migration
   `20261127000100`, #132; owner's decisions, 2026-11-27) says where each QuickBooks account or category goes: the name
-  exactly as QuickBooks writes it (number included, the last part of a parent:child path, nothing stripped) to a budget
-  line's NAME or to Unallowable, for the workspace, with an engagement's own override. Import transactions and Month End
+  exactly as the books write it (number and any parent:child path included, nothing stripped or shortened; owner's rule,
+  2026-11-27) to a budget line's NAME or to Unallowable, for the workspace, with an engagement's own override. Import transactions and Month End
   Close both resolve a name through it alone (`apps/api/src/aliases/resolve.ts`: override, then workspace entry, then a
-  line of the same name); a name on neither is asked about ("Is it the same as one of these?", `suggestAliases`) and
+  line of the same name; an account written with its parents is looked up whole first, then by its own part, as an
+  account mapping sheet writes it); a name on neither is asked about ("Is it the same as one of these?", `suggestAliases`) and
   the answer is kept on the list. Owners and bookkeepers keep it under Configuration Data; an auditor and a platform
   admin never see it. Unallowable rows are not saved at all: only listed in the import's "not imported" and Month End
   Close's review. An account mapping spreadsheet only fills the list, read in memory. `ImportMapping.categories` and the

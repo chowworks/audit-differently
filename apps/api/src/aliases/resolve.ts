@@ -30,17 +30,22 @@ export function resolveAlias<L extends { name: string }>(
 ): Resolved<L> {
   const key = aliasKey(name)
   if (!key) return { status: 'unmapped' }
-  const hit =
-    aliases.find((a) => a.engagementId === engagementId && aliasKey(a.name) === key) ??
-    aliases.find((a) => a.engagementId === null && aliasKey(a.name) === key)
+  const find = (k: string) =>
+    aliases.find((a) => a.engagementId === engagementId && aliasKey(a.name) === k) ??
+    aliases.find((a) => a.engagementId === null && aliasKey(a.name) === k)
+  // The name exactly as the books write it first. An account written with its parents ("60000 G&A:60901 Rent
+  // Expense") is then found by an entry of its own part ("60901 Rent Expense"), as an account mapping sheet writes it;
+  // the list keeps each name as given, never shortened (owner's rule, 2026-11-27).
+  const own = name.includes(':') ? aliasKey(name.split(':').pop()!) : ''
+  const hit = find(key) ?? (own && own !== key ? find(own) : undefined)
   const lineNamed = (n: string) => lines.find((l) => aliasKey(l.name) === aliasKey(n)) ?? null
   if (hit) {
     if (hit.unallowable) return { status: 'unallowable', alias: hit }
     const line = lineNamed(hit.budgetLineName ?? '')
     if (line) return { status: 'line', line, alias: hit }
     // The workspace's line is not on this engagement, but a line named as the name itself is: that one.
-    const own = hit.engagementId === null ? lineNamed(name) : null
-    if (own) return { status: 'line', line: own, alias: null }
+    const same = hit.engagementId === null ? lineNamed(name) : null
+    if (same) return { status: 'line', line: same, alias: null }
     return { status: 'no-line', alias: hit, want: hit.budgetLineName ?? '' }
   }
   const line = lineNamed(name)
