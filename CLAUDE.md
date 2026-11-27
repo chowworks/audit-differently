@@ -51,8 +51,10 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
 - **Workspace** = a `Workspace` row. The team's container and **the unit row-level security isolates**
   (`docs/tenant-isolation.md`). Its people are `Membership` rows with one role each (`ROLES` in
   `packages/types`): `owner` (runs the workspace, signs the report), `bookkeeper` (records, attaches,
-  records the month-end closing, submits), `auditor` (reads everything, personal records included, changes
-  nothing). Owners keep the workspace's tags (`Workspace.tagTypes`) under Configuration Data on the
+  records the month-end closing, submits), `auditor` (read only, changes nothing). **The auditor sees the
+  interactive final report and the records it cites, never the work product before it** (owner's rule, restated
+  2026-11-27): no working screens (month end, imports, unmapped or unallowable rows). Today the role still reads
+  most records, personal ones included; a new screen or route follows the rule, not that. Owners keep the workspace's tags (`Workspace.tagTypes`) under Configuration Data on the
   workspace's page, and set its receipts address (`receiptsAddress`); an owner may change it but never clear it, and admins don't set it.
   Every address used is kept in `ReceiptsAddress` (migration `20261017000400`); one in use or used before and not
   released is never chosen again, and the owner is told only "That address isn't available; choose another". Mail to a
@@ -69,7 +71,10 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   `budget-overrun` check, a blocking `no-budget-line` check, and the audit package's `Budget vs actual.csv`. A line with
   spending keeps its report line and is not removed. Imports map categories to budget lines, saved by line name.
   The workspace's own list of budget items is gone (migration `20261017000300`); names are suggested from the
-  workspace's other engagements.
+  workspace's other engagements. **A budget line's name is its key; keep its row** (owner's rule, 2026-11-27): saved
+  import mappings find lines by name, and the account mapping's picks and the payroll ticks hang on the row's id. Any
+  bulk change (an upload, a replace, a copy) updates a line of the same name in place and never deletes and recreates
+  it; renaming a line shows what uses the old name before it is saved (#132).
 - **Payroll on the budget** (owner's decisions, 2026-10-20): the pay the payroll match proves is the staff and
   participant pay on the budget. Each engagement's owner picks, on the budget line dialog, which line holds staff pay,
   staff taxes, participant pay and participant taxes (`BudgetLine.payroll`, migration `20261020000100`); Save writes
