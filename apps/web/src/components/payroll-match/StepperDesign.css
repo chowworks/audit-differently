@@ -5,7 +5,7 @@
   gap: 24px;
   align-items: start;
 }
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .sd-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -22,7 +22,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
 }
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .sd-rail {
     position: static;
     grid-auto-flow: column;
@@ -519,6 +519,21 @@
 }
 
 /* Step 3, Review staff payroll (StaffReview.tsx). */
+/* On a phone the proof column takes the row's full width under what was paid, when and how much. */
+@media (max-width: 700px) {
+  .sr-grid thead {
+    display: none;
+  }
+  .sr-grid tr[class^='sr-row-'] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 0 12px;
+  }
+  .sr-grid tr[class^='sr-row-'] > td:nth-child(4) {
+    grid-column: 1 / -1;
+    padding-top: 0;
+  }
+}
 .sr-chipbtn {
   font: inherit;
   color: inherit;
