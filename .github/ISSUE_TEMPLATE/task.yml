@@ -1,6 +1,7 @@
 name: Task or bug
 description: Report a bug or request work. Priority is required.
 title: "[Area] "
+labels: ["♻️ Need Grooming"]
 body:
   - type: markdown
     attributes:
