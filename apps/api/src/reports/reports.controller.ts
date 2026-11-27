@@ -3,16 +3,18 @@ import { Throttle } from '@nestjs/throttler'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { Response } from 'express'
-import type {
-  ClosingInput,
-  DocumentPurpose,
-  ExpenseInput,
-  ReportDetail,
-  WexPaymentInput,
-} from '@ad/types'
+import type { ReportDetail } from '@ad/types'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
 import { MonthBundleService } from './month-bundle.service'
+import {
+  parseAttachBody,
+  parseClosingBody,
+  parseCommentBody,
+  parseExpenseBody,
+  parseReasonBody,
+  parseWexBody,
+} from './report-body'
 import { ReportsService } from './reports.service'
 
 @Controller()
@@ -63,18 +65,20 @@ export class ReportsController {
   async addExpense(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: ExpenseInput
+    @Body() body: unknown
   ): Promise<ReportDetail> {
-    return this.reports.addExpense(await this.callers.load(userId), id, body)
+    const input = parseExpenseBody(body)
+    return this.reports.addExpense(await this.callers.load(userId), id, input)
   }
 
   @Patch('expenses/:id')
   async updateExpense(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: ExpenseInput
+    @Body() body: unknown
   ): Promise<ReportDetail> {
-    return this.reports.updateExpense(await this.callers.load(userId), id, body)
+    const input = parseExpenseBody(body)
+    return this.reports.updateExpense(await this.callers.load(userId), id, input)
   }
 
   @Delete('expenses/:id')
@@ -86,14 +90,10 @@ export class ReportsController {
   async attach(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { documentId: string; purpose: DocumentPurpose }
+    @Body() body: unknown
   ): Promise<ReportDetail> {
-    return this.reports.attachToExpense(
-      await this.callers.load(userId),
-      id,
-      body.purpose,
-      body.documentId
-    )
+    const { documentId, purpose } = parseAttachBody(body)
+    return this.reports.attachToExpense(await this.callers.load(userId), id, purpose, documentId)
   }
 
   @Delete('expenses/:id/documents/:documentId')
@@ -109,18 +109,20 @@ export class ReportsController {
   async addWex(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: WexPaymentInput
+    @Body() body: unknown
   ): Promise<ReportDetail> {
-    return this.reports.addWexPayment(await this.callers.load(userId), id, body)
+    const input = parseWexBody(body)
+    return this.reports.addWexPayment(await this.callers.load(userId), id, input)
   }
 
   @Patch('wex/:id')
   async updateWex(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: WexPaymentInput
+    @Body() body: unknown
   ): Promise<ReportDetail> {
-    return this.reports.updateWexPayment(await this.callers.load(userId), id, body)
+    const input = parseWexBody(body)
+    return this.reports.updateWexPayment(await this.callers.load(userId), id, input)
   }
 
   @Delete('wex/:id')
@@ -132,14 +134,10 @@ export class ReportsController {
   async attachWex(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { documentId: string; purpose: DocumentPurpose }
+    @Body() body: unknown
   ): Promise<ReportDetail> {
-    return this.reports.attachToWex(
-      await this.callers.load(userId),
-      id,
-      body.purpose,
-      body.documentId
-    )
+    const { documentId, purpose } = parseAttachBody(body)
+    return this.reports.attachToWex(await this.callers.load(userId), id, purpose, documentId)
   }
 
   /** Runs the month's checks again as the rules now stand: a change to the rules shows without a change to the month. */
@@ -157,27 +155,30 @@ export class ReportsController {
   async approveClosing(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: ClosingInput
+    @Body() body: unknown
   ): Promise<ReportDetail> {
-    return this.reports.approveClosing(await this.callers.load(userId), id, body)
+    const input = parseClosingBody(body)
+    return this.reports.approveClosing(await this.callers.load(userId), id, input)
   }
 
   @Post('reports/:id/send-back')
   async sendBack(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { reason: string }
+    @Body() body: unknown
   ): Promise<ReportDetail> {
-    return this.reports.sendBack(await this.callers.load(userId), id, body?.reason)
+    const reason = parseReasonBody(body)
+    return this.reports.sendBack(await this.callers.load(userId), id, reason)
   }
 
   @Post('reports/:id/request-edits')
   async requestEdits(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { comment?: unknown }
+    @Body() body: unknown
   ): Promise<ReportDetail> {
-    return this.reports.requestEdits(await this.callers.load(userId), id, body?.comment)
+    const comment = parseCommentBody(body)
+    return this.reports.requestEdits(await this.callers.load(userId), id, comment)
   }
 
   /** A month with nothing in it: there is nothing to submit, so an owner deletes it. */
@@ -193,8 +194,9 @@ export class ReportsController {
   async reopen(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { reason: string }
+    @Body() body: unknown
   ): Promise<ReportDetail> {
-    return this.reports.reopen(await this.callers.load(userId), id, body?.reason)
+    const reason = parseReasonBody(body)
+    return this.reports.reopen(await this.callers.load(userId), id, reason)
   }
 }
