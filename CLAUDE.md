@@ -71,7 +71,10 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   `budget-overrun` check, a blocking `no-budget-line` check, and the audit package's `Budget vs actual.csv`. A line with
   spending keeps its report line and is not removed. Imports map categories to budget lines, saved by line name.
   The workspace's own list of budget items is gone (migration `20261017000300`); names are suggested from the
-  workspace's other engagements.
+  workspace's other engagements. **A budget line's name is its key; keep its row** (owner's rule, 2026-11-27): saved
+  import mappings find lines by name, and the account mapping's picks and the payroll ticks hang on the row's id. Any
+  bulk change (an upload, a replace, a copy) updates a line of the same name in place and never deletes and recreates
+  it; renaming a line shows what uses the old name before it is saved (#132).
 - **Payroll on the budget** (owner's decisions, 2026-10-20): the pay the payroll match proves is the staff and
   participant pay on the budget. Each engagement's owner picks, on the budget line dialog, which line holds staff pay,
   staff taxes, participant pay and participant taxes (`BudgetLine.payroll`, migration `20261020000100`); Save writes
