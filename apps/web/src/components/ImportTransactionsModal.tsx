@@ -23,14 +23,7 @@ import { HandCard } from '@/components/HandCard'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Chip, ErrorNote, Field, Modal, Stepper, inputClass } from '@/components/ui'
 
-const STEPS = [
-  'File',
-  'Columns',
-  'Payroll transactions',
-  'Budget lines',
-  'Preview',
-  'Done',
-] as const
+const STEPS = ['File', 'Columns', 'Payroll transactions', 'Maps to', 'Preview', 'Done'] as const
 type Step = (typeof STEPS)[number]
 
 // What each column is often called in an export, so the person finds it in their own file.
@@ -39,7 +32,7 @@ const FIELD_HINTS: Partial<Record<ImportField, string>> = {
   amount: 'Often Amount or Total; in a bank file, the money out column (Debit or Withdrawal).',
   reference: 'Often Num, Ref or Check no. Without one, each line gets IMP-1, IMP-2, …',
   category:
-    "The file's category column (often Category or Split). You map each category to a budget category in the Budget lines step.",
+    "The file's category column (often Category or Split). You map each category to a budget category in the Maps to step.",
   memo: 'Often Memo or Description.',
   account: 'Often Account. An auditor uses it to match your ledger.',
 }
@@ -75,7 +68,7 @@ const SAMPLE_COLUMNS: [string, string][] = [
   ['Account', 'the account in your books (optional)'],
   [
     'Category',
-    'your own word for the cost; you map each one to a budget category in the Budget lines step',
+    'your own word for the cost; you map each one to a budget category in the Maps to step',
   ],
   ['Amount', 'what was spent, as a positive number'],
 ]
@@ -227,7 +220,7 @@ export function ImportTransactionsModal({
       return o ? [{ name: s.name, key: o.key, label: o.label }] : []
     })
   }
-  /** The Budget lines step's top line: how many still need a budget category, and where the rest came from. */
+  /** The Maps to step's top line: how many still need a budget category, and where the rest came from. */
   const lineSummary = (left: number, fromList: number, byName: number, what: 'value' | 'row') => {
     const done = [
       fromList ? `${fromList} from your financial categories list` : '',
@@ -245,7 +238,7 @@ export function ImportTransactionsModal({
           : left === 1
             ? 'row needs'
             : 'rows need'}{' '}
-        a budget category before the next step.
+        a Maps to choice before the next step.
         {done && <span className="text-soft"> {done}.</span>}
       </p>
     ) : (
@@ -328,7 +321,7 @@ export function ImportTransactionsModal({
         return next
       })
       setPreview(got)
-      setStep(got.payroll.length ? 'Payroll transactions' : 'Budget lines')
+      setStep(got.payroll.length ? 'Payroll transactions' : 'Maps to')
     })
   const toBudgetLines = () =>
     run(async () => {
@@ -338,7 +331,7 @@ export function ImportTransactionsModal({
           form({ columns, categories, lines: columns.category ? undefined : rowLines, payroll })
         )
       )
-      setStep('Budget lines')
+      setStep('Maps to')
     })
   const toPreview = () =>
     run(async () => {
@@ -566,7 +559,7 @@ export function ImportTransactionsModal({
         </PayrollConfirmation>
       )}
 
-      {step === 'Budget lines' && info && preview && (
+      {step === 'Maps to' && info && preview && (
         <div className="grid gap-4">
           {info.budgetOptions.length === 0 ? (
             <HandCard
@@ -637,13 +630,16 @@ export function ImportTransactionsModal({
                                   </button>
                                 ))}
                               </>
+                            ) : c.match && categories[c.value] === c.match ? (
+                              <small className="text-soft">
+                                {c.from === 'list'
+                                  ? '✓ Mapped on the workspace page'
+                                  : '✓ Matched by name'}
+                              </small>
                             ) : (
-                              c.match &&
-                              categories[c.value] === c.match && (
+                              c.value && (
                                 <small className="text-soft">
-                                  {c.from === 'list'
-                                    ? '✓ Mapped on the workspace page'
-                                    : '✓ Matched by name'}
+                                  Kept on your financial categories list when you import.
                                 </small>
                               )
                             )}
@@ -837,7 +833,7 @@ export function ImportTransactionsModal({
               </Field>
             )}
           </div>
-          <Actions onClose={onClose} busy={busy} onBack={() => setStep('Budget lines')}>
+          <Actions onClose={onClose} busy={busy} onBack={() => setStep('Maps to')}>
             <Button
               kind="navy"
               onClick={doImport}

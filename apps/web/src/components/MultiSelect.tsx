@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 
 export interface MultiOption {
   value: string
@@ -23,6 +23,14 @@ export function moved(active: number, delta: 1 | -1, count: number): number {
   if (count === 0) return -1
   if (active < 0) return delta === 1 ? 0 : count - 1
   return (active + delta + count) % count
+}
+
+/** Where the list opens: just under the trigger, as wide as it, over the page. */
+const spot = (el: HTMLElement | null): React.CSSProperties | undefined => {
+  const r = el?.getBoundingClientRect()
+  return r
+    ? { position: 'fixed', top: r.bottom + 4, left: r.left, width: r.width, right: 'auto' }
+    : undefined
 }
 
 /**
@@ -58,15 +66,16 @@ export function MultiSelect({
   const shown = matching(options, query)
   const words = (v: string) => options.find((o) => o.value === v)?.label ?? v
 
+  // Placed before the first paint, so it never shows in the dialog's flow for a frame.
+  useLayoutEffect(() => {
+    if (open) setAt(spot(trigger.current))
+  }, [open])
+  useEffect(() => {
+    if (open && at) search.current?.focus()
+  }, [open, at])
   useEffect(() => {
     if (!open) return
-    search.current?.focus()
-    const place = () => {
-      const r = trigger.current?.getBoundingClientRect()
-      if (r)
-        setAt({ position: 'fixed', top: r.bottom + 4, left: r.left, width: r.width, right: 'auto' })
-    }
-    place()
+    const place = () => setAt(spot(trigger.current))
     window.addEventListener('resize', place)
     window.addEventListener('scroll', place, true)
     const outside = (e: MouseEvent | TouchEvent) => {
@@ -139,7 +148,7 @@ export function MultiSelect({
           ▾
         </span>
       </button>
-      {open && (
+      {open && at && (
         <div className="ad-ms-pop" style={at}>
           <input
             ref={search}
