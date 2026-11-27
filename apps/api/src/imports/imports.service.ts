@@ -31,7 +31,7 @@ import {
 } from '@ad/types'
 import { payrollRowKind } from '../reports/report-lines'
 import { AliasesService, aliasDto } from '../aliases/aliases.service'
-import { resolveAlias, type AliasChoice, type AliasRow } from '../aliases/resolve'
+import { resolveAlias, writeFor, type AliasChoice, type AliasRow } from '../aliases/resolve'
 import { ChecksService } from '../checks/checks.service'
 import { dueDate } from '../checks/rules'
 import { AccessLogService } from '../core/access-log.service'
@@ -262,8 +262,12 @@ export class ImportsService {
     const req = (request ?? {}) as ImportRequest
     const reportId = typeof req.reportId === 'string' ? req.reportId : null
     if (reportId && !c.monthlyReports.some((m) => m.id === reportId)) throw new NotFoundException()
-    if (ready.length === 0 && updates.length === 0)
-      throw new BadRequestException('Nothing to import: every row is listed under Not imported')
+    // Every row left out (each one Unallowable, say) still keeps the person's new answers on the list for the next file.
+    if (ready.length === 0 && updates.length === 0) {
+      const list = await this.aliases.rows(c.workspaceId)
+      if (!choices.some((ch) => writeFor(ch, list)))
+        throw new BadRequestException('Nothing to import: every row is listed under Not imported')
+    }
     if (req.saveAs != null) await this.save(caller, c, req.saveAs, table, columns)
 
     // Never the file's name (it may name a person): the SHA-256 below identifies the file.
@@ -361,7 +365,9 @@ export class ImportsService {
               after: createHash('sha256').update(file.buffer).digest('hex'),
             },
           ],
-        })
+        }),
+        // A large file can teach the list many names, one write each: past Prisma's 5 seconds.
+        { timeout: 30_000 }
       )
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
@@ -672,6 +678,8 @@ export class ImportsService {
     if (found.status === 'unallowable') return { match: IMPORT_SKIP, from: 'list' }
     if (found.status === 'line')
       return { match: found.line.id, from: found.alias ? 'list' : 'name' }
+    // The list names a line this engagement doesn't have: asked about, as Month End Close does, never guessed by name.
+    if (found.status === 'no-line') return { match: null, from: null }
     const byName = matchItem(value, [...items.values()])
     return { match: byName, from: byName ? 'name' : null }
   }

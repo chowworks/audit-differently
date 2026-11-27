@@ -100,6 +100,13 @@ describe('the QuickBooks names list', () => {
       status: 'line',
       line: { id: 'b-pc' },
     })
+    // A choice for a path the part's entry already says writes nothing; another choice is this engagement's own.
+    expect(
+      writeFor({ name: path, engagementId: 'e-1', budgetLineName: 'Program Costs' }, LIST)
+    ).toBeNull()
+    expect(
+      writeFor({ name: path, engagementId: 'e-1', budgetLineName: 'Travel' }, LIST)
+    ).toMatchObject({ engagementId: 'e-1', name: path, budgetLineName: 'Travel' })
   })
 
   it('asks "is it the same as one of these?" with names missing from the file first', () => {
@@ -110,6 +117,12 @@ describe('the QuickBooks names list', () => {
     // A shared account number is the same account.
     expect(suggestAliases('60901 Rent', LIST)[0]?.name).toBe('60901 Rent Expense')
     expect(suggestAliases('Bank Fees', LIST)).toEqual([])
+    // An engagement's own name, with no workspace entry of it, is offered on that engagement only.
+    const own = [...LIST, row('Bank Service Charges', 'Program Costs', 'e-1')]
+    expect(suggestAliases('Bank Service Charge', own, [], 'e-1')[0]?.name).toBe(
+      'Bank Service Charges'
+    )
+    expect(suggestAliases('Bank Service Charge', own, [], 'e-2')).toEqual([])
   })
 
   it("makes the list from account mapping files: the first engagement's lines, the next one's differences", () => {

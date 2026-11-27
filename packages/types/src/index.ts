@@ -221,16 +221,28 @@ export function suggestAliases(
         (o) => o.engagementId === engagementId && aliasKey(o.name) === aliasKey(a.name)
       )) ||
     a
-  return aliases
-    .filter((a) => a.engagementId === null && aliasKey(a.name) !== key)
-    .map((a) => ({ a, like: aliasLikeness(name, a.name), missing: !seen.has(aliasKey(a.name)) }))
-    .filter((s) => s.like >= 0.25)
-    .sort((p, q) => Number(q.missing) - Number(p.missing) || q.like - p.like)
-    .slice(0, 3)
-    .map(({ a }) => {
-      const t = here(a)
-      return { name: a.name, budgetLineName: t.budgetLineName, unallowable: t.unallowable }
-    })
+  return (
+    aliases
+      // The workspace's names, and this engagement's own where the workspace has none of that name.
+      .filter(
+        (a) =>
+          aliasKey(a.name) !== key &&
+          (a.engagementId === null ||
+            (!!engagementId &&
+              a.engagementId === engagementId &&
+              !aliases.some(
+                (w) => w.engagementId === null && aliasKey(w.name) === aliasKey(a.name)
+              )))
+      )
+      .map((a) => ({ a, like: aliasLikeness(name, a.name), missing: !seen.has(aliasKey(a.name)) }))
+      .filter((s) => s.like >= 0.25)
+      .sort((p, q) => Number(q.missing) - Number(p.missing) || q.like - p.like)
+      .slice(0, 3)
+      .map(({ a }) => {
+        const t = here(a)
+        return { name: a.name, budgetLineName: t.budgetLineName, unallowable: t.unallowable }
+      })
+  )
 }
 
 /** What a file of the account mapping folder added to the list. */

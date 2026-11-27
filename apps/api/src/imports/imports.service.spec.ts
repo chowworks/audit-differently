@@ -126,7 +126,7 @@ function service(
     prisma.importMapping.create,
     prisma.importMapping.update,
   ]
-  return { s, prisma, checks, log, reports, writes }
+  return { s, prisma, checks, log, reports, writes, aliases }
 }
 
 beforeAll(() => {
@@ -530,13 +530,25 @@ describe('ImportsService', () => {
     ).rejects.toThrow(NotFoundException)
   })
 
-  it('imports nothing and logs nothing when no row is ready', async () => {
+  it('imports nothing and logs nothing when no row is ready and no answer is new', async () => {
     const { s, writes, log } = service([AUG_SUBMITTED, { ...SEP_DRAFT, status: 'submitted' }])
     await expect(
-      s.import(member('owner'), 'e-1', SAMPLE, request({ saveAs: 'QuickBooks mapping' }))
+      s.import(
+        member('owner'),
+        'e-1',
+        SAMPLE,
+        request({ categories: {}, saveAs: 'QuickBooks mapping' })
+      )
     ).rejects.toThrow(/Nothing to import/)
     for (const w of writes) expect(w).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
+  })
+
+  it('keeps new category answers on the list even when no row is ready', async () => {
+    const { s, aliases } = service([AUG_SUBMITTED, { ...SEP_DRAFT, status: 'submitted' }])
+    const result = await s.import(member('owner'), 'e-1', SAMPLE, request())
+    expect(result).toMatchObject({ imported: 0, months: [] })
+    expect(aliases.learn).toHaveBeenCalled()
   })
 
   it('saves the mapping by name on the workspace, with its own line', async () => {

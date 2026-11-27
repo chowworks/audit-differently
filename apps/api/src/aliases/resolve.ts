@@ -91,6 +91,17 @@ export function writeFor(choice: AliasChoice, aliases: AliasRow[]): AliasWrite |
     budgetLineName: choice.budgetLineName?.trim() || null,
     unallowable: choice.budgetLineName === null,
   }
+  // An account written with its parents that the list finds by its own part (as `resolveAlias` reads it): nothing when
+  // that entry says it already; otherwise this engagement's own entry of the whole name, never a workspace entry that
+  // would outrank other engagements' entries of the part.
+  const part = choice.name.includes(':') ? aliasKey(choice.name.split(':').pop()!) : ''
+  if (!own && !ws && part && part !== key) {
+    const found =
+      aliases.find((a) => a.engagementId === choice.engagementId && aliasKey(a.name) === part) ??
+      aliases.find((a) => a.engagementId === null && aliasKey(a.name) === part)
+    if (says(found)) return null
+    if (found) return { ...write, engagementId: choice.engagementId }
+  }
   if (!ws && !own && !write.unallowable) return { ...write, engagementId: null }
   return { ...write, engagementId: choice.engagementId }
 }

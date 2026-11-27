@@ -844,13 +844,17 @@ export function ImportTransactionsModal({
               onClick={doImport}
               disabled={
                 busy ||
-                (preview.rows.length === 0 && preview.updates.length === 0) ||
+                (preview.rows.length === 0 &&
+                  preview.updates.length === 0 &&
+                  !(columns.category && Object.keys(categories).length)) ||
                 (save && !saveAs.trim())
               }
             >
-              {preview.rows.length === 0
-                ? `Change ${preview.updates.length} ${preview.updates.length === 1 ? 'line' : 'lines'}`
-                : `Import ${preview.rows.length} ${preview.rows.length === 1 ? 'transaction' : 'transactions'}${preview.updates.length ? `, change ${preview.updates.length}` : ''}`}
+              {preview.rows.length === 0 && preview.updates.length === 0
+                ? 'Keep the category answers'
+                : preview.rows.length === 0
+                  ? `Change ${preview.updates.length} ${preview.updates.length === 1 ? 'line' : 'lines'}`
+                  : `Import ${preview.rows.length} ${preview.rows.length === 1 ? 'transaction' : 'transactions'}${preview.updates.length ? `, change ${preview.updates.length}` : ''}`}
             </Button>
           </Actions>
         </div>
@@ -865,7 +869,9 @@ export function ImportTransactionsModal({
             <h3>
               {result.imported} {result.imported === 1 ? 'transaction' : 'transactions'} imported
             </h3>
-            <p>into {result.months.map((m) => periodLabel(m.period)).join(', ')}</p>
+            {result.months.length > 0 && (
+              <p>into {result.months.map((m) => periodLabel(m.period)).join(', ')}</p>
+            )}
           </div>
           <div className="ad-done-tiles">
             <div className="ad-tile ad-tile-ok">

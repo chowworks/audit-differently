@@ -521,8 +521,14 @@
 /* Step 3, Review staff payroll (StaffReview.tsx). */
 /* On a phone the proof column takes the row's full width under what was paid, when and how much. */
 @media (max-width: 700px) {
+  /* Hidden from sight only: a screen reader still reads each cell's column. */
   .sr-grid thead {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .sr-grid tr[class^='sr-row-'] {
     display: grid;

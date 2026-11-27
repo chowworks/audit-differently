@@ -103,11 +103,13 @@ export function BudgetLineModal({
       )
     : []
   const warning = recheckWarning(c)
-  const taken = new Set(
-    c.budgetLines.filter((b) => b.id !== line?.id).map((b) => b.name.toLowerCase())
-  )
-  const suggestions = c.budgetNameSuggestions.filter((n) => !taken.has(n.toLowerCase()))
-  const nameTaken = taken.has(name.trim().toLowerCase())
+  // Two lines whose names differ only in case or punctuation can't both be on the budget (the financial categories list
+  // would not tell them apart).
+  const taken = new Set(c.budgetLines.filter((b) => b.id !== line?.id).map((b) => aliasKey(b.name)))
+  const suggestions = c.budgetNameSuggestions.filter((n) => !taken.has(aliasKey(n)))
+  const nameTaken = !!aliasKey(name) && taken.has(aliasKey(name))
+  // A rename waits for the list of what follows it, so Save never moves names the screen didn't show.
+  const renameWaits = renamed && (list.loading || !!list.error)
   // The name follows the report line until the person gives it one of its own.
   const pickLine = (next: ReportLine) => {
     const own = name.trim() && name.trim() !== (reportLine ? REPORT_LINE_LABELS[reportLine] : '')
@@ -136,7 +138,7 @@ export function BudgetLineModal({
     if (!line || !confirm(`Remove ${line.name} from the approved budget?`)) return
     void run(() => api.del<BudgetChange>(`${base}/${line.id}`))
   }
-  const ready = !busy && !!name.trim() && !!reportLine && !nameTaken
+  const ready = !busy && !!name.trim() && !!reportLine && !nameTaken && !renameWaits
   return (
     <Modal title={line ? `Edit ${line.name}` : 'Add a budget line'} onClose={onClose}>
       <ErrorNote message={error} />
@@ -172,10 +174,21 @@ export function BudgetLineModal({
           label="Name"
           required
           hint="The report line's own, unless the contract's budget names it differently"
-          error={nameTaken ? 'This engagement already has a line of that name' : null}
+          error={
+            nameTaken
+              ? 'This engagement already has a line of that name'
+              : renamed && list.error
+                ? "The financial categories that use this name couldn't be loaded, so it can't be renamed yet."
+                : null
+          }
         >
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
           <NameSuggestions names={suggestions} typed={name} onPick={setName} />
+          {renamed && list.error && (
+            <button type="button" className="wpd-linkbtn" onClick={() => void list.reload()}>
+              Try again
+            </button>
+          )}
         </Field>
         {following.length > 0 && (
           <div className="text-sm">
