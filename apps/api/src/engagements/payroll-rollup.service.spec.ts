@@ -3,7 +3,10 @@ import { member, stranger, W } from '../core/testing/callers'
 import { fakeLog } from '../core/testing/log'
 import { PayrollRollupService } from './payroll-rollup.service'
 
-/** Two fictional engagements: Adult IT holds staff pay on Staff Salaries; Youth Jobs on Personnel, with a closed month. */
+/**
+ * Two fictional engagements: Adult IT holds staff pay on Staff Salaries; Youth Jobs on Personnel, and participant pay
+ * on Work Experience, with participant payments from October; its August and October are closed, September submitted.
+ */
 const engagements = () => [
   {
     id: 'e-1',
@@ -12,7 +15,7 @@ const engagements = () => [
       { id: 'b-1', name: 'Staff Salaries', reportLine: 'staff-salaries', payroll: ['staff-pay'] },
       { id: 'b-2', name: 'Program Costs', reportLine: 'program-costs', payroll: [] },
     ],
-    monthlyReports: [] as { period: string; status: string }[],
+    monthlyReports: [] as { period: string; status: string; _count: { wexPayments: number } }[],
   },
   {
     id: 'e-2',
@@ -20,8 +23,14 @@ const engagements = () => [
     budgetLines: [
       { id: 'b-3', name: 'Personnel', reportLine: 'staff-salaries', payroll: ['staff-pay'] },
       { id: 'b-4', name: 'Staff Salaries', reportLine: 'program-costs', payroll: [] },
+      { id: 'b-5', name: 'Work Experience', reportLine: 'wex', payroll: ['participant-pay'] },
     ],
-    monthlyReports: [{ period: '2026-09', status: 'closed' }],
+    monthlyReports: [
+      { period: '2026-08', status: 'closed', _count: { wexPayments: 0 } },
+      { period: '2026-09', status: 'submitted', _count: { wexPayments: 0 } },
+      { period: '2026-10', status: 'closed', _count: { wexPayments: 3 } },
+      { period: '2026-11', status: 'draft', _count: { wexPayments: 2 } },
+    ],
   },
 ]
 
@@ -91,9 +100,10 @@ describe('PayrollRollupService', () => {
     )
   })
 
-  it('lists, before Save, each engagement whose line would change and the months it would put back to draft', async () => {
+  it('lists, before Save, each engagement whose line would change and only the months whose numbers change', async () => {
     const { s } = service()
-    // Dropping Youth Jobs' own entry: its Staff Salaries line takes staff pay; Adult IT is unchanged.
+    // Dropping Youth Jobs' own entry: its Staff Salaries line takes staff pay; Adult IT is unchanged. Staff pay on a
+    // closed or submitted month stays where it is, so no month goes back to draft.
     expect(
       await s.preview(member('owner'), W, 'staff-pay', { every: 'staff salaries', own: [] })
     ).toEqual({
@@ -103,7 +113,21 @@ describe('PayrollRollupService', () => {
           name: 'Youth Jobs',
           from: 'Personnel',
           to: 'Staff Salaries',
-          backToDraft: [{ period: '2026-09', was: 'closed' }],
+          backToDraft: [],
+        },
+      ],
+    })
+    // Participant pay off the budget: from October, the first month with participant payments, it counted there.
+    expect(
+      await s.preview(member('owner'), W, 'participant-pay', { every: null, own: [] })
+    ).toEqual({
+      changes: [
+        {
+          engagementId: 'e-2',
+          name: 'Youth Jobs',
+          from: 'Work Experience',
+          to: null,
+          backToDraft: [{ period: '2026-10', was: 'closed' }],
         },
       ],
     })

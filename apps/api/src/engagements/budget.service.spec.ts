@@ -184,10 +184,12 @@ function service(
       ),
     },
     monthlyReport: {
-      findMany: jest.fn(async (args: { where: { status?: { in: string[] } } }) =>
-        months
-          .filter((m) => !args.where.status || args.where.status.in.includes(m.status))
-          .map((m) => ({ id: m.id }))
+      findMany: jest.fn(
+        async (args: { where: { status?: { in: string[] }; period?: { gte: string } } }) =>
+          months
+            .filter((m) => !args.where.status || args.where.status.in.includes(m.status))
+            .filter((m) => !args.where.period || m.period >= args.where.period.gte)
+            .map((m) => ({ id: m.id }))
       ),
       // A copy, as Prisma reads a row.
       findFirst: jest.fn(async (args: { where: { id: string } }) => {
@@ -644,5 +646,40 @@ describe('BudgetService', () => {
     prisma.expense.updateMany.mockClear()
     await s.update(member('owner'), 'e-1', 'b-1', { amount: 2000 })
     expect(prisma.expense.updateMany).not.toHaveBeenCalled()
+  })
+
+  it("on the rollup's own save, reopens only the months a participant pay move changes, and none for staff pay", async () => {
+    const wex = {
+      ...travel(),
+      id: 'b-2',
+      name: 'Work Experience',
+      reportLine: 'wex',
+      payroll: ['participant-pay'],
+    }
+    const salaries = {
+      ...travel(),
+      id: 'b-3',
+      name: 'Salaries',
+      reportLine: 'staff-salaries',
+      payroll: [] as string[],
+    }
+    const list = [rollup('staff-pay', 'Travel'), rollup('participant-pay', null)]
+    const {
+      service: s,
+      prisma,
+      months,
+    } = service([{ ...travel(), payroll: ['staff-pay'] }, wex, salaries], mixed(), 0, [], list)
+    const c = { id: 'e-1', name: 'Coding Pathway', workspaceId: W }
+    // Participant payments from September: September (closed) and later go back; August (submitted) stays.
+    prisma.monthlyReport.findFirst.mockResolvedValueOnce({ period: '2026-09' } as never)
+    const r = await s.applyRollup(prisma as never, member('owner'), c, true)
+    expect(r.changed).toBe(true)
+    expect(r.backed.map((m) => m.period)).toEqual(['2026-09'])
+    expect(months.map((m) => m.status)).toEqual(['submitted', 'draft', 'draft'])
+    // Staff pay to Salaries: the lines change, no month reopens.
+    list[0] = rollup('staff-pay', 'Salaries')
+    const staff = await s.applyRollup(prisma as never, member('owner'), c, true)
+    expect(staff).toMatchObject({ changed: true, backed: [] })
+    expect(months[0]!.status).toBe('submitted')
   })
 })

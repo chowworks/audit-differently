@@ -90,6 +90,22 @@ function reportLineOf(given: unknown): ReportLine {
 }
 
 /**
+ * The first month of an engagement with participant payments, or null: participant pay counts on its line in that month
+ * and in every later month's spending to date, so those are the months a move of participant pay changes.
+ */
+export async function firstParticipantPay(
+  db: Pick<Prisma.TransactionClient, 'monthlyReport'>,
+  engagementId: string
+): Promise<string | null> {
+  const m = await db.monthlyReport.findFirst({
+    where: { engagementId, wexPayments: { some: {} } },
+    orderBy: { period: 'asc' },
+    select: { period: true },
+  })
+  return m?.period ?? null
+}
+
+/**
  * The approved budget of an engagement (step 4): its budget lines as the contract names them, each with the funder form
  * line it rolls up to, its approved amount and a note. Every expense is spent against one of them. Owners and bookkeepers add, change and remove lines; an auditor reads them
  * on the engagement page. The month checks compare spending with these lines, so every change runs them again.
@@ -254,8 +270,11 @@ export class BudgetService {
 
   /**
    * Every kind of payroll onto the line the payroll rollup says (#138), on `tx`: each line's ticks follow the list, and
-   * the books' payroll rows of a kind that moved follow its new line (only on draft months: `sendBack` first puts this
-   * engagement's closed and submitted months back to draft when a line changes; a budget change has done so already).
+   * the books' payroll rows of a kind that moved follow its new line, on draft months only (a locked month keeps its
+   * rows, and the match's lines keep theirs). With `sendBack` (the rollup's own save; a budget change has reopened every
+   * month already), only the months whose numbers change go back to draft (owner's decision, 2026-11-27): participant
+   * pay counts on the line that holds it as each month is read, so moving it reopens the locked months from the first
+   * one with participant payments (`participantPayReopens`); staff pay and taxes reopen nothing.
    */
   async applyRollup(
     tx: Prisma.TransactionClient,
@@ -297,6 +316,12 @@ export class BudgetService {
       want.get(holder.id)!.push(kind)
       if (!holder.payroll.includes(kind)) arrived.push({ lineId: holder.id, kind })
     }
+    const movedKinds = new Set<PayrollBudgetKind>()
+    for (const kind of PAYROLL_BUDGET_KINDS) {
+      const before = lines.find((l) => l.payroll.includes(kind))?.id ?? null
+      const after = [...want].find(([, kinds]) => kinds.includes(kind))?.[0] ?? null
+      if (before !== after) movedKinds.add(kind)
+    }
     const differs = lines.filter(
       (l) =>
         want.get(l.id)!.join() !== PAYROLL_BUDGET_KINDS.filter((k) => l.payroll.includes(k)).join()
@@ -305,7 +330,8 @@ export class BudgetService {
     if (!differs.length) return { changed: false, rows, backed: [] }
     for (const l of differs)
       await tx.budgetLine.update({ where: { id: l.id }, data: { payroll: want.get(l.id)! } })
-    const backed = sendBack ? await this.backToDraft(tx, caller, c) : []
+    const from = movedKinds.has('participant-pay') ? await firstParticipantPay(tx, c.id) : null
+    const backed = sendBack && from ? await this.backToDraft(tx, caller, c, from) : []
     for (const a of arrived) {
       const r = await this.moveBooksPayroll(tx, c.id, a.lineId, [a.kind])
       rows.moved += r.moved
@@ -416,10 +442,16 @@ export class BudgetService {
   private async backToDraft(
     tx: Prisma.TransactionClient,
     caller: Caller,
-    c: { id: string; name: string; workspaceId: string }
+    c: { id: string; name: string; workspaceId: string },
+    /** Only this month and later (the payroll rollup's own save). */
+    from?: string
   ): Promise<Sent> {
     const locked = await tx.monthlyReport.findMany({
-      where: { engagementId: c.id, status: { in: ['closed', 'submitted'] } },
+      where: {
+        engagementId: c.id,
+        status: { in: ['closed', 'submitted'] },
+        ...(from ? { period: { gte: from } } : {}),
+      },
       select: { id: true },
       orderBy: { period: 'asc' },
     })

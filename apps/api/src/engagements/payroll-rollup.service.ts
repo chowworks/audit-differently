@@ -22,11 +22,30 @@ import { BudgetService } from './budget.service'
 const NOWHERE = 'Not on the budget'
 
 /**
+ * The months a move of this kind puts back to draft (owner's decision, 2026-11-27): only those whose numbers change.
+ * Participant pay counts on its line as each month is read, in that month and in every later month's spending to date,
+ * so the locked months from the first with participant payments; staff pay and taxes, none (a locked month's rows and
+ * the match's lines stay where they are). As `BudgetService.applyRollup` does it.
+ */
+function reopens(
+  kind: PayrollBudgetKind,
+  months: { period: string; status: string; _count: { wexPayments: number } }[]
+): PayrollRollupPreviewDto['changes'][number]['backToDraft'] {
+  if (kind !== 'participant-pay') return []
+  const first = months.find((m) => m._count.wexPayments > 0)?.period
+  return first
+    ? months
+        .filter((m) => m.period >= first && (m.status === 'closed' || m.status === 'submitted'))
+        .map((m) => ({ period: m.period, was: m.status as 'closed' | 'submitted' }))
+    : []
+}
+
+/**
  * The payroll budget rollup (owner's decisions, 2026-11-27, #138): which budget line holds each kind of payroll from the
  * match, by the line's name, for the workspace, with an engagement's own entry. Kept on the QuickBooks names table as
  * the list 'payroll' (a row's name is the kind; Unallowable is "Not on the budget"). Saving a kind puts every
- * engagement's lines in step at once (`BudgetService.applyRollup`), so an engagement whose line changes has its closed
- * and submitted months put back to draft: the screen lists them first (`preview`). Owners and bookkeepers, as the
+ * engagement's lines in step at once (`BudgetService.applyRollup`), so an engagement whose line changes has the closed and
+ * submitted months whose numbers change put back to draft: the screen lists them first (`preview`). Owners and bookkeepers, as the
  * budget.
  */
 @Injectable()
@@ -63,9 +82,8 @@ export class PayrollRollupService {
             select: { id: true, name: true, reportLine: true, payroll: true },
           },
           monthlyReports: {
-            where: { status: { in: ['closed', 'submitted'] } },
             orderBy: { period: 'asc' },
-            select: { period: true, status: true },
+            select: { period: true, status: true, _count: { select: { wexPayments: true } } },
           },
         },
       }),
@@ -168,10 +186,7 @@ export class PayrollRollupService {
           name: e.name,
           from,
           to,
-          backToDraft: e.monthlyReports.map((m) => ({
-            period: m.period,
-            was: m.status as 'closed' | 'submitted',
-          })),
+          backToDraft: reopens(kind, e.monthlyReports),
         },
       ]
     })
