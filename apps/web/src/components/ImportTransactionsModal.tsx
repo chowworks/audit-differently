@@ -596,7 +596,7 @@ export function ImportTransactionsModal({
                               categories[c.value] ?? '',
                               (v) => setCategories({ ...categories, [c.value]: v }),
                               `Budget line for ${c.value || 'blank rows'}`,
-                              'Unallowable (not imported)'
+                              'Unallowable (not imported, not included in reports/budget)'
                             )}
                             {!categories[c.value] ? (
                               <>

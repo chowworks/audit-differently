@@ -23,7 +23,7 @@ describe('namesFileOf', () => {
   it("reads the sample's own headings", () => {
     expect(
       namesFileOf([
-        ['Financial category', 'Maps to budget category', 'Applies to'],
+        ['Financial category', 'Maps to', 'Applies to'],
         ['Travel', 'Travel', ''],
       ])
     ).toEqual([{ name: 'Travel', goesTo: 'Travel', engagement: null }])

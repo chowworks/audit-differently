@@ -13,15 +13,16 @@ import { Button, Card, ErrorNote, Field, Modal, inputClass } from '@/components/
 
 /** Bulk Add Names' sample: a heading row, then one program a row. Fictional rows, meant to be replaced. */
 const PROGRAM_SAMPLE = [
-  'Books class,Payroll project,Other name',
+  'Payroll Project Names,,',
   'Youth Works,YW-2026,Summer Youth Works',
   'Adult Pathways,AP Training,',
 ].join('\r\n')
 
 const PROGRAM_COLUMNS: [string, string][] = [
-  ['Books class', 'the program as your books name it (a class)'],
-  ['Payroll project', 'the program as your payroll company names it (a project or job)'],
-  ['Other name', 'optional: any other name it goes by; add columns for more'],
+  [
+    'Payroll Project Names',
+    'every name one program goes by, one per column: in your books and in your payroll files',
+  ],
 ]
 
 /**
@@ -118,7 +119,7 @@ export function ProgramNamesCard({
           <table className="ad-table">
             <thead>
               <tr>
-                <th>Names</th>
+                <th>Payroll Project Names</th>
                 <th>Engagement</th>
                 {canManage && <th aria-label="Remove" />}
               </tr>

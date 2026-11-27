@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { HandCard } from '@/components/HandCard'
-import { Button, ErrorNote, Modal } from '@/components/ui'
+import { Button, ErrorNote, Field, Modal } from '@/components/ui'
 
 /**
  * Bulk Add Names (owner's decision, 2026-11-27): a file is never chosen from a bare button. The dialog says what the
  * file holds in the navy how-to card the payroll match's upload uses (steps, then the columns and the sample in its pill;
- * fictional rows, meant to be replaced), each column explained under it, and only then the file picker. It closes when
+ * fictional rows, meant to be replaced), each column explained under it, then the file field and Add names. It closes when
  * the file is read; a refusal stays at its top.
  */
 export function BulkAddModal({
@@ -31,7 +31,8 @@ export function BulkAddModal({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const choose = async (file: File | undefined) => {
+  const [file, setFile] = useState<File | null>(null)
+  const add = async () => {
     if (!file) return
     setBusy(true)
     setError(null)
@@ -52,7 +53,7 @@ export function BulkAddModal({
             Download the sample and fill it in, one row each. Its rows are made up: replace them.
           </li>
           <li>Save it as .csv or .xlsx.</li>
-          <li>Choose it below. The file is read and never kept.</li>
+          <li>Select it below, then press Add names. The file is read and never kept.</li>
         </ol>
         {note && <p>{note}</p>}
         <p className="ad-hand-address">
@@ -73,25 +74,22 @@ export function BulkAddModal({
           </li>
         ))}
       </ul>
-      <div className="flex justify-end gap-2">
+      <Field label="Select file to upload" hint=".csv or .xlsx, read and never kept">
+        <input
+          type="file"
+          accept=".csv,.xlsx"
+          className="block w-full text-sm"
+          disabled={busy}
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+      </Field>
+      <div className="mt-4 flex justify-end gap-2">
         <Button kind="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <label
-          className={`ad-btn ad-btn-navy cursor-pointer focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 ${busy ? 'opacity-60' : ''}`}
-        >
-          {busy ? 'Reading the file…' : 'Choose your file'}
-          <input
-            type="file"
-            accept=".xlsx,.csv"
-            className="sr-only"
-            disabled={busy}
-            onChange={(e) => {
-              void choose(e.target.files?.[0])
-              e.target.value = ''
-            }}
-          />
-        </label>
+        <Button kind="navy" onClick={() => void add()} disabled={!file || busy}>
+          {busy ? 'Adding…' : 'Add names'}
+        </Button>
       </div>
     </Modal>
   )

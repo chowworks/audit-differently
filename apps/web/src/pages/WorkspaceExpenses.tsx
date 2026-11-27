@@ -849,7 +849,7 @@ function UnmappedNames({
                             </option>
                           ))}
                         </optgroup>
-                        <option value={SKIP}>Unallowable (no proof, in no total)</option>
+                        <option value={SKIP}>Unallowable (not included in reports/budget)</option>
                       </select>
                     ) : (
                       'Not mapped'

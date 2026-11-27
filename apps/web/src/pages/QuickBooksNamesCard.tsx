@@ -17,7 +17,7 @@ const UNALLOWABLE = '__unallowable__'
 
 /** Bulk Add Names' sample (the headings `names-file.ts` reads): fictional rows, meant to be replaced. */
 const NAMES_SAMPLE = [
-  'Financial category,Maps to budget category,Applies to',
+  'Financial category,Maps to,Applies to',
   '61200 Program Supplies,Program Costs,',
   'Staff Payroll,Staff Salaries,',
   'Entertainment,Unallowable,',
@@ -29,7 +29,7 @@ const NAMES_COLUMNS: [string, string][] = [
     'Financial category',
     'exactly what your financial system calls it (QuickBooks, FreshBooks, etc.), such as "60901 Rent Expense"',
   ],
-  ['Maps to budget category', 'one of your budget categories, by its name, or Unallowable'],
+  ['Maps to', 'one of your budget categories, by its name, or Unallowable'],
   [
     'Applies to',
     "optional: an engagement's name, when only that engagement maps it there; blank for every engagement",
@@ -129,8 +129,7 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
       <p className="mb-3 text-sm text-soft">
         Each financial category, written exactly as your financial system writes it, and the budget
         category it maps to. Import transactions and Month End Close both read this list. An
-        engagement can send a name somewhere else, or mark it Unallowable there. An account mapping
-        spreadsheet adds its accounts here and is not kept.
+        engagement can map a category somewhere else, or mark it Unallowable there.
       </p>
       <ErrorNote message={error ?? loadError} />
       {done && (
@@ -384,7 +383,9 @@ function AliasModal({
                 {n}
               </option>
             ))}
-            <option value={UNALLOWABLE}>Unallowable (not imported, no proof, in no total)</option>
+            <option value={UNALLOWABLE}>
+              Unallowable (not imported, not included in reports/budget)
+            </option>
           </select>
         </Field>
         <Field label="Applies to">
