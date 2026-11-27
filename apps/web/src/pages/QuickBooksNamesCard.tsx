@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   aliasKey,
   type LineAliasDto,
@@ -166,8 +167,16 @@ export function QuickBooksNamesCard({ workspaceId }: { workspaceId: string }) {
     setDone(`${parts.join(', ')}${out.engagementName ? `, for ${out.engagementName}` : ''}.`)
   }
 
+  // Opened from Review expenses (#financial-categories): brought into view once the list is read.
+  const { hash } = useLocation()
+  useEffect(() => {
+    if (data && hash === '#financial-categories')
+      document.getElementById('financial-categories')?.scrollIntoView({ block: 'start' })
+  }, [data, hash])
+
   return (
     <Card
+      id="financial-categories"
       title="Map Financial Categories"
       aside={
         <div className="flex flex-wrap items-center gap-2">

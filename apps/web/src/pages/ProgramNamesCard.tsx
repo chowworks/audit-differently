@@ -89,6 +89,7 @@ export function ProgramNamesCard({
   }, [data, hash])
   return (
     <Card
+      id="program-names"
       title="Map Payroll Programs"
       aside={
         canManage && (

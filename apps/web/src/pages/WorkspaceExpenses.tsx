@@ -1,4 +1,5 @@
 import { StaffReview } from '@/components/payroll-match/StaffReview'
+import { Link } from 'react-router-dom'
 import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react'
 import type {
   BooksBillDto,
@@ -50,7 +51,7 @@ const PLAIN_REASON: Partial<Record<BooksLineStatus, string>> = {
   'allocation-pool': 'Allocation entries: their shares are the lines billed',
   'not-ours': 'Other programs: their class has no engagement here',
   unmapped: 'Not mapped to a budget category yet',
-  unallowable: 'Unallowable: no proof, in no total',
+  unallowable: 'Unallowable: not imported, not included in reports/budget',
   'no-budget-line': "The list's budget line is not on the engagement",
   'payroll-account': 'Payroll: done in Payroll matching',
   credit: 'Refunds and credits: never billed',
@@ -401,7 +402,13 @@ export function WorkspaceExpenses({
               ))}
             </div>
           )}
-          <UnmappedNames d={d} can={can} busy={!!busy} onChoose={chooseLine} />
+          <UnmappedNames
+            workspaceId={workspaceId}
+            d={d}
+            can={can}
+            busy={!!busy}
+            onChoose={chooseLine}
+          />
         </div>
       </MatchPanel>
 
@@ -748,11 +755,13 @@ function PaymentOfBill({
  * QuickBooks), then the engagement's budget lines, then Unallowable. The choice is kept on the list.
  */
 function UnmappedNames({
+  workspaceId,
   d,
   can,
   busy,
   onChoose,
 }: {
+  workspaceId: string
   d: WorkspaceExpensesDto
   can: boolean
   busy: boolean
@@ -785,8 +794,9 @@ function UnmappedNames({
   if (asks.size === 0)
     return (
       <p className="text-sm text-soft">
-        Every account in the books goes to a budget line or is Unallowable, by Map Financial
-        Category to Budget Category on the workspace page.
+        Every account in the books goes to a budget line or is Unallowable, by{' '}
+        <Link to={`/workspaces/${workspaceId}#financial-categories`}>Map Financial Categories</Link>{' '}
+        on the workspace page.
       </p>
     )
   return (
