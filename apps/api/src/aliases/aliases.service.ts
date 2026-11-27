@@ -46,6 +46,9 @@ export const aliasDto = (a: AliasRow): LineAliasDto => ({
  * goes to, for Import transactions and Month End Close alike. Owners and bookkeepers keep it on the workspace page, a
  * choice made on either screen adds to it, and the account mapping folder's files fill it.
  */
+/** The writes a merge or an import keeps until `flush`, by engagement and name. */
+type Plan = Map<string, { id?: string; w: AliasWrite }>
+
 @Injectable()
 export class AliasesService {
   constructor(
@@ -380,6 +383,7 @@ export class AliasesService {
     choices: AliasChoice[]
   ): Promise<number> {
     const rows = await this.rows(workspaceId, tx)
+    const plan: Plan = new Map()
     let n = 0
     for (const c of choices) {
       // A name with nothing to compare is never kept; a full list keeps no more, and never stops an import.
@@ -387,9 +391,10 @@ export class AliasesService {
       const w = writeFor(c, rows)
       if (!w) continue
       if (rows.length >= MAX_LINE_ALIASES && !this.has(rows, w)) continue
-      this.keep(rows, await this.put(tx, caller, workspaceId, w))
+      this.stage(rows, plan, w)
       n++
     }
+    await this.flush(tx, caller, workspaceId, plan)
     return n
   }
 
@@ -411,6 +416,47 @@ export class AliasesService {
     }
     if (at >= 0) rows[at] = kept
     else rows.push(kept)
+  }
+
+  /**
+   * A write kept in memory (the list in hand already says it), sent by `flush`: a long merge or a first big import
+   * costs one insert for every new name and an update for each changed one, never three queries a name.
+   */
+  private stage(rows: AliasRow[], plan: Plan, w: AliasWrite) {
+    const k = `${w.engagementId ?? '*'}|${aliasKey(w.name)}`
+    const at = rows.find(
+      (r) => r.engagementId === w.engagementId && aliasKey(r.name) === aliasKey(w.name)
+    )
+    const id = at && !at.id.startsWith('new:') ? at.id : undefined
+    plan.set(k, { id, w })
+    this.keep(rows, { id: at?.id ?? `new:${k}`, ...w })
+  }
+
+  private async flush(
+    tx: Prisma.TransactionClient,
+    caller: Caller,
+    workspaceId: string,
+    plan: Plan
+  ) {
+    const changedAt = new Date()
+    const data = (w: AliasWrite) => ({
+      name: w.name,
+      key: aliasKey(w.name),
+      engagementId: w.engagementId,
+      budgetLineName: w.budgetLineName,
+      unallowable: w.unallowable,
+      changedById: caller.userId,
+      changedAt,
+    })
+    const fresh = [...plan.values()].filter((p) => !p.id)
+    // A name someone else added a moment ago is theirs: skipped here, never a failed save.
+    if (fresh.length)
+      await tx.lineAlias.createMany({
+        data: fresh.map((p) => ({ ...data(p.w), workspaceId, list: 'quickbooks' })),
+        skipDuplicates: true,
+      })
+    for (const p of plan.values())
+      if (p.id) await tx.lineAlias.update({ where: { id: p.id }, data: data(p.w) })
   }
 
   /** A choice made on Month End Close's expenses: one name on one engagement. */
@@ -501,6 +547,7 @@ export class AliasesService {
       caller,
       async (tx) => {
         const rows = await this.rows(workspaceId, tx)
+        const plan: Plan = new Map()
         for (const { name, budgetLineName: target } of entries) {
           // A blank name, or one longer than the list keeps (200 characters), is skipped, never a refused file.
           if (!aliasKey(name) || name.length > 200) {
@@ -529,9 +576,10 @@ export class AliasesService {
             skipped++
             continue
           }
-          this.keep(rows, await this.put(tx, caller, workspaceId, w))
+          this.stage(rows, plan, w)
           added++
         }
+        await this.flush(tx, caller, workspaceId, plan)
       },
       () => ({
         workspaceId,
@@ -590,6 +638,7 @@ export class AliasesService {
       caller,
       async (tx) => {
         const rows = await this.rows(workspaceId, tx)
+        const plan: Plan = new Map()
         for (const r of listed) {
           const e = r.engagement ? engagementOf(r.engagement) : null
           const line =
@@ -624,9 +673,10 @@ export class AliasesService {
             skipped++
             continue
           }
-          this.keep(rows, await this.put(tx, caller, workspaceId, w))
+          this.stage(rows, plan, w)
           added++
         }
+        await this.flush(tx, caller, workspaceId, plan)
       },
       () => ({
         workspaceId,
