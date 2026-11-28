@@ -134,17 +134,17 @@ export const payrollRowKey = (kind: PayrollBudgetKind, lineName?: string | null)
   lineName ? `${kind}|${lineKey(lineName)}` : kind
 
 /**
- * Where an engagement's kind of payroll lands, and why (owner's decisions, 2026-11-27):
+ * Where an engagement's kind of payroll lands, and why (owner's decisions, 2026-11-27; only the list decides, nothing
+ * fixed in code, 2026-11-28):
  * - `own`: the engagement's own entry (its line, or none for Not linked to a Budget Line Item);
  * - `nowhere`: the workspace says Not linked to a Budget Line Item;
  * - `list`: exactly one of its lines has a listed name;
- * - `report-line`: none has, and exactly one of its lines is on the kind's report line (as a new line took it before);
- * - `unclear`: two listed names, or no listed name and no single line on the report line. It lands on no line until
+ * - `unclear`: two listed names, or none. It lands on no line until
  *   someone chooses one of `choices` (an engagement entry), and its months can't be closed or submitted meanwhile.
  */
 export interface PayrollPlace<L> {
   line: L | null
-  by: 'own' | 'nowhere' | 'list' | 'report-line' | 'unclear'
+  by: 'own' | 'nowhere' | 'list' | 'unclear'
   /** For `unclear`: the lines it could be (none: no line looks like it). */
   choices: L[]
 }
@@ -169,11 +169,6 @@ export function payrollPlace<L extends { name: string; reportLine: string }>(
   const hits = lines.filter((l) => listed.has(lineKey(l.name)))
   if (hits.length === 1) return { line: hits[0]!, by: 'list', choices: [] }
   if (hits.length > 1) return { line: null, by: 'unclear', choices: hits }
-  for (const want of PAYROLL_BUDGET_DEFAULTS[kind]) {
-    const on = lines.filter((l) => l.reportLine === want)
-    if (on.length === 1) return { line: on[0]!, by: 'report-line', choices: [] }
-    if (on.length > 1) return { line: null, by: 'unclear', choices: on }
-  }
   return { line: null, by: 'unclear', choices: lines }
 }
 

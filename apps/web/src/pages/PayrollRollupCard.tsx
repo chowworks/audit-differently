@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
-  PAYROLL_BUDGET_DEFAULTS,
   PAYROLL_BUDGET_KINDS,
   PAYROLL_BUDGET_KIND_LABELS,
-  REPORT_LINE_LABELS,
   lineKey,
   payrollPlace,
   type PayrollBudgetKind,
@@ -24,9 +22,8 @@ const NONE = '__none__'
 
 const nameOr = (n: string | null) => n ?? NOWHERE
 
-/** Where a kind goes when the workspace has no row for it: each engagement's line of its report line. */
-const byReportLine = (k: PayrollBudgetKind) =>
-  `Each engagement's ${REPORT_LINE_LABELS[PAYROLL_BUDGET_DEFAULTS[k][0]!]} line`
+/** A kind the workspace has no row for: no line until each engagement is given one. */
+const NOT_SET = 'Not set yet: each engagement is asked to choose'
 
 /** "could go to A or B", or "has no budget line it fits". */
 const unclearWords = (choices: string[]) =>
@@ -212,7 +209,7 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
                     ) : r.names.length ? (
                       r.names.join(', ')
                     ) : (
-                      <span className="text-soft">{byReportLine(r.kind)}</span>
+                      <span className="text-soft">{NOT_SET}</span>
                     )}
                   </td>
                   <td>{appliesTo(r)}</td>
@@ -604,11 +601,9 @@ function RowModal({
               {label.toLowerCase()} on this row.
             </p>
             <p className="text-soft">
-              {row!.every
-                ? `${lost.length === 1 ? 'It then uses its' : 'They then use their'} ${REPORT_LINE_LABELS[PAYROLL_BUDGET_DEFAULTS[kind][0]!]} line, unless ${lost.length === 1 ? 'it gets a row' : 'they get rows'} of ${lost.length === 1 ? 'its' : 'their'} own.`
-                : of.some((e) => e.engagementId === null)
-                  ? `${lost.length === 1 ? 'It goes' : 'They go'} back to the every-engagement row.`
-                  : `${lost.length === 1 ? 'It then uses its' : 'They then use their'} ${REPORT_LINE_LABELS[PAYROLL_BUDGET_DEFAULTS[kind][0]!]} line.`}
+              {of.some((e) => e.engagementId === null) && !row!.every
+                ? `${lost.length === 1 ? 'It goes' : 'They go'} back to the every-engagement row.`
+                : `${lost.length === 1 ? 'It then has' : 'They then have'} no line until someone chooses one.`}
             </p>
           </div>
         )}
@@ -675,7 +670,7 @@ function RemoveModal({
         </p>
         <p>
           {row.every
-            ? `Each engagement without a row of its own then uses its ${REPORT_LINE_LABELS[PAYROLL_BUDGET_DEFAULTS[row.kind][0]!]} line.`
+            ? 'Each engagement without a row of its own then has no line until someone chooses one.'
             : 'They go back to the every-engagement row.'}{' '}
           The removal is recorded in the workspace history.
         </p>

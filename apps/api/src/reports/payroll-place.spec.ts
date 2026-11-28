@@ -23,18 +23,22 @@ describe('payrollPlace', () => {
       'Staff Salaries',
       [],
     ])
-    expect(
-      payrollPlace('participant-pay', 'e-1', [ws('participant-pay', 'Work Experience')], lines).by
-    ).toBe('report-line')
   })
 
-  it('is unclear with two listed names, or two lines on its report line, and on no line meanwhile', () => {
+  it("never guesses from a line's report line: a name the list doesn't hold is undecided", () => {
+    // Work-Experience is on the work experience report line, but the list says Work Experience.
+    expect(
+      payrollPlace('participant-pay', 'e-1', [ws('participant-pay', 'Work Experience')], lines).by
+    ).toBe('unclear')
+  })
+
+  it('is unclear with two listed names, or none, and on no line meanwhile', () => {
     expect(at([ws('staff-pay', 'Staff Salaries'), ws('staff-pay', 'Personnel')])).toEqual([
       'unclear',
       null,
       ['Staff Salaries', 'Personnel'],
     ])
-    expect(at([])).toEqual(['unclear', null, ['Staff Salaries', 'Personnel']])
+    expect(at([])).toEqual(['unclear', null, ['Staff Salaries', 'Personnel', 'Work-Experience']])
   })
 
   it("lets the engagement's own entry win, and the workspace's Not on the budget win over a name", () => {

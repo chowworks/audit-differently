@@ -92,8 +92,8 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   Items, laid out and edited row by row as Map Financial Categories, with Applies to), each payroll category to a list of budget line NAMES (no order: any of them) or "Not linked to a Budget Line Item", for the
   workspace, with an engagement's own line, which wins (`LineAlias`, list 'payroll'; migration `20261128000100` copied
   the old ticks once, so every engagement's pay stayed where it was). Lookup is `payrollPlace` in `packages/types`: own
-  line; the one listed name the engagement has; else its one line on the kind's report line; else **unclear** (two
-  names, or nothing fits): that pay counts on no line until someone chooses, and someone must: the mapping dialog's
+  line; the one listed name the engagement has; else **unclear** (two names, or none; nothing is guessed from a
+  line's report line or fixed in code, owner's decision, 2026-11-28): that pay counts on no line until someone chooses, and someone must: the mapping dialog's
   Save waits for a choice, kept as the engagement's own line, and a blocking month check (`payroll-line-unclear`)
   catches the rest (a budget line change or upload is saved and never asks; owner's decision, 2026-11-27). A change to a line never moves its payroll by itself.
   `BudgetLine.payroll` (migration `20261020000100`) is written only from it (`BudgetService.applyRollup`) and every

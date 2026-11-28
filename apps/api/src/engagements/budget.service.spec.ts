@@ -571,7 +571,7 @@ describe('BudgetService', () => {
     ).rejects.toThrow('Choose payroll this line can hold')
   })
 
-  it("gives a new line the payroll the workspace list names it for, and its report line's with no entry", async () => {
+  it('gives a new line the payroll the workspace list names it for, and nothing by its report line', async () => {
     const { service: s, prisma } = service(
       [travel()],
       drafts(),
@@ -580,10 +580,10 @@ describe('BudgetService', () => {
       [rollup('staff-pay', 'Salaries')]
     )
     await s.add(member('owner'), 'e-1', { name: 'salaries', reportLine: 'staff-fringe' })
-    // Staff pay by its name (case aside); staff taxes by its report line, as the workspace has no entry for them.
+    // Staff pay by its name (case aside); staff taxes not at all, though it is on their report line: no entry names it.
     expect(prisma.budgetLine.update).toHaveBeenCalledWith({
       where: { id: 'b-new' },
-      data: { payroll: ['staff-pay', 'staff-taxes'] },
+      data: { payroll: ['staff-pay'] },
     })
   })
 
