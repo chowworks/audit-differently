@@ -91,14 +91,29 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
               <tr>
                 <th>Payroll Category</th>
                 <th>Maps to Budget Line Item</th>
-                <th>Engagements with their own line</th>
+                <th>Applies to</th>
                 <th aria-label="Edit" />
               </tr>
             </thead>
             <tbody>
-              {PAYROLL_BUDGET_KINDS.map((k) => {
+              {PAYROLL_BUDGET_KINDS.flatMap((k) => {
                 const ws = every(k)
-                return (
+                const mine = own(k)
+                // As Map Financial Categories: the every-engagement row, then one row per line that engagements of
+                // their own map to, with Applies to naming them.
+                const targets = [...new Set(mine.map((o) => o.budgetLineName ?? NONE))]
+                const edit = (
+                  <Button
+                    kind="navy"
+                    size="sm"
+                    onClick={() => setEditing(k)}
+                    aria-label={`Edit ${PAYROLL_BUDGET_KIND_LABELS[k]}`}
+                  >
+                    Edit
+                  </Button>
+                )
+                const names = (ids: string[]) => ids.map(nameOf).sort().join(', ')
+                return [
                   <tr key={k}>
                     <td>{PAYROLL_BUDGET_KIND_LABELS[k]}</td>
                     <td>
@@ -111,22 +126,32 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
                       )}
                     </td>
                     <td>
-                      {own(k)
-                        .map((o) => `${nameOf(o.engagementId!)}: ${nameOr(o.budgetLineName)}`)
-                        .join(', ') || <span className="text-soft">None</span>}
+                      Every engagement
+                      {mine.length ? ` except ${names(mine.map((o) => o.engagementId!))}` : ''}
                     </td>
-                    <td className="text-right">
-                      <Button
-                        kind="navy"
-                        size="sm"
-                        onClick={() => setEditing(k)}
-                        aria-label={`Edit ${PAYROLL_BUDGET_KIND_LABELS[k]}`}
-                      >
-                        Edit
-                      </Button>
-                    </td>
-                  </tr>
-                )
+                    <td className="text-right">{edit}</td>
+                  </tr>,
+                  ...targets.map((to) => (
+                    <tr key={`${k}-${to}`}>
+                      <td>{PAYROLL_BUDGET_KIND_LABELS[k]}</td>
+                      <td>
+                        {to === NONE ? (
+                          <span className="ad-chip ad-chip-muted">{NOWHERE}</span>
+                        ) : (
+                          to
+                        )}
+                      </td>
+                      <td>
+                        {names(
+                          mine
+                            .filter((o) => (o.budgetLineName ?? NONE) === to)
+                            .map((o) => o.engagementId!)
+                        )}
+                      </td>
+                      <td className="text-right">{edit}</td>
+                    </tr>
+                  )),
+                ]
               })}
             </tbody>
           </table>
