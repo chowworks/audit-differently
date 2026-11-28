@@ -52,6 +52,7 @@ function service(
       createMany: jest.fn(async () => ({ count: 1 })),
     },
     engagement: { findMany: jest.fn(async () => engagements()) },
+    $queryRaw: jest.fn(async () => [{ locked: 1 }]),
   }
   const budget = {
     applyRollup: jest.fn(async (_tx: unknown, _c: unknown, e: { id: string }) =>
@@ -184,6 +185,40 @@ describe('PayrollRollupService', () => {
     }
     expect((await s.preview(member('owner'), W, 'staff-pay', own)).unclear).toEqual([])
     await expect(s.save(member('owner'), W, 'staff-pay', own)).resolves.toBeDefined()
+  })
+
+  it("keeps another engagement's own entry whose line has gone, so this row can still be saved", async () => {
+    const { s, prisma } = service([
+      {
+        name: 'staff-pay',
+        engagementId: null,
+        budgetLineName: 'Staff Salaries',
+        unallowable: false,
+      },
+      {
+        name: 'staff-pay',
+        engagementId: 'e-2',
+        budgetLineName: 'Removed Line',
+        unallowable: false,
+      },
+    ])
+    await s.save(member('owner'), W, 'staff-pay', {
+      every: ['Staff Salaries'],
+      own: [{ engagementId: 'e-2', budgetLineName: 'Removed Line' }],
+    })
+    expect(prisma.$queryRaw).toHaveBeenCalled()
+    expect(prisma.lineAlias.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ engagementId: 'e-2', budgetLineName: 'Removed Line' }),
+      ]),
+    })
+    // A line that never was there is still refused.
+    await expect(
+      s.save(member('owner'), W, 'staff-pay', {
+        every: ['Staff Salaries'],
+        own: [{ engagementId: 'e-1', budgetLineName: 'Removed Line' }],
+      })
+    ).rejects.toThrow('Adult IT has no budget line named Removed Line')
   })
 
   it("saves the kind's entries as a whole, puts every engagement in step, and logs it in the screen's words", async () => {

@@ -132,7 +132,8 @@ export class PayrollRollupService {
   private clean(
     kind: string,
     given: unknown,
-    engagements: { id: string; name: string; budgetLines: { name: string }[] }[]
+    engagements: { id: string; name: string; budgetLines: { name: string }[] }[],
+    stored: PayrollRollupEntry[] = []
   ): { kind: PayrollBudgetKind; input: PayrollRollupInput } {
     if (!(PAYROLL_BUDGET_KINDS as readonly string[]).includes(kind)) throw new NotFoundException()
     const g = (given && typeof given === 'object' ? given : {}) as Partial<PayrollRollupInput>
@@ -169,7 +170,19 @@ export class PayrollRollupService {
       }
       seen.add(e.id)
       const line = lineOf(o.budgetLineName ?? null, [e])
-      if (line === undefined)
+      // An engagement's own entry kept as it is stays, even when its line has gone since (it is unclear, and the card
+      // asks about it): saving another row of the kind must not fail on it.
+      const kept = stored.find(
+        (x) =>
+          x.kind === kind &&
+          x.engagementId === e.id &&
+          x.budgetLineName !== null &&
+          typeof o.budgetLineName === 'string' &&
+          lineKey(x.budgetLineName) === lineKey(o.budgetLineName)
+      )
+      if (line === undefined && kept)
+        own.push({ engagementId: e.id, budgetLineName: kept.budgetLineName })
+      else if (line === undefined)
         problems.push(`${e.name} has no budget line named ${String(o.budgetLineName)}`)
       else own.push({ engagementId: e.id, budgetLineName: line })
     }
@@ -251,7 +264,7 @@ export class PayrollRollupService {
   ): Promise<PayrollRollupPreviewDto> {
     this.keeper(caller, workspaceId)
     const read = await this.read(workspaceId)
-    const c = this.clean(kind, given, read.engagements)
+    const c = this.clean(kind, given, read.engagements, read.entries)
     return {
       changes: this.changes(read, c.kind, c.input),
       unclear: this.unclear(read, c.kind, c.input),
@@ -271,7 +284,7 @@ export class PayrollRollupService {
   ): Promise<PayrollRollupSaved> {
     this.keeper(caller, workspaceId)
     const read = await this.read(workspaceId)
-    const { kind: k, input } = this.clean(kind, given, read.engagements)
+    const { kind: k, input } = this.clean(kind, given, read.engagements, read.entries)
     const unclear = this.unclear(read, k, input)
     if (unclear.length)
       throw new BadRequestException(
@@ -291,6 +304,9 @@ export class PayrollRollupService {
       await this.log.change(
         caller,
         async (tx) => {
+          // One save of a category at a time per workspace: two at once would each delete nothing and insert their own
+          // names, keeping both (review, 2026-11-28).
+          await tx.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext(${`payroll-rollup:${workspaceId}:${k}`}))`
           await tx.lineAlias.deleteMany({ where: { workspaceId, list: 'payroll', name: k } })
           const row = (engagementId: string | null, budgetLineName: string | null) => ({
             workspaceId,

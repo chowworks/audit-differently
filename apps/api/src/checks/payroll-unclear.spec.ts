@@ -37,7 +37,7 @@ describe('payrollUnclearOf', () => {
       ],
     },
     expenses,
-    wexPayments: [],
+    wexPayments: [] as unknown[],
     payrollMatchedAt,
   })
   const labels = async (p: PrismaClient, r: ReturnType<typeof report>) =>
@@ -65,8 +65,14 @@ describe('payrollUnclearOf', () => {
   })
 
   it('blocks staff pay on a matched month with staff even when no staff line was written', async () => {
-    expect(await labels(prisma(2), report([], new Date('2026-10-01')))).toEqual(['Staff pay'])
+    expect(await labels(prisma(2), report([], new Date('2026-10-01')))).toEqual([
+      'Staff pay',
+      'Staff taxes and benefits',
+    ])
     expect(await labels(prisma(0), report([], new Date('2026-10-01')))).toEqual([])
     expect(await labels(prisma(2), report([]))).toEqual([])
+    // Participants paid on a matched month: their taxes are asked about too.
+    const paid = { ...report([], new Date('2026-10-01')), wexPayments: [{}] }
+    expect(await labels(prisma(0), paid)).toEqual(['Participant taxes'])
   })
 })

@@ -121,14 +121,21 @@ export async function payrollUnclearOf(
     (k === 'participant-pay' && report.wexPayments.length > 0) ||
     report.expenses.some((e) => e.payrollKind === k || keyKind(e.payrollKey) === k)
   const kinds = PAYROLL_BUDGET_KINDS.filter(has)
-  // A matched month of an engagement with staff has staff pay even when none was written: the match writes no staff
-  // line while staff pay's line is unclear, and that must still block the month (review, 2026-11-28).
-  if (
-    report.payrollMatchedAt &&
-    !kinds.includes('staff-pay') &&
-    (await prisma.staffAssignment.count({ where: { engagementId: report.engagementId } })) > 0
-  )
-    kinds.unshift('staff-pay')
+  // A matched month has the payroll it pays even when none was written: the match writes no line of a kind while that
+  // kind's line is unclear, and that must still block the month (review, 2026-11-28). Staff pay and taxes when the
+  // engagement has staff; participant taxes when it paid participants.
+  if (report.payrollMatchedAt) {
+    const add = (k: PayrollBudgetKind) => !kinds.includes(k) && kinds.push(k)
+    if (report.wexPayments.length) add('participant-taxes')
+    if (
+      !(['staff-pay', 'staff-taxes'] as const).every((k) => kinds.includes(k)) &&
+      (await prisma.staffAssignment.count({ where: { engagementId: report.engagementId } })) > 0
+    ) {
+      add('staff-pay')
+      add('staff-taxes')
+    }
+    kinds.sort((x, y) => PAYROLL_BUDGET_KINDS.indexOf(x) - PAYROLL_BUDGET_KINDS.indexOf(y))
+  }
   if (!kinds.length) return []
   const rows = await prisma.lineAlias.findMany({
     where: {
