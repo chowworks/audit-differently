@@ -94,11 +94,16 @@ async function payrollUnclearOf(
   prisma: PrismaClient,
   report: {
     engagementId: string
-    engagement: { workspaceId: string; budgetLines: { name: string; reportLine: string }[] }
+    engagement: {
+      name: string
+      workspaceId: string
+      workspace: { name: string }
+      budgetLines: { name: string; reportLine: string }[]
+    }
     expenses: { payrollKey: string | null; payrollKind: string | null }[]
     wexPayments: unknown[]
   }
-): Promise<{ label: string; choices: string[] }[]> {
+): Promise<{ label: string; choices: string[]; engagement: string; workspace: string }[]> {
   const has = (k: PayrollBudgetKind) =>
     k.startsWith('participant')
       ? report.wexPayments.length > 0 || report.expenses.some((e) => e.payrollKind === k)
@@ -121,7 +126,14 @@ async function payrollUnclearOf(
   return kinds.flatMap((k) => {
     const p = payrollPlace(k, report.engagementId, entries, report.engagement.budgetLines)
     return p.by === 'unclear'
-      ? [{ label: PAYROLL_BUDGET_KIND_LABELS[k], choices: p.choices.map((l) => l.name) }]
+      ? [
+          {
+            label: PAYROLL_BUDGET_KIND_LABELS[k],
+            choices: p.choices.map((l) => l.name),
+            engagement: report.engagement.name,
+            workspace: report.engagement.workspace.name,
+          },
+        ]
       : []
   })
 }
@@ -131,7 +143,7 @@ async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Findi
     const report = await prisma.monthlyReport.findUniqueOrThrow({
       where: { id: reportId },
       include: {
-        engagement: { include: { budgetLines: true } },
+        engagement: { include: { budgetLines: true, workspace: { select: { name: true } } } },
         expenses: { include: { documents: { include: { document: { select: { kind: true } } } } } },
         wexPayments: {
           include: {

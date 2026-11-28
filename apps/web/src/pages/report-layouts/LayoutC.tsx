@@ -17,6 +17,7 @@ import {
 import { money, shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty, Modal, severityTone } from '@/components/ui'
 import { typesFor } from '@/components/Tags'
+import { CheckMessage } from '@/components/CheckMessage'
 import {
   addPayrollProof,
   ExpenseHead,
@@ -912,7 +913,13 @@ function ExpensesSection({
               <Chip tone={severityTone[k.severity]} fill className={cautionOf(k)}>
                 {k.severity === 'blocker' ? 'blocking' : k.severity}
               </Chip>
-              <span>{k.message}</span>
+              <span>
+                <CheckMessage
+                  code={k.code}
+                  message={k.message}
+                  workspaceId={r.engagement.workspace.id}
+                />
+              </span>
               {k.participantId && (
                 <Link to={`/engagements/${r.engagement.id}#participants`}>Open the file</Link>
               )}

@@ -640,6 +640,7 @@ export function WorkspacePayrollPage() {
           {!focus && (
             <div style={{ order: 1 }}>
               <PayrollActions
+                workspaceId={id}
                 programs={
                   programNames.data
                     ? {

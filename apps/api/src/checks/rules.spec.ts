@@ -229,8 +229,18 @@ describe('runRules', () => {
     const found = runRules(
       month({
         payrollUnclear: [
-          { label: 'Staff pay', choices: ['Staff Salaries', 'Personnel'] },
-          { label: 'Participant taxes', choices: [] },
+          {
+            label: 'Staff pay',
+            choices: ['Staff Salaries', 'Personnel'],
+            engagement: 'Youth Jobs',
+            workspace: 'Riverbend',
+          },
+          {
+            label: 'Participant taxes',
+            choices: [],
+            engagement: 'Youth Jobs',
+            workspace: 'Riverbend',
+          },
         ],
       })
     )
@@ -239,11 +249,11 @@ describe('runRules', () => {
         code: 'payroll-line-unclear',
         severity: 'blocker',
         message:
-          'Staff pay could go to Staff Salaries or Personnel: choose which holds it in Map Payroll Budget Line Items.',
+          'Workspace configuration issue: Staff pay maps to both "Staff Salaries" and "Personnel" on Youth Jobs. Fix it in Workspace Manager > Riverbend > Configuration Data > Map Payroll Budget Line Items: press Choose beside Youth Jobs and pick one.',
       }),
       expect.objectContaining({
         message:
-          'Participant taxes has no budget line it fits: choose one in Map Payroll Budget Line Items.',
+          'Workspace configuration issue: Participant taxes maps to no budget line on Youth Jobs. Fix it in Workspace Manager > Riverbend > Configuration Data > Map Payroll Budget Line Items: press Choose beside Youth Jobs and pick one.',
       }),
     ])
   })

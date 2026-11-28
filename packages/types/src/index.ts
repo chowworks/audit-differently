@@ -3118,6 +3118,8 @@ export interface EngagementPayrollCardDto {
   charged: number
   /** What payroll details charges to the grant this month for the staff tagged to it (a shared person on each card). */
   chargedByDetails: number
+  /** The month's "Workspace configuration issue" checks: a payroll category with no clear budget line (#138). */
+  payrollUnclear: string[]
   /** The staff payroll kinds the files charge that no budget line of the engagement takes: left off its budget. */
   unbudgeted: PayrollBudgetKind[]
   /** The month page's budget table: each budget line's approved amount, spent before, this month and what is left. */
