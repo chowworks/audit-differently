@@ -102,6 +102,13 @@ function inputOf(
   }
 }
 
+/** "A", "A or B", "A, B or C". */
+function orList(items: string[], word: 'and' | 'or'): string {
+  return items.length < 2
+    ? (items[0] ?? '')
+    : `${items.slice(0, -1).join(', ')} ${word} ${items[items.length - 1]}`
+}
+
 /** The one of `names` an engagement has as a line (its own spelling), or null when it has none or two. */
 function lineOn(data: PayrollRollupDto, engagementId: string, names: string[]): string | null {
   const keys = new Set(names.map(lineKey))
@@ -429,13 +436,19 @@ function RowModal({
   const [error, setError] = useState<string | null>(null)
   const label = kind ? PAYROLL_BUDGET_KIND_LABELS[kind] : 'Payroll'
 
-  // Every engagement's line names, each once (a line is found by its name, case aside).
+  // The line names of the engagements the row applies to (every engagement's when it applies to all or none is
+  // ticked yet), each once (a line is found by its name, case aside), plus any already ticked.
   const lineNames = useMemo(() => {
     const seen = new Map<string, string>()
-    for (const e of data.engagements)
+    const on =
+      every || !picked.length
+        ? data.engagements
+        : data.engagements.filter((e) => picked.includes(e.id))
+    for (const e of on)
       for (const l of e.lines) if (!seen.has(lineKey(l.name))) seen.set(lineKey(l.name), l.name)
+    for (const n of names) if (!seen.has(lineKey(n))) seen.set(lineKey(n), n)
     return [...seen.values()].sort((a, b) => a.localeCompare(b))
-  }, [data.engagements])
+  }, [data.engagements, every, picked, names])
 
   const of = data.entries.filter((e) => e.kind === kind)
   // The engagements with a row of their own for the category, other than this one.
@@ -459,11 +472,23 @@ function RowModal({
           : !nowhere && names.length
             ? (() => {
                 const off = picked.filter((id) => !lineOn(data, id, names))
-                return off.length
-                  ? `${names2(off)}: each needs exactly one of these lines. Choose the line it has.`
-                  : null
+                return off.length ? off.map((id) => offWords(id)).join(' ') : null
               })()
             : null,
+  }
+  // Why an engagement can't use this row's names, in one sentence: none of them, or two.
+  function offWords(id: string) {
+    const lines = data.engagements.find((e) => e.id === id)?.lines ?? []
+    const keys = new Set(names.map(lineKey))
+    const hits = lines.filter((l) => keys.has(lineKey(l.name))).map((l) => l.name)
+    if (hits.length > 1)
+      return `${nameOf(id)} has both ${orList(hits, 'and')}. Tick only the one that holds its ${label.toLowerCase()}.`
+    return lines.length
+      ? `${nameOf(id)} has no budget line item named ${orList(names, 'or')}. Pick one it has: ${orList(
+          lines.map((l) => l.name),
+          'or'
+        )}.`
+      : `${nameOf(id)} has no budget line items yet.`
   }
   function names2(ids: string[]) {
     return ids.map(nameOf).join(', ')
