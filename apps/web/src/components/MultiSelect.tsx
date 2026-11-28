@@ -106,7 +106,18 @@ export function MultiSelect({
     }
     document.addEventListener('mousedown', outside)
     document.addEventListener('touchstart', outside)
+    // Escape closes only this list, wherever focus is in it: caught before a dialog's own Escape (which listens on the
+    // window too) so the dialog and its ticks stay.
+    const escape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      setOpen(false)
+      trigger.current?.focus()
+    }
+    window.addEventListener('keydown', escape, true)
     return () => {
+      window.removeEventListener('keydown', escape, true)
       document.removeEventListener('mousedown', outside)
       document.removeEventListener('touchstart', outside)
       window.removeEventListener('resize', place)
