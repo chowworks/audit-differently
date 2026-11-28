@@ -90,7 +90,7 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
             <thead>
               <tr>
                 <th>Payroll Category</th>
-                <th>Budget Line Item</th>
+                <th>Maps to Budget Line Item</th>
                 <th>Engagements with their own line</th>
                 <th aria-label="Edit" />
               </tr>

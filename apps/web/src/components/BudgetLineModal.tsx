@@ -247,20 +247,20 @@ export function BudgetLineModal({
           </div>
         )}
         <div className="text-sm">
-          <p className="font-semibold">Payroll from the match on this line</p>
-          <p>
-            {line?.payroll.length
-              ? line.payroll.map((k) => PAYROLL_BUDGET_KIND_LABELS[k]).join(', ')
-              : 'None'}
-            {asked.length > 0 && (
-              <strong>
-                {' '}
-                Save puts{' '}
-                {asked.map((k) => PAYROLL_BUDGET_KIND_LABELS[k].toLowerCase()).join(' and ')} here,
-                for this engagement.
-              </strong>
-            )}
-          </p>
+          <p className="font-semibold">Payroll Category</p>
+          {[...(line?.payroll ?? []), ...asked].length ? (
+            <ul className="ml-5 list-disc">
+              {[...(line?.payroll ?? []), ...asked].map((k) => (
+                <li key={k}>
+                  {PAYROLL_BUDGET_KIND_LABELS[k]}: Maps to Budget Line Item{' '}
+                  <strong>{name.trim() || line?.name}</strong>
+                  {asked.includes(k) && ' after Save, for this engagement'}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>None maps to this line.</p>
+          )}
           <small className="text-soft">
             Set by name under{' '}
             <Link to={`/workspaces/${c.workspaceId}#payroll-rollup`}>
