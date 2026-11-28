@@ -6,16 +6,8 @@ type Line = EngagementDetail['budgetLines'][number]
 
 const total = (lines: Line[], f: (l: Line) => number) => lines.reduce((t, l) => t + f(l), 0)
 
-/** The lines as one table: approved, spent to date and what is left, a total, and Edit. */
-function LinesTable({
-  lines,
-  canManage,
-  onEdit,
-}: {
-  lines: Line[]
-  canManage: boolean
-  onEdit: (line: Line) => void
-}) {
+/** The lines as one table: approved, spent to date and what is left, and a total. */
+function LinesTable({ lines }: { lines: Line[] }) {
   return (
     <div className="ad-tablewrap">
       <table className="ad-table">
@@ -26,7 +18,6 @@ function LinesTable({
             <th className="ad-num">Approved</th>
             <th className="ad-num">Spent</th>
             <th className="ad-num">Left</th>
-            {canManage && <th></th>}
           </tr>
         </thead>
         <tbody>
@@ -53,13 +44,6 @@ function LinesTable({
                 <td className={`ad-num ${left < 0 ? 'text-danger font-bold' : ''}`}>
                   {money(left)}
                 </td>
-                {canManage && (
-                  <td className="ad-num">
-                    <Button size="sm" onClick={() => onEdit(l)}>
-                      Edit
-                    </Button>
-                  </td>
-                )}
               </tr>
             )
           })}
@@ -69,7 +53,6 @@ function LinesTable({
             <td className="ad-num font-bold">{money(total(lines, (l) => l.amount))}</td>
             <td className="ad-num font-bold">{money(total(lines, (l) => l.spent))}</td>
             <td className="ad-num font-bold">{money(total(lines, (l) => l.amount - l.spent))}</td>
-            {canManage && <td></td>}
           </tr>
         </tbody>
       </table>
@@ -133,31 +116,40 @@ export function BudgetSummary({ lines, onManage }: { lines: Line[]; onManage: ()
   )
 }
 
-/** Manage Budget: every line with approved, spent and left; owners and bookkeepers add and edit lines here. */
+/**
+ * Manage Budget: every line with approved, spent and left. Owners and bookkeepers set the budget from an Excel file
+ * only (GitHub issue #98): Upload budget, and Budget history for the files saved before.
+ */
 export function ManageBudgetModal({
   lines,
   canManage,
-  onAdd,
-  onEdit,
+  onUpload,
+  onHistory,
   onClose,
 }: {
   lines: Line[]
   canManage: boolean
-  onAdd: () => void
-  onEdit: (line: Line) => void
+  onUpload: () => void
+  onHistory: () => void
   onClose: () => void
 }) {
   return (
     <Modal title="Manage Budget" onClose={onClose} wide>
       {lines.length === 0 ? (
-        <p className="text-sm text-soft">No budget lines yet.</p>
+        <p className="text-sm text-soft">
+          No budget lines yet.
+          {canManage && ' Download the budget template, fill it in, and upload it.'}
+        </p>
       ) : (
-        <LinesTable lines={lines} canManage={canManage} onEdit={onEdit} />
+        <LinesTable lines={lines} />
       )}
       {canManage && (
-        <div className="mt-4">
-          <Button size="sm" onClick={onAdd}>
-            + Add line
+        <div className="mt-4 flex flex-wrap gap-3">
+          <Button kind="navy" size="sm" onClick={onUpload}>
+            Upload budget
+          </Button>
+          <Button size="sm" onClick={onHistory}>
+            Budget history
           </Button>
         </div>
       )}

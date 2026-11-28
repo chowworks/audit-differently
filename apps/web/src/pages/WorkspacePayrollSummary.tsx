@@ -19,7 +19,6 @@ import {
   type WorkspacePayrollOutputDto,
 } from '@ad/types'
 import { useLoad } from '@/hooks/useApi'
-import { AddPayrollBudgetLine } from '@/components/AddPayrollBudgetLine'
 import { ENGAGEMENT_COLORS } from '@/lib/engagement-colors'
 import { EngagementMark } from '@/components/EngagementMark'
 import { money, periodLabel, shortDate } from '@/lib/format'
@@ -130,7 +129,6 @@ export function PayrollActions({
   colors,
   onMatch,
   onShow,
-  onBudget,
   programs,
   expenses,
   added,
@@ -162,8 +160,6 @@ export function PayrollActions({
   cards: EngagementPayrollCardDto[] | null
   recon: PayrollReconciliationDto | null
   colors: Map<string, string>
-  /** A budget line was added from an action: owners only (the page reads the cards again). */
-  onBudget?: () => void
   /** Opens the match: owners only (an auditor changes nothing, so sees no button). */
   onMatch?: () => void
   /** Filters the reconciliation's grid to one kind and scrolls to it. */
@@ -273,11 +269,11 @@ export function PayrollActions({
         color,
         who: c.engagementName,
         text: `No budget line takes ${PAYROLL_BUDGET_KIND_LABELS[k].toLowerCase()}`,
-        sub: 'Its payroll from the files is left off the budget. Add the line, then Re-match with same files and Save.',
-        go: onBudget ? (
-          <AddPayrollBudgetLine engagementId={c.engagementId} kind={k} onAdded={onBudget} />
-        ) : (
-          <Link to={`/engagements/${c.engagementId}`}>See budget →</Link>
+        sub: 'Its payroll from the files is left off the budget. Link it to one of its budget lines, then Re-match with same files and Save.',
+        go: (
+          <Link to={`/workspaces/${workspaceId}#payroll-rollup`}>
+            Map Payroll Budget Line Items →
+          </Link>
         ),
       })
     for (const l of c.lines)

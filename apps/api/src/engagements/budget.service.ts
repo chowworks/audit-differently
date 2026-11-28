@@ -1,30 +1,27 @@
-import { carryRename } from '../aliases/rename'
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common'
+import { createHash, randomUUID } from 'node:crypto'
+import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common'
 import {
   PAYROLL_BUDGET_KINDS,
-  PAYROLL_BUDGET_KIND_LABELS,
   payrollPlace,
-  payrollRowKey,
-  REPORT_LINES,
   REPORT_LINE_LABELS,
   WRITE_ROLES,
   type BudgetChange,
-  type BudgetLineInput,
+  type BudgetFileDto,
+  type BudgetFileRow,
+  type BudgetFileVersionDto,
+  type BudgetUploadChange,
   type PayrollBudgetKind,
   type ReportLine,
 } from '@ad/types'
 import type { Prisma } from '@prisma/client'
 import { ChecksService } from '../checks/checks.service'
-import { AccessLogService } from '../core/access-log.service'
+import { AccessLogService, type LogEntry } from '../core/access-log.service'
 import { allow, tenantWhere, workspaceRole, type Caller } from '../core/caller'
 import { changesOf, type Fields } from '../core/changes'
 import { PrismaService } from '../prisma/prisma.service'
 import { backToDraft, BECAUSE } from '../reports/back-to-draft'
+import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
+import { budgetFile, readBudgetFile } from './budget-file'
 import { EngagementsService } from './engagements.service'
 
 /** A budget line in the access log: its name, form line and amount by value, the note (free text) by name alone. */
@@ -37,56 +34,39 @@ export const BUDGET_LINE_FIELDS: Fields = {
 }
 
 type Sent = BudgetChange['backToDraft']
+type Values = { name: string; reportLine: ReportLine; amount: string; narrative: string | null }
 
-/** An amount as the budget section enters it: blank is $0 until the contract says. */
-function amountOf(given: unknown): string {
-  if (given == null || given === '') return '0.00'
-  const n = Number(given)
-  if (!Number.isFinite(n) || n < 0) throw new BadRequestException('The amount must be $0 or more')
-  if (n >= 1e10) throw new BadRequestException('The amount must be under $10,000,000,000')
-  return n.toFixed(2)
+const CONTENT_TYPES = {
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  csv: 'text/csv',
+} as const
+
+/** Thrown inside the save's transaction when the budget, as it stands there, already matches the file. */
+class NothingChanged extends Error {}
+
+/** Whether Save would write anything. */
+const changesIn = (plan: { create: unknown[]; update: unknown[]; remove: unknown[] }) =>
+  plan.create.length + plan.update.length + plan.remove.length > 0
+
+/**
+ * Refuses a file with any problem, whole. The answer carries the check as it stands now (`check`: the lines, what Save
+ * does with each, the lines it removes, every problem with its row), so the screen shows it in place of an older one:
+ * the budget may have changed since the person checked the file.
+ */
+function refuseProblems(dto: BudgetFileDto) {
+  const n = dto.problems.length
+  if (n)
+    throw new BadRequestException({
+      message: `The file has ${n} ${n === 1 ? 'problem' : 'problems'}: correct the file and upload it again`,
+      problems: dto.problems,
+      check: dto,
+    })
 }
 
-function narrativeOf(given: unknown): string | null {
-  const text = typeof given === 'string' ? given.trim() : ''
-  if (text.length > 2000) throw new BadRequestException('Keep the note under 2,000 characters')
-  return text || null
-}
-
-/** The payroll kinds ticked on a line: known kinds only, each once, in their own order. */
-function payrollOf(given: unknown): PayrollBudgetKind[] {
-  if (!Array.isArray(given)) throw new BadRequestException('Say which payroll this line holds')
-  const bad = given.filter((k) => !(PAYROLL_BUDGET_KINDS as readonly unknown[]).includes(k))
-  if (bad.length) throw new BadRequestException('Choose payroll this line can hold')
-  return PAYROLL_BUDGET_KINDS.filter((k) => given.includes(k))
-}
-
-/** The payroll kinds as the access log shows them: their screen words. */
-const payrollWords = (kinds: PayrollBudgetKind[]) =>
-  kinds.length ? kinds.map((k) => PAYROLL_BUDGET_KIND_LABELS[k]).join(', ') : 'None'
-
-/** The books' payroll rows a change moved to the line, in the log line's words; those left on a locked month too. */
-function movedWords(rows: { moved: number; stayed: number }, line: string): string {
-  const n = (k: number) => `${k} imported payroll ${k === 1 ? 'row' : 'rows'}`
-  return [
-    rows.moved ? `; moved ${n(rows.moved)} to ${line}` : '',
-    rows.stayed
-      ? `; ${n(rows.stayed)} on a closed or submitted month stayed where ${rows.stayed === 1 ? 'it was' : 'they were'}`
-      : '',
-  ].join('')
-}
-
-function nameOf(given: unknown): string {
-  const name = typeof given === 'string' ? given.trim().replace(/\s+/g, ' ') : ''
-  if (!name) throw new BadRequestException('Name the budget line as the approved budget does')
-  if (name.length > 120) throw new BadRequestException('Keep the name under 120 characters')
-  return name
-}
-
-function reportLineOf(given: unknown): ReportLine {
-  if (!REPORT_LINES.includes(given as ReportLine))
-    throw new BadRequestException("Choose the line of the funder's monthly form it rolls up to")
-  return given as ReportLine
+/** An uploaded file as the controller passes it. */
+export interface BudgetUpload {
+  buffer: Buffer
+  originalname: string
 }
 
 /**
@@ -107,8 +87,11 @@ export async function firstParticipantPay(
 
 /**
  * The approved budget of an engagement (step 4): its budget lines as the contract names them, each with the funder form
- * line it rolls up to, its approved amount and a note. Every expense is spent against one of them. Owners and bookkeepers add, change and remove lines; an auditor reads them
- * on the engagement page. The month checks compare spending with these lines, so every change runs them again.
+ * line it rolls up to, its approved amount and a note. Every expense is spent against one of them. The budget comes
+ * from an Excel file only (GitHub issue #98; owner's decisions, 2026-11-27): owners and bookkeepers download the
+ * template with the current lines, upload it filled in, and the file replaces the whole budget. Each file saved is kept
+ * as the budget history, to download again; the auditor sees neither the files nor the upload (owner's rule,
+ * 2026-11-27). The month checks compare spending with these lines, so every change runs them again.
  */
 @Injectable()
 export class BudgetService {
@@ -116,169 +99,258 @@ export class BudgetService {
     private readonly prisma: PrismaService,
     private readonly engagements: EngagementsService,
     private readonly checks: ChecksService,
-    private readonly log: AccessLogService
+    private readonly log: AccessLogService,
+    @Inject(DOCUMENT_STORAGE) private readonly storage: DocumentStorage
   ) {}
 
-  async add(caller: Caller, engagementId: string, input: BudgetLineInput): Promise<BudgetChange> {
+  /** The template: a header row and the engagement's current lines, to fill in or edit. */
+  async template(caller: Caller, engagementId: string): Promise<{ name: string; bytes: Buffer }> {
     const c = await this.writable(caller, engagementId)
-    const values = {
-      name: nameOf(input?.name),
-      reportLine: reportLineOf(input?.reportLine),
-      amount: amountOf(input?.amount),
-      narrative: narrativeOf(input?.narrative),
-    }
-    // Asked for by the payroll page: these kinds on this line, as the engagement's own entries of the rollup.
-    const asked = input && 'payroll' in input ? payrollOf(input.payroll) : []
-    await this.refuseTaken(engagementId, values.name)
-    const sortOrder = await this.prisma.budgetLine.count({ where: { engagementId } })
-    let backed: Sent = []
-    let rows = { moved: 0, stayed: 0 }
-    let payroll: PayrollBudgetKind[] = []
-    await this.log.change(
-      caller,
-      async (tx) => {
-        const row = await tx.budgetLine.create({
-          data: { engagementId, sortOrder, ...values, payroll: [] },
-        })
-        await this.ownEntries(tx, caller, c, Object.fromEntries(asked.map((k) => [k, values.name])))
-        backed = await this.backToDraft(tx, caller, c)
-        // The payroll rollup says, by name, which payroll the new line holds (#138).
-        rows = (await this.applyRollup(tx, caller, c, false)).rows
-        payroll = await this.payrollOn(tx, row.id)
-        return row
-      },
-      () => ({
-        workspaceId: c.workspaceId,
-        resource: 'engagement',
-        subjectId: c.id,
-        action: 'create',
-        description: `Added ${values.name} to the approved budget of ${c.name}${movedWords(rows, values.name)}`,
-        changes: changesOf(
-          null,
-          { ...values, ...(payroll.length ? { payroll: payrollWords(payroll) } : {}) },
-          BUDGET_LINE_FIELDS
-        ),
-      })
-    )
-    return this.done(caller, c.id, backed)
+    const lines = await this.prisma.budgetLine.findMany({
+      where: { engagementId },
+      orderBy: { sortOrder: 'asc' },
+    })
+    return { name: `${c.name} - budget.xlsx`, bytes: await budgetFile(lines) }
   }
 
-  async update(
+  /** An uploaded budget file, read and checked against the budget: what Save would do, and every problem. */
+  async readFile(caller: Caller, engagementId: string, file: BudgetUpload): Promise<BudgetFileDto> {
+    const c = await this.writable(caller, engagementId)
+    return (await this.check(this.prisma, c.id, await this.read(file))).dto
+  }
+
+  /**
+   * Saves an uploaded budget file: it replaces the whole budget, all or nothing (owner's decisions, 2026-11-27). The
+   * file is read and checked again, and refused whole with every problem if it has any. A line of the same name is
+   * changed in place, never removed and added again (CLAUDE.md, "A budget line's name is its key"); a new name is
+   * added; a line the file leaves out is removed, and one with spending refuses the file. A line's payroll from the
+   * match is left as it is (#132 moves it off the budget line). The file is kept as the budget history. A change puts
+   * every closed and submitted month back to draft, as any budget change does; a file that changes nothing writes
+   * nothing.
+   */
+  async upload(
     caller: Caller,
     engagementId: string,
-    lineId: string,
-    input: BudgetLineInput
-  ): Promise<BudgetChange> {
-    const { c, line, label, hasSpending } = await this.line(caller, engagementId, lineId)
-    const values: {
-      name?: string
-      reportLine?: ReportLine
-      amount?: string
-      narrative?: string | null
-    } = {}
-    if (input && 'name' in input) {
-      values.name = nameOf(input.name)
-      if (values.name.toLowerCase() !== line.name.toLowerCase())
-        await this.refuseTaken(engagementId, values.name)
-    }
-    if (input && 'reportLine' in input) {
-      values.reportLine = reportLineOf(input.reportLine)
-      if (values.reportLine !== line.reportLine && hasSpending)
-        throw new ConflictException(
-          `${label} has spending, so it keeps the line it rolls up to: add a new line instead`
-        )
-    }
-    if (input && 'amount' in input) values.amount = amountOf(input.amount)
-    if (input && 'narrative' in input) values.narrative = narrativeOf(input.narrative)
-    const asked = input && 'payroll' in input ? payrollOf(input.payroll) : []
-    const had = line.payroll as PayrollBudgetKind[]
-    const changes = changesOf(line, values, BUDGET_LINE_FIELDS)
-    if (changes.length === 0 && asked.every((k) => had.includes(k)))
-      return { ...(await this.engagements.detail(caller, c.id)), backToDraft: [] }
+    file: BudgetUpload
+  ): Promise<BudgetUploadChange> {
+    const c = await this.writable(caller, engagementId)
+    const read = await this.read(file)
+    const first = await this.check(this.prisma, c.id, read)
+    refuseProblems(first.dto)
+    if (!changesIn(first)) return this.unchanged(caller, c.id)
+
+    const ext = /\.csv$/i.test(file.originalname) ? 'csv' : 'xlsx'
+    const storageKey = `${c.workspaceId}/${c.id}/general/${randomUUID()}.${ext}`
+    await this.storage.upload(storageKey, file.buffer, CONTENT_TYPES[ext])
     let backed: Sent = []
-    let rows = { moved: 0, stayed: 0 }
-    let carried = 0
-    let payroll = had
-    await this.log.change(
-      caller,
-      async (tx) => {
-        // The QuickBooks names and the payroll rollup's entries that point at its old name follow it (#132, #138).
-        if (values.name)
-          carried = await carryRename(tx, {
-            workspaceId: c.workspaceId,
-            engagementId,
-            from: line.name,
-            to: values.name,
-            changedById: caller.userId,
+    let counts = { added: 0, changed: 0, removed: 0 }
+    try {
+      await this.log.change(
+        caller,
+        async (tx) => {
+          // One upload of this engagement at a time, each checked against the budget as the one before it left it:
+          // two at once would each plan against the same old budget and leave a mix of both files.
+          await tx.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext(${`budget-upload:${c.id}`}))`
+          const plan = await this.check(tx, c.id, read)
+          refuseProblems(plan.dto)
+          if (!changesIn(plan)) throw new NothingChanged()
+          counts = {
+            added: plan.create.length,
+            changed: plan.update.length,
+            removed: plan.remove.length,
+          }
+          const lines: LogEntry[] = []
+          const entry = (
+            action: LogEntry['action'],
+            description: string,
+            changes: LogEntry['changes']
+          ) =>
+            lines.push({
+              workspaceId: c.workspaceId,
+              resource: 'engagement',
+              subjectId: c.id,
+              action,
+              description,
+              changes,
+            })
+          for (const r of plan.remove) {
+            await tx.budgetLine.delete({ where: { id: r.id } })
+            entry(
+              'delete',
+              `Removed ${r.name} from the approved budget of ${c.name}`,
+              changesOf(r, null, BUDGET_LINE_FIELDS)
+            )
+          }
+          for (const { had, values } of plan.update) {
+            await tx.budgetLine.update({ where: { id: had.id }, data: values })
+            entry(
+              'update',
+              `Changed ${had.name} on the approved budget of ${c.name}`,
+              changesOf(had, values, BUDGET_LINE_FIELDS)
+            )
+          }
+          for (const [i, values] of plan.create.entries()) {
+            await tx.budgetLine.create({
+              data: { engagementId: c.id, sortOrder: plan.existing.length + i, ...values },
+            })
+            entry(
+              'create',
+              `Added ${values.name} to the approved budget of ${c.name}`,
+              changesOf(null, values, BUDGET_LINE_FIELDS)
+            )
+          }
+          await tx.budgetFile.create({
+            data: {
+              engagementId: c.id,
+              fileName: file.originalname.slice(0, 255) || `budget.${ext}`,
+              contentType: CONTENT_TYPES[ext],
+              size: file.buffer.length,
+              sha256: createHash('sha256').update(file.buffer).digest('hex'),
+              storageKey,
+              lineCount: plan.dto.rows.length,
+              // After the lock, not now(): a transaction's now() is when it began, so an upload that waited for the
+              // one before it would sort first, and the history's Current would be the wrong file.
+              uploadedAt: new Date(),
+              uploadedById: caller.userId,
+              uploadedByEmail: caller.email ?? caller.displayName,
+            },
           })
-        const row = await tx.budgetLine.update({ where: { id: line.id }, data: values })
-        const name = values.name ?? line.name
-        // A change to a line never moves its payroll by itself (#138): a kind it held that the list would now put
-        // elsewhere stays on it, as the engagement's own entry.
-        const now = await this.rollupOf(tx, c)
-        const kept = had.filter(
-          (k) => payrollPlace(k, c.id, now.list, now.lines).line?.id !== line.id
-        )
-        await this.ownEntries(
-          tx,
-          caller,
-          c,
-          Object.fromEntries([...kept, ...asked].map((k) => [k, name]))
-        )
-        backed = await this.backToDraft(tx, caller, c)
-        rows = (await this.applyRollup(tx, caller, c, false)).rows
-        payroll = await this.payrollOn(tx, line.id)
-        return row
-      },
-      () => ({
-        workspaceId: c.workspaceId,
-        resource: 'engagement',
-        subjectId: c.id,
-        action: 'update',
-        description: `Changed ${label} on the approved budget of ${c.name}${movedWords(rows, values.name ?? label)}`,
-        changes: [
-          ...changes,
-          ...(payrollWords(payroll) !== payrollWords(had)
-            ? changesOf(
-                { payroll: payrollWords(had) },
-                { payroll: payrollWords(payroll) },
-                BUDGET_LINE_FIELDS
-              )
-            : []),
-          ...(carried
-            ? [{ field: 'QuickBooks names moved to the new name', after: String(carried) }]
-            : []),
-        ],
-      })
-    )
-    return this.done(caller, c.id, backed)
+          backed = await this.backToDraft(tx, caller, c)
+          // Each kind of payroll onto the line Map Payroll Budget Line Items says (#142): a new line takes its payroll
+          // from the list, and one the file removed gives its payroll up.
+          await this.applyRollup(tx, caller, c, false)
+          await this.log.alsoMany(tx, caller, lines)
+          return { workspaceId: c.workspaceId }
+        },
+        // Built after the writes, with what the plan inside the lock did.
+        () => ({
+          workspaceId: c.workspaceId,
+          resource: 'engagement',
+          subjectId: c.id,
+          action: 'update',
+          description:
+            `Uploaded a budget file to ${c.name}, replacing its approved budget: ` +
+            `${counts.added} added, ${counts.changed} changed, ${counts.removed} removed`,
+        }),
+        { timeout: 30_000 }
+      )
+    } catch (e) {
+      // Nothing was saved: the stored file goes too.
+      await this.storage.delete(storageKey).catch(() => undefined)
+      if (e instanceof NothingChanged) return this.unchanged(caller, c.id)
+      throw e
+    }
+    return { ...(await this.done(caller, c.id, backed)), ...counts }
   }
 
-  async remove(caller: Caller, engagementId: string, lineId: string): Promise<BudgetChange> {
-    const { c, line, label, hasSpending } = await this.line(caller, engagementId, lineId)
-    if (hasSpending)
-      throw new ConflictException(
-        `${label} has spending against it: move those expenses to another line first`
-      )
-    let backed: Sent = []
-    await this.log.change(
-      caller,
-      async (tx) => {
-        const row = await tx.budgetLine.delete({ where: { id: line.id } })
-        backed = await this.backToDraft(tx, caller, c)
-        await this.applyRollup(tx, caller, c, false)
-        return row
-      },
-      {
-        workspaceId: c.workspaceId,
-        resource: 'engagement',
-        subjectId: c.id,
-        action: 'delete',
-        description: `Removed ${label} from the approved budget of ${c.name}`,
-        changes: changesOf(line, null, BUDGET_LINE_FIELDS),
+  /** An uploaded file as read: kept in memory, never stored until Save. */
+  private read(file: BudgetUpload) {
+    return readBudgetFile(file.buffer, file.originalname)
+  }
+
+  /** A file that matches the budget: nothing is written, and no month goes back to draft. */
+  private async unchanged(caller: Caller, engagementId: string): Promise<BudgetUploadChange> {
+    return {
+      ...(await this.engagements.detail(caller, engagementId)),
+      backToDraft: [],
+      added: 0,
+      changed: 0,
+      removed: 0,
+    }
+  }
+
+  /** The budget history: every budget file saved, newest first; the newest is the current budget's. */
+  async history(caller: Caller, engagementId: string): Promise<BudgetFileVersionDto[]> {
+    const c = await this.writable(caller, engagementId)
+    const files = await this.prisma.budgetFile.findMany({
+      where: { engagementId: c.id },
+      orderBy: { uploadedAt: 'desc' },
+    })
+    return files.map((f, i) => ({
+      id: f.id,
+      fileName: f.fileName,
+      uploadedAt: f.uploadedAt.toISOString(),
+      uploadedByEmail: f.uploadedByEmail,
+      lineCount: f.lineCount,
+      current: i === 0,
+    }))
+  }
+
+  /** A budget file of the history, as it was uploaded, to view or download. Logged. */
+  async historyFile(
+    caller: Caller,
+    engagementId: string,
+    fileId: string
+  ): Promise<{ name: string; contentType: string; bytes: Buffer }> {
+    const c = await this.writable(caller, engagementId)
+    const f = await this.prisma.budgetFile.findFirst({
+      where: { id: fileId, engagementId: c.id, ...tenantWhere(caller) },
+    })
+    if (!f) throw new NotFoundException()
+    const bytes = await this.storage.read(f.storageKey)
+    await this.log.log(caller, {
+      workspaceId: c.workspaceId,
+      resource: 'engagement',
+      subjectId: c.id,
+      action: 'read',
+      description: `Opened the budget file ${f.fileName} of ${c.name}, uploaded ${f.uploadedAt.toISOString().slice(0, 10)}`,
+    })
+    return { name: f.fileName, contentType: f.contentType, bytes }
+  }
+
+  /**
+   * An uploaded file read and checked against the engagement's budget: each line with what Save does with it, the
+   * lines Save removes, every problem in the file's order, and the writes Save makes.
+   */
+  private async check(
+    db: Pick<Prisma.TransactionClient, 'budgetLine'>,
+    engagementId: string,
+    read: Awaited<ReturnType<typeof readBudgetFile>>
+  ) {
+    const existing = await db.budgetLine.findMany({
+      where: { engagementId },
+      include: { _count: { select: { expenses: true } } },
+      orderBy: { sortOrder: 'asc' },
+    })
+    const byName = new Map(existing.map((e) => [e.name.toLowerCase(), e]))
+    const problems = [...read.problems]
+    const rows: BudgetFileRow[] = []
+    const create: Values[] = []
+    const update: { had: (typeof existing)[number]; values: Values }[] = []
+    for (const r of read.rows) {
+      const values: Values = {
+        name: r.name,
+        reportLine: r.reportLine,
+        amount: r.amount.toFixed(2),
+        narrative: r.narrative,
       }
-    )
-    return this.done(caller, c.id, backed)
+      const had = byName.get(r.name.toLowerCase())
+      if (!had) {
+        create.push(values)
+        rows.push({ ...r, action: 'new' })
+      } else if (had._count.expenses > 0 && had.reportLine !== r.reportLine)
+        problems.push({
+          row: r.row,
+          reason: `${had.name} has spending, so it keeps the monthly report line ${REPORT_LINE_LABELS[had.reportLine as ReportLine]}`,
+        })
+      else {
+        const changed = changesOf(had, values, BUDGET_LINE_FIELDS).length > 0
+        if (changed) update.push({ had, values })
+        rows.push({ ...r, action: changed ? 'change' : 'same' })
+      }
+    }
+    const left = existing.filter((e) => !read.names.has(e.name.toLowerCase()))
+    for (const e of left.filter((l) => l._count.expenses > 0))
+      problems.push({ row: null, reason: `${e.name} has spending, so it must stay in the file` })
+    const remove = left.filter((l) => l._count.expenses === 0)
+    problems.sort((a, b) => (a.row ?? Infinity) - (b.row ?? Infinity))
+    return {
+      dto: { rows, removed: remove.map((e) => e.name), problems },
+      create,
+      update,
+      remove,
+      existing,
+    }
   }
 
   /**
@@ -360,49 +432,6 @@ export class BudgetService {
   }
 
   /**
-   * Kinds of payroll put on a line of this engagement (the payroll page's "Add budget line", or a kind a
-   * change to a line keeps on it), kept as this engagement's own entries. A name must be one of its lines.
-   */
-  private async ownEntries(
-    tx: Prisma.TransactionClient,
-    caller: Caller,
-    c: { id: string; workspaceId: string },
-    to: Partial<Record<PayrollBudgetKind, string | null>>
-  ) {
-    const kinds = PAYROLL_BUDGET_KINDS.filter((k) => k in to)
-    if (!kinds.length) return
-    const { lines } = await this.rollupOf(tx, c)
-    for (const kind of kinds) {
-      const name = to[kind] ?? null
-      const line = name && lines.find((l) => l.name.toLowerCase() === name.toLowerCase())
-      if (name && !line)
-        throw new BadRequestException(`${name} is not a budget line of this engagement`)
-      const data = {
-        name: kind,
-        key: payrollRowKey(kind),
-        budgetLineName: line ? line.name : null,
-        unallowable: !line,
-        changedById: caller.userId,
-        changedAt: new Date(),
-      }
-      const had = await tx.lineAlias.findFirst({
-        where: { workspaceId: c.workspaceId, list: 'payroll', engagementId: c.id, name: kind },
-        select: { id: true },
-      })
-      if (had) await tx.lineAlias.update({ where: { id: had.id }, data })
-      else
-        await tx.lineAlias.create({
-          data: { ...data, workspaceId: c.workspaceId, engagementId: c.id, list: 'payroll' },
-        })
-    }
-  }
-
-  private async payrollOn(tx: Prisma.TransactionClient, lineId: string) {
-    const l = await tx.budgetLine.findFirst({ where: { id: lineId }, select: { payroll: true } })
-    return (l?.payroll ?? []) as PayrollBudgetKind[]
-  }
-
-  /**
    * The books' payroll rows (imported, kept for payroll reconciliation) of the kinds a line now takes follow it, so the
    * old line shows no spending that is no longer its own and a re-import finds them where they belong. Runs after the
    * change put every closed and submitted month back to draft, so a month still locked (a closing approved meanwhile)
@@ -440,26 +469,6 @@ export class BudgetService {
       'Only an owner or bookkeeper changes the budget'
     )
     return c
-  }
-
-  private async line(caller: Caller, engagementId: string, lineId: string) {
-    const c = await this.writable(caller, engagementId)
-    const line = await this.prisma.budgetLine.findFirst({
-      where: { id: lineId, engagementId, ...tenantWhere(caller) },
-    })
-    if (!line) throw new NotFoundException()
-    const hasSpending = (await this.prisma.expense.count({ where: { budgetLineId: line.id } })) > 0
-    return { c, line, label: line.name, hasSpending }
-  }
-
-  /** A name is the engagement's once, whatever its case (the database's unique index says the same). */
-  private async refuseTaken(engagementId: string, name: string) {
-    const lines = await this.prisma.budgetLine.findMany({
-      where: { engagementId },
-      select: { name: true },
-    })
-    if (lines.some((l) => l.name.toLowerCase() === name.toLowerCase()))
-      throw new BadRequestException(`${name} is already on the budget`)
   }
 
   /**

@@ -682,7 +682,6 @@ export function WorkspacePayrollPage() {
                       }
                     : undefined
                 }
-                onBudget={owner ? () => setCardsVersion((n) => n + 1) : undefined}
                 onShow={(k) => {
                   setResolve(toneOfKind(k))
                   document.getElementById('wpd-grid')?.scrollIntoView({ behavior: 'smooth' })
@@ -1957,17 +1956,7 @@ function WorkspaceMatch({
               <>
                 {/* Only what must be set up before Next can save (owner's ask, 2026-11-15: no detail panels here). */}
                 {(run.setup ?? []).length > 0 && (
-                  <PlanWords
-                    run={run}
-                    chosen={toSave}
-                    proof={proof}
-                    reopen={toReopen}
-                    onBudget={() =>
-                      void api
-                        .get<WorkspacePayrollRunDto>(`/workspace-payroll-match/${run.id}`)
-                        .then(setRun, (e: Error) => setRunError(e.message))
-                    }
-                  />
+                  <PlanWords run={run} chosen={toSave} proof={proof} reopen={toReopen} />
                 )}
                 <MatchFooter
                   error={saveError}

@@ -583,6 +583,71 @@
 
       <article
         class="entry"
+        id="budget-upload"
+        data-status="review"
+        data-short="Budget from an Excel file"
+        data-summary="An engagement's approved budget now comes from an Excel file: download the template, fill it in, upload it, check the lines and save. Earlier budget files are kept."
+      >
+        <div class="meta">
+          <span class="chip review">IN REVIEW</span><time datetime="2026-11-27">Nov 27, 2026</time>
+        </div>
+        <h2>Budget from an Excel file</h2>
+        <p>
+          You now set an engagement's approved budget with an Excel file. In Manage Budget, download
+          the template, fill it in, and upload it. You check every line before anything is saved. To
+          change the budget later, edit the file and upload it again.
+        </p>
+        <div class="know">
+          <strong>How it works</strong>
+          <ul>
+            <li>
+              The template has four columns: budget line, monthly report line, approved amount and
+              note. Once the engagement has a budget, the template you download already has its
+              lines.
+            </li>
+            <li>
+              Fill in every cell but the note. Write 0 for an amount of $0. The monthly report line
+              is a list in the file: choose one of the seven lines of the funder's monthly form.
+            </li>
+            <li>
+              Before anything is saved, you see what the file changes, and every problem with its
+              row number and the reason. Correct the file and upload it again.
+            </li>
+            <li>
+              The file replaces the whole budget. A line of the same name is changed in place, a new
+              name is added, and a line the file leaves out is removed.
+            </li>
+          </ul>
+        </div>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>
+              A budget line with spending must stay in the file, and it keeps its monthly report
+              line: a file that leaves it out or moves it is not saved.
+            </li>
+            <li>
+              The lines are saved together: if one cannot be saved, none are, and you see why.
+            </li>
+            <li>
+              Each budget file you save is kept. Budget history lists them, and you can download any
+              earlier one. To go back to an earlier budget, upload its file again.
+            </li>
+            <li>
+              As with any budget change, saving re-checks every month and puts closed and submitted
+              months back to draft. The screen tells you first.
+            </li>
+            <li>You no longer add or edit budget lines one at a time: the file does it.</li>
+            <li>
+              Which budget line holds each kind of payroll is set in Map Payroll Budget Line Items,
+              on the workspace page. A new line from the file takes its payroll from there.
+            </li>
+          </ul>
+        </div>
+      </article>
+
+      <article
+        class="entry"
         id="payroll-rollup"
         data-status="shipped"
         data-short="Map payroll budget line items"
@@ -593,9 +658,9 @@
         </div>
         <h2>Map payroll budget line items</h2>
         <p>
-          Which budget line holds each payroll category the payroll match proves is now set once, for
-          the whole workspace: Map Payroll Budget Line Items, under Configuration Data. It replaces
-          the payroll checkboxes on each budget line.
+          Which budget line holds each payroll category the payroll match proves is now set once,
+          for the whole workspace: Map Payroll Budget Line Items, under Configuration Data. It
+          replaces the payroll checkboxes on each budget line.
         </p>
         <div class="know">
           <strong>Good to know</strong>
@@ -605,8 +670,8 @@
               Personnel, or Not linked to a Budget Line Item. Each engagement uses the name it has.
             </li>
             <li>
-              It reads like Map Financial Categories: each row has an Applies to, so an engagement can
-              have a row of its own that maps a category to another of its lines, or to none.
+              It reads like Map Financial Categories: each row has an Applies to, so an engagement
+              can have a row of its own that maps a category to another of its lines, or to none.
             </li>
             <li>
               An engagement with two of the names, or none that fits, is asked which line holds it.
@@ -640,8 +705,7 @@
         <h2>Map financial categories to budget categories</h2>
         <p>
           Where each financial category of your books goes is now kept in one place: Map Financial
-          Categories, under Configuration Data on your workspace page. Import
-          transactions and
+          Categories, under Configuration Data on your workspace page. Import transactions and
           <a href="#month-end-close">Month End Close</a> both read it, so an account can no longer
           go to one budget line in one screen and another line in the other.
         </p>
