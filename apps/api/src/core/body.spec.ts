@@ -66,6 +66,14 @@ describe('BodyReader', () => {
     expect(refusal(r).message).toBe('name must be text. items[0].a must be text')
   })
 
+  it('reads true or false, and refuses anything else', () => {
+    const r = new BodyReader({ on: true, off: false, text: 'yes' })
+    expect(r.boolean('on')).toBe(true)
+    expect(r.boolean('off')).toBe(false)
+    r.boolean('text')
+    expect(refusal(r).message).toBe('text must be true or false')
+  })
+
   it('refuses a number that is not finite', () => {
     const r = new BodyReader({ n: Number.NaN })
     r.numberLike('n')

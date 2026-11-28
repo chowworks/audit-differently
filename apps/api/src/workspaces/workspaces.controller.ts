@@ -1,15 +1,16 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common'
-import type {
-  ActivityEntry,
-  AdminWorkspaceDetail,
-  CreateWorkspaceRequest,
-  Role,
-  WorkspaceDetail,
-  WorkspaceDto,
-} from '@ad/types'
+import type { ActivityEntry, AdminWorkspaceDetail, WorkspaceDetail, WorkspaceDto } from '@ad/types'
 import { AdminGuard } from '../auth/admin.guard'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
+import {
+  parseCreateWorkspaceBody,
+  parseListsBody,
+  parseMemberBody,
+  parseRenameBody,
+  parseRoleBody,
+  parseSuggestionBody,
+} from './workspace-body'
 import { WorkspacesService } from './workspaces.service'
 
 @Controller('workspaces')
@@ -28,11 +29,9 @@ export class WorkspacesController {
   /** Platform admins only (Admin tools): a workspace for a customer, with its first owner invited by email. */
   @Post()
   @UseGuards(AdminGuard)
-  async create(
-    @UserId() userId: string,
-    @Body() body: CreateWorkspaceRequest
-  ): Promise<AdminWorkspaceDetail> {
-    return this.workspaces.create(await this.callers.loadAdmin(userId), body)
+  async create(@UserId() userId: string, @Body() body: unknown): Promise<AdminWorkspaceDetail> {
+    const input = parseCreateWorkspaceBody(body)
+    return this.workspaces.create(await this.callers.loadAdmin(userId), input)
   }
 
   @Get(':id')
@@ -45,10 +44,11 @@ export class WorkspacesController {
   async rename(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { name?: unknown }
+    @Body() body: unknown
   ): Promise<WorkspaceDetail> {
+    const name = parseRenameBody(body)
     const caller = await this.callers.load(userId)
-    await this.workspaces.rename(caller, id, body?.name)
+    await this.workspaces.rename(caller, id, name)
     return this.workspaces.get(caller, id)
   }
 
@@ -56,13 +56,9 @@ export class WorkspacesController {
   async setLists(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body()
-    body: {
-      tagTypes?: unknown
-      receiptsAddress?: unknown
-      readEmailedReceiptsWithAi?: unknown
-    }
+    @Body() given: unknown
   ): Promise<WorkspaceDetail> {
+    const body = parseListsBody(given)
     const caller = await this.callers.load(userId)
     // Each card saves its own list: the budget items, the tags, or the receipts address (and its AI setting).
     if (body.readEmailedReceiptsWithAi !== undefined)
@@ -82,19 +78,21 @@ export class WorkspacesController {
   async suggest(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { text: string }
+    @Body() body: unknown
   ): Promise<WorkspaceDetail> {
-    return this.workspaces.suggest(await this.callers.load(userId), id, body.text)
+    const text = parseSuggestionBody(body)
+    return this.workspaces.suggest(await this.callers.load(userId), id, text)
   }
 
   @Post(':id/members')
   async addMember(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { email: string; displayName?: string; role: Role }
+    @Body() body: unknown
   ): Promise<WorkspaceDetail> {
+    const input = parseMemberBody(body)
     const caller = await this.callers.load(userId)
-    await this.workspaces.addMember(caller, id, body)
+    await this.workspaces.addMember(caller, id, input)
     return this.workspaces.get(caller, id)
   }
 
@@ -103,10 +101,11 @@ export class WorkspacesController {
     @UserId() userId: string,
     @Param('id') id: string,
     @Param('userId') member: string,
-    @Body() body: { role: Role }
+    @Body() body: unknown
   ): Promise<WorkspaceDetail> {
+    const role = parseRoleBody(body)
     const caller = await this.callers.load(userId)
-    await this.workspaces.setRole(caller, id, member, body.role)
+    await this.workspaces.setRole(caller, id, member, role)
     return this.workspaces.get(caller, id)
   }
 

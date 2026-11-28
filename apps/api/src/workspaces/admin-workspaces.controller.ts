@@ -9,10 +9,11 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common'
-import type { AdminWorkspaceDetail, AdminWorkspaceDto, Role } from '@ad/types'
+import type { AdminWorkspaceDetail, AdminWorkspaceDto } from '@ad/types'
 import { AdminGuard } from '../auth/admin.guard'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
+import { parseListsBody, parseMemberBody, parseRenameBody, parseRoleBody } from './workspace-body'
 import { WorkspacesService } from './workspaces.service'
 
 /**
@@ -42,10 +43,11 @@ export class AdminWorkspacesController {
   async rename(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { name?: unknown }
+    @Body() body: unknown
   ): Promise<AdminWorkspaceDetail> {
+    const name = parseRenameBody(body)
     const admin = await this.callers.loadAdmin(userId)
-    await this.workspaces.rename(admin, id, body?.name)
+    await this.workspaces.rename(admin, id, name)
     return this.workspaces.adminGet(admin, id)
   }
 
@@ -53,13 +55,9 @@ export class AdminWorkspacesController {
   async setLists(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body()
-    body: {
-      tagTypes?: unknown
-      receiptsAddress?: unknown
-      readEmailedReceiptsWithAi?: unknown
-    }
+    @Body() given: unknown
   ): Promise<AdminWorkspaceDetail> {
+    const body = parseListsBody(given)
     const admin = await this.callers.loadAdmin(userId)
     // The receipts address is the owners' alone (WorkspacesService.setReceiptsAddress): refused before any list saves.
     if (body.receiptsAddress !== undefined)
@@ -78,10 +76,11 @@ export class AdminWorkspacesController {
   async addMember(
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body() body: { email: string; displayName?: string; role: Role }
+    @Body() body: unknown
   ): Promise<AdminWorkspaceDetail> {
+    const input = parseMemberBody(body)
     const admin = await this.callers.loadAdmin(userId)
-    await this.workspaces.addMember(admin, id, body)
+    await this.workspaces.addMember(admin, id, input)
     return this.workspaces.adminGet(admin, id)
   }
 
@@ -90,10 +89,11 @@ export class AdminWorkspacesController {
     @UserId() userId: string,
     @Param('id') id: string,
     @Param('userId') member: string,
-    @Body() body: { role: Role }
+    @Body() body: unknown
   ): Promise<AdminWorkspaceDetail> {
+    const role = parseRoleBody(body)
     const admin = await this.callers.loadAdmin(userId)
-    await this.workspaces.setRole(admin, id, member, body.role)
+    await this.workspaces.setRole(admin, id, member, role)
     return this.workspaces.adminGet(admin, id)
   }
 
