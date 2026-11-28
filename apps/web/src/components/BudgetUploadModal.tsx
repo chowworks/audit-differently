@@ -42,6 +42,8 @@ export function BudgetUploadModal({
   const [checked, setChecked] = useState<BudgetFileDto | null>(null)
   // The file that check was made of: Save sends this one, never what the picker holds by then.
   const [checkedFile, setCheckedFile] = useState<File | null>(null)
+  // Save was refused because the budget changed since the check: the check shown is the one Save made.
+  const [changedSince, setChangedSince] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -76,9 +78,11 @@ export function BudgetUploadModal({
         onSaved(await api.upload<BudgetUploadChange>(`${base}/upload`, form(checkedFile!)))
       } catch (e) {
         // The budget changed since the check: show the check as it stands now, with every problem and its row.
+        // The check's own summary says what happened, so the server's message is not shown a second time.
         const fresh = refusedCheck(e)
-        if (fresh) setChecked(fresh)
-        throw e
+        if (!fresh) throw e
+        setChecked(fresh)
+        setChangedSince(true)
       }
     })
 
@@ -142,9 +146,9 @@ export function BudgetUploadModal({
       {problems.length > 0 && (
         <div className="mb-4">
           <ErrorNote
-            message={`The file has ${problems.length} ${problems.length === 1 ? 'problem' : 'problems'}. Correct ${problems.length === 1 ? 'it' : 'them'} in the file, then upload it again.`}
+            message={`${changedSince ? 'The budget changed since you checked the file: the file now has' : 'The file has'} ${problems.length} ${problems.length === 1 ? 'problem' : 'problems'}. Correct ${problems.length === 1 ? 'it' : 'them'} in the file, then upload it again.`}
           />
-          <ul className="mt-1 grid gap-1 text-sm text-danger">
+          <ul className="mt-2 grid gap-1 font-bold text-danger">
             {problems.map((p, i) => (
               <li key={i}>
                 {p.row === null ? '' : `Row ${p.row}: `}
@@ -177,6 +181,18 @@ export function BudgetUploadModal({
                 <td>{ACTION[r.action]}</td>
               </tr>
             ))}
+            {removed.map((name) => (
+              <tr key={`removed-${name}`}>
+                <td className="text-sm text-soft">–</td>
+                <td className="font-semibold text-soft line-through">{name}</td>
+                <td colSpan={3} className="text-sm text-soft">
+                  Not in the file
+                </td>
+                <td>
+                  <Chip tone="danger">Removed</Chip>
+                </td>
+              </tr>
+            ))}
             <tr>
               <td></td>
               <td className="font-bold">Total</td>
@@ -187,12 +203,6 @@ export function BudgetUploadModal({
           </tbody>
         </table>
       </div>
-      {removed.length > 0 && (
-        <p className="mt-3 text-sm">
-          <span className="font-semibold">Removed by Save, as the file leaves them out:</span>{' '}
-          {removed.join(', ')}
-        </p>
-      )}
       {problems.length === 0 && !changes && (
         <p className="mt-3 text-sm text-soft">The file matches the budget: Save changes nothing.</p>
       )}
@@ -205,6 +215,7 @@ export function BudgetUploadModal({
           onClick={() => {
             setChecked(null)
             setCheckedFile(null)
+            setChangedSince(false)
             setFile(null)
           }}
           disabled={busy}
