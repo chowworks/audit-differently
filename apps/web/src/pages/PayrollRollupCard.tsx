@@ -436,19 +436,14 @@ function RowModal({
   const [error, setError] = useState<string | null>(null)
   const label = kind ? PAYROLL_BUDGET_KIND_LABELS[kind] : 'Payroll'
 
-  // The line names of the engagements the row applies to (every engagement's when it applies to all or none is
-  // ticked yet), each once (a line is found by its name, case aside), plus any already ticked.
+  // Every engagement's line names, each once (a line is found by its name, case aside). A name the ticked engagements
+  // don't have stays offered: picking it is warned about under Applies to (owner's decision, 2026-11-28).
   const lineNames = useMemo(() => {
     const seen = new Map<string, string>()
-    const on =
-      every || !picked.length
-        ? data.engagements
-        : data.engagements.filter((e) => picked.includes(e.id))
-    for (const e of on)
+    for (const e of data.engagements)
       for (const l of e.lines) if (!seen.has(lineKey(l.name))) seen.set(lineKey(l.name), l.name)
-    for (const n of names) if (!seen.has(lineKey(n))) seen.set(lineKey(n), n)
     return [...seen.values()].sort((a, b) => a.localeCompare(b))
-  }, [data.engagements, every, picked, names])
+  }, [data.engagements])
 
   const of = data.entries.filter((e) => e.kind === kind)
   // The engagements with a row of their own for the category, other than this one.
