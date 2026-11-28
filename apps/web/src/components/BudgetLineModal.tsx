@@ -302,7 +302,7 @@ export function BudgetLineModal({
                   {n}
                 </option>
               ))}
-              <option value={NOWHERE}>Not on the budget</option>
+              <option value={NOWHERE}>Not linked to a Budget Line Item</option>
             </select>
           </Field>
         ))}

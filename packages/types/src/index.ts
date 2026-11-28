@@ -124,10 +124,10 @@ export interface BudgetChange extends EngagementDetail {
 
 // ── Payroll budget line items (owner's decisions, 2026-11-27, #138) ──────────
 // Which budget line holds each kind of payroll from the match. The workspace lists, per kind, the budget line NAMES that
-// hold it (no order: any of them is that kind's line), or says "Not on the budget"; an engagement may have its own
-// entry (one of its lines, or Not on the budget), which wins. Kept on the QuickBooks names table as the list 'payroll'.
+// hold it (no order: any of them is that kind's line), or says "Not linked to a Budget Line Item"; an engagement may have its own
+// entry (one of its lines, or Not linked to a Budget Line Item), which wins. Kept on the QuickBooks names table as the list 'payroll'.
 
-/** One entry: a kind of payroll to a budget line's name, or nowhere (null: Not on the budget). */
+/** One entry: a kind of payroll to a budget line's name, or nowhere (null: Not linked to a Budget Line Item). */
 export interface PayrollRollupEntry {
   kind: PayrollBudgetKind
   /** null: one of the workspace's entries (several names per kind); otherwise that engagement's own (one). */
@@ -141,8 +141,8 @@ export const payrollRowKey = (kind: PayrollBudgetKind, lineName?: string | null)
 
 /**
  * Where an engagement's kind of payroll lands, and why (owner's decisions, 2026-11-27):
- * - `own`: the engagement's own entry (its line, or none for Not on the budget);
- * - `nowhere`: the workspace says Not on the budget;
+ * - `own`: the engagement's own entry (its line, or none for Not linked to a Budget Line Item);
+ * - `nowhere`: the workspace says Not linked to a Budget Line Item;
  * - `list`: exactly one of its lines has a listed name;
  * - `report-line`: none has, and exactly one of its lines is on the kind's report line (as a new line took it before);
  * - `unclear`: two listed names, or no listed name and no single line on the report line. It lands on no line until
@@ -183,7 +183,7 @@ export function payrollPlace<L extends { name: string; reportLine: string }>(
   return { line: null, by: 'unclear', choices: lines }
 }
 
-/** The line that holds a kind of an engagement's payroll, or none (Not on the budget, or not chosen yet). */
+/** The line that holds a kind of an engagement's payroll, or none (Not linked to a Budget Line Item, or not chosen yet). */
 export function payrollHolder<L extends { name: string; reportLine: string }>(
   kind: PayrollBudgetKind,
   engagementId: string,
@@ -203,7 +203,7 @@ export interface PayrollRollupDto {
 }
 
 /**
- * A kind's entries saved as a whole: the workspace's names (null: Not on the budget; none: each engagement's line of the
+ * A kind's entries saved as a whole: the workspace's names (null: Not linked to a Budget Line Item; none: each engagement's line of the
  * kind's report line), and each engagement's own (none: as the workspace says).
  */
 export interface PayrollRollupInput {

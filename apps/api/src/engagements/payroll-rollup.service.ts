@@ -20,7 +20,7 @@ import { allow, workspaceRole, type Caller } from '../core/caller'
 import { PrismaService } from '../prisma/prisma.service'
 import { BudgetService } from './budget.service'
 
-const NOWHERE = 'Not on the budget'
+const NOWHERE = 'Not linked to a Budget Line Item'
 
 /**
  * The months a move of this kind puts back to draft (owner's decision, 2026-11-27): only those whose numbers change.
@@ -44,7 +44,7 @@ function reopens(
 /**
  * Payroll budget line items (owner's decisions, 2026-11-27, #138): which budget line holds each kind of payroll from the
  * match, by the lines' names (several, no order), for the workspace, with an engagement's own entry. Kept on the
- * QuickBooks names table as the list 'payroll' (a row's name is the kind; Unallowable is "Not on the budget"). An
+ * QuickBooks names table as the list 'payroll' (a row's name is the kind; Unallowable is "Not linked to a Budget Line Item"). An
  * engagement whose line would be unclear (two listed names, or none fits) has to be given its own entry before Save.
  * Saving a kind puts every
  * engagement's lines in step at once (`BudgetService.applyRollup`), so an engagement whose line changes has the closed and
@@ -140,7 +140,7 @@ export class PayrollRollupService {
     }
     let every: string[] | null = null
     if (g.every === undefined)
-      problems.push('Choose the budget lines that hold it, or Not on the budget')
+      problems.push('Choose the budget lines that hold it, or Not linked to a Budget Line Item')
     else if (g.every !== null) {
       every = []
       const keys = new Set<string>()

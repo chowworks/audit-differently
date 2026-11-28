@@ -133,7 +133,7 @@ describe('PayrollRollupService', () => {
       ],
       unclear: [],
     })
-    // Not on the budget for every engagement: both lose it.
+    // Not linked to a Budget Line Item for every engagement: both lose it.
     const none = await s.preview(member('owner'), W, 'staff-pay', { every: null, own: [] })
     expect(none.changes.map((c) => [c.name, c.to])).toEqual([
       ['Adult IT', null],
@@ -203,7 +203,7 @@ describe('PayrollRollupService', () => {
       description: 'Changed where Staff pay goes on the budget',
       changes: expect.arrayContaining([
         { field: 'Staff pay: every engagement', after: 'Staff Salaries, Personnel' },
-        { field: 'Staff pay: Adult IT', after: 'Not on the budget' },
+        { field: 'Staff pay: Adult IT', after: 'Not linked to a Budget Line Item' },
         { field: 'Imported payroll rows moved', after: '2' },
       ]),
     })

@@ -89,7 +89,7 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
 - **Payroll on the budget** (owner's decisions, 2026-10-20): the pay the payroll match proves is the staff and
   participant pay on the budget. Which line holds staff pay, staff taxes, participant pay and participant taxes is
   the **payroll rollup** (#138, owner's decisions, 2026-11-27): under Configuration Data (Map Payroll Budget Line
-  Items), each payroll category to a list of budget line NAMES (no order: any of them) or "Not on the budget", for the
+  Items, laid out and edited row by row as Map Financial Categories, with Applies to), each payroll category to a list of budget line NAMES (no order: any of them) or "Not linked to a Budget Line Item", for the
   workspace, with an engagement's own line, which wins (`LineAlias`, list 'payroll'; migration `20261128000100` copied
   the old ticks once, so every engagement's pay stayed where it was). Lookup is `payrollPlace` in `packages/types`: own
   line; the one listed name the engagement has; else its one line on the kind's report line; else **unclear** (two
