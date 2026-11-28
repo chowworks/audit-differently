@@ -102,6 +102,9 @@ function inputOf(
   }
 }
 
+/** The start of a row whose names don't fit an engagement: only this part is red and bold (owner's decision, 2026-11-28). */
+const INVALID = 'Invalid configuration:'
+
 /** "A", "A or B", "A, B or C". */
 function orList(items: string[], word: 'and' | 'or'): string {
   return items.length < 2
@@ -467,9 +470,7 @@ function RowModal({
           : !nowhere && names.length
             ? (() => {
                 const off = picked.filter((id) => !lineOn(data, id, names))
-                return off.length
-                  ? `Invalid configuration: ${off.map((id) => offWords(id)).join(' ')}`
-                  : null
+                return off.length ? `${INVALID} ${off.map((id) => offWords(id)).join(' ')}` : null
               })()
             : null,
   }
@@ -609,7 +610,16 @@ function RowModal({
           </div>
           {shown(problems.applies, every || picked.length > 0) && (
             <small className="ad-field-error" role="alert">
-              {problems.applies}
+              {problems.applies!.startsWith(INVALID) ? (
+                <>
+                  {INVALID}{' '}
+                  <span style={{ color: 'var(--ink)', fontWeight: 400 }}>
+                    {problems.applies!.slice(INVALID.length).trimStart()}
+                  </span>
+                </>
+              ) : (
+                problems.applies
+              )}
             </small>
           )}
         </fieldset>
