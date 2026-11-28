@@ -183,7 +183,9 @@ export function MultiSelect({
         </span>
       </button>
       {open && at && (
-        <div className="ad-ms-pop" style={at}>
+        // A click in the list is no click on a <label> the picker sits in (a Field): the browser would pass it on to the
+        // trigger, which closes the list after every tick.
+        <div className="ad-ms-pop" style={at} onClick={(e) => e.preventDefault()}>
           <input
             ref={search}
             type="search"
