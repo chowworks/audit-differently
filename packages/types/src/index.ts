@@ -192,8 +192,8 @@ export interface PayrollRollupDto {
 }
 
 /**
- * A kind's entries saved as a whole: the workspace's names (null: Not linked to a Budget Line Item; none: each engagement's line of the
- * kind's report line), and each engagement's own (none: as the workspace says).
+ * A kind's entries saved as a whole: the workspace's names (null: Not linked to a Budget Line Item; none listed: every
+ * engagement without its own is unclear), and each engagement's own (none: as the workspace says).
  */
 export interface PayrollRollupInput {
   every: string[] | null

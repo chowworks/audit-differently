@@ -918,6 +918,7 @@ function ExpensesSection({
                   code={k.code}
                   message={k.message}
                   workspaceId={r.engagement.workspace.id}
+                  link={r.can.edit || r.can.reopen || r.can.close || r.can.submit}
                 />
               </span>
               {k.participantId && (

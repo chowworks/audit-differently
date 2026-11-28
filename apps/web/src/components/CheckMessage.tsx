@@ -11,14 +11,17 @@ export function CheckMessage({
   code,
   message,
   workspaceId,
+  link = true,
 }: {
   code: string
   message: string
   workspaceId: string
+  /** False for a reader who can't open the card (an auditor): the words stay, without the link. */
+  link?: boolean
 }) {
   const from = message.indexOf(PATH_START)
   const to = message.indexOf(PATH_END, from)
-  if (code !== 'payroll-line-unclear' || from < 0 || to < 0) return <>{message}</>
+  if (!link || code !== 'payroll-line-unclear' || from < 0 || to < 0) return <>{message}</>
   const end = to + PATH_END.length
   return (
     <>

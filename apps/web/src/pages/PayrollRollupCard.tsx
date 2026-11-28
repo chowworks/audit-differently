@@ -135,6 +135,7 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
   const [editing, setEditing] = useState<{ row: Row | null; start?: Partial<Row> } | null>(null)
   const [removing, setRemoving] = useState<Row | null>(null)
   const [done, setDone] = useState<string | null>(null)
+  const [back, setBack] = useState<string | null>(null)
 
   const { hash } = useLocation()
   useEffect(() => {
@@ -163,14 +164,19 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
         })
       : []
   )
+  // The row of its own an unclear engagement already has (its line was removed): Choose edits that row.
+  const ownRow = (u: { kind: PayrollBudgetKind; id: string }) =>
+    rows.find((r) => r.kind === u.kind && !r.every && r.engagementIds.includes(u.id))
   const saved = (out: PayrollRollupSaved, what: string) => {
     setData(out)
     setEditing(null)
     setRemoving(null)
-    const back = out.backToDraft.map(
+    const months = out.backToDraft.map(
       (m) => `${m.engagementName} ${periodLabel(m.period)} (was ${m.was})`
     )
-    setDone(`${what}${back.length ? ` Back to draft: ${back.join(', ')}.` : ''}`)
+    setDone(what)
+    // Months that went back to draft are a standing state: that line stays (CLAUDE.md, Notice).
+    setBack(months.length ? `Back to draft: ${months.join(', ')}.` : null)
   }
 
   return (
@@ -194,6 +200,7 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
           {done}
         </Notice>
       )}
+      {back && <Notice tone="warn">{back}</Notice>}
       {data && (
         <div className="ad-tablewrap">
           <table className="ad-table">
@@ -255,17 +262,23 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
           <ul className="ml-5 list-disc">
             {unclear.map((u) => (
               <li key={`${u.kind}-${u.id}`}>
-                {u.choices.length > 1
-                  ? `${u.name}: ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()} could go to ${u.choices.join(' or ').replace(/\.?$/, '.')}`
-                  : `${u.name} has none of the budget line items listed for ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}.`}{' '}
+                {ownRow(u)
+                  ? `${u.name}'s own row for ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()} names a budget line item it no longer has.`
+                  : u.choices.length > 1
+                    ? `${u.name}: ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()} could go to ${u.choices.join(' or ').replace(/\.?$/, '.')}`
+                    : `${u.name} has none of the budget line items listed for ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}.`}{' '}
                 <button
                   type="button"
                   className="wpd-linkbtn"
                   onClick={() =>
-                    setEditing({
-                      row: null,
-                      start: { kind: u.kind, every: false, engagementIds: [u.id] },
-                    })
+                    setEditing(
+                      ownRow(u)
+                        ? { row: ownRow(u)! }
+                        : {
+                            row: null,
+                            start: { kind: u.kind, every: false, engagementIds: [u.id] },
+                          }
+                    )
                   }
                 >
                   Choose
@@ -308,6 +321,7 @@ function usePreview(path: string, kind: PayrollBudgetKind, input: PayrollRollupI
   const body = JSON.stringify(input)
   useEffect(() => {
     setPreview(null)
+    setError(null)
     if (!input) return
     let stale = false
     api
@@ -322,7 +336,13 @@ function usePreview(path: string, kind: PayrollBudgetKind, input: PayrollRollupI
   return { preview, error }
 }
 
-/** The engagements whose line moves, and the months that go back to draft, before Save. */
+/** The choices made for engagements the form still asks about; one left from an earlier form is dropped. */
+function stillAsked(chosen: Record<string, string>, asked: PayrollRollupPreviewDto) {
+  return Object.fromEntries(
+    Object.entries(chosen).filter(([id]) => asked.unclear.some((u) => u.engagementId === id))
+  )
+}
+
 /**
  * What Save does that the form doesn't show (owner's wording, 2026-11-28): pay already on a line that moves, and closed or
  * submitted months that go back to draft. Settling a line nobody had chosen says nothing.
@@ -498,18 +518,20 @@ function RowModal({
   ].filter(Boolean)
   const shown = (p: string | null, filled: boolean) => (tried || filled ? p : null)
 
+  const next = { every, engagementIds: picked, names: nowhere ? null : names }
+  // The engagements to ask about come from the form alone, so a choice never takes its own question away; Save and its
+  // warnings use the form plus the choices still asked for.
+  const asked = usePreview(
+    path,
+    kind || 'staff-pay',
+    kind && !left.length ? inputOf(data, kind, row, next) : null
+  )
   const input =
-    kind && !left.length
-      ? inputOf(
-          data,
-          kind,
-          row,
-          { every, engagementIds: picked, names: nowhere ? null : names },
-          chosen
-        )
+    kind && !left.length && asked.preview
+      ? inputOf(data, kind, row, next, stillAsked(chosen, asked.preview))
       : null
   const { preview, error: previewError } = usePreview(path, kind || 'staff-pay', input)
-  const waiting = !!preview && preview.unclear.some((u) => !chosen[u.engagementId])
+  const waiting = !!asked.preview && asked.preview.unclear.some((u) => !chosen[u.engagementId])
   const save = async () => {
     setTried(true)
     if (!input || !kind || !preview || waiting) return
@@ -537,7 +559,7 @@ function RowModal({
       onClose={onClose}
       wide
     >
-      <ErrorNote message={error ?? previewError} />
+      <ErrorNote message={error ?? asked.error ?? previewError} />
       {tried && left.length > 0 && (
         <p className="ad-field-error-sum" role="status">
           Still to fix: {left.join(', ')}.
@@ -636,9 +658,9 @@ function RowModal({
             </p>
           </div>
         )}
-        {preview && kind && (
+        {preview && asked.preview && kind && (
           <>
-            <Chooser label={label} preview={preview} chosen={chosen} setChosen={setChosen} />
+            <Chooser label={label} preview={asked.preview} chosen={chosen} setChosen={setChosen} />
             <Changes label={label} preview={preview} />
           </>
         )}
@@ -647,7 +669,11 @@ function RowModal({
         <Button kind="ghost" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
-        <Button kind="navy" onClick={() => void save()} disabled={busy || (!!input && !preview)}>
+        <Button
+          kind="navy"
+          onClick={() => void save()}
+          disabled={busy || (!!kind && !left.length && !preview)}
+        >
           Save
         </Button>
       </div>
@@ -655,7 +681,7 @@ function RowModal({
   )
 }
 
-/** Removing a row: its engagements go back to the every-engagement row (or, for that row, to each one's report line). */
+/** Removing a row: its engagements go back to the every-engagement row (or, for that row, have no line until someone chooses). */
 function RemoveModal({
   path,
   data,
@@ -676,14 +702,18 @@ function RemoveModal({
   const [chosen, setChosen] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const input = inputOf(data, row.kind, row, null, chosen)
+  const asked = usePreview(path, row.kind, inputOf(data, row.kind, row, null))
+  const input = asked.preview
+    ? inputOf(data, row.kind, row, null, stillAsked(chosen, asked.preview))
+    : null
   const { preview, error: previewError } = usePreview(path, row.kind, input)
-  const waiting = !preview || preview.unclear.some((u) => !chosen[u.engagementId])
+  const waiting =
+    !preview || !asked.preview || asked.preview.unclear.some((u) => !chosen[u.engagementId])
   const remove = async () => {
     setBusy(true)
     setError(null)
     try {
-      onSaved(await api.put<PayrollRollupSaved>(`${path}/${row.kind}`, input))
+      if (input) onSaved(await api.put<PayrollRollupSaved>(`${path}/${row.kind}`, input))
     } catch (e) {
       setError((e as Error).message)
       setBusy(false)
@@ -691,7 +721,7 @@ function RemoveModal({
   }
   return (
     <Modal title="Remove this row?" onClose={onClose} wide>
-      <ErrorNote message={error ?? previewError} />
+      <ErrorNote message={error ?? asked.error ?? previewError} />
       <div className="grid gap-3 text-sm">
         <p className="font-bold">
           <span aria-hidden="true">⚠️</span> {label} will no longer map to{' '}
@@ -703,9 +733,9 @@ function RemoveModal({
             : 'They go back to the every-engagement row.'}{' '}
           The removal is recorded in the workspace history.
         </p>
-        {preview && (
+        {preview && asked.preview && (
           <>
-            <Chooser label={label} preview={preview} chosen={chosen} setChosen={setChosen} />
+            <Chooser label={label} preview={asked.preview} chosen={chosen} setChosen={setChosen} />
             <Changes label={label} preview={preview} />
           </>
         )}

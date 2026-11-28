@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
+import { Prisma } from '@prisma/client'
 import {
   PAYROLL_BUDGET_KINDS,
   PAYROLL_BUDGET_KIND_LABELS,
@@ -280,64 +286,70 @@ export class PayrollRollupService {
     const label = PAYROLL_BUDGET_KIND_LABELS[k]
     const names = new Map(read.engagements.map((e) => [e.id, e.name]))
     const backToDraft: PayrollRollupSaved['backToDraft'] = []
-    const touched: string[] = []
     let moved = 0
-    await this.log.change(
-      caller,
-      async (tx) => {
-        await tx.lineAlias.deleteMany({ where: { workspaceId, list: 'payroll', name: k } })
-        const row = (engagementId: string | null, budgetLineName: string | null) => ({
+    try {
+      await this.log.change(
+        caller,
+        async (tx) => {
+          await tx.lineAlias.deleteMany({ where: { workspaceId, list: 'payroll', name: k } })
+          const row = (engagementId: string | null, budgetLineName: string | null) => ({
+            workspaceId,
+            engagementId,
+            list: 'payroll',
+            name: k,
+            key: payrollRowKey(k, engagementId ? null : budgetLineName),
+            budgetLineName,
+            unallowable: budgetLineName === null,
+            changedById: caller.userId,
+          })
+          await tx.lineAlias.createMany({
+            data: [
+              ...(input.every === null ? [row(null, null)] : input.every.map((n) => row(null, n))),
+              ...input.own.map((o) => row(o.engagementId, o.budgetLineName)),
+            ],
+          })
+          for (const e of read.engagements) {
+            const r = await this.budget.applyRollup(tx, caller, { ...e, workspaceId }, true)
+            if (!r.changed) continue
+            moved += r.rows.moved
+            for (const m of r.backed)
+              backToDraft.push({ engagementName: e.name, period: m.period, was: m.was })
+          }
+        },
+        () => ({
           workspaceId,
-          engagementId,
-          list: 'payroll',
-          name: k,
-          key: payrollRowKey(k, engagementId ? null : budgetLineName),
-          budgetLineName,
-          unallowable: budgetLineName === null,
-          changedById: caller.userId,
-        })
-        await tx.lineAlias.createMany({
-          data: [
-            ...(input.every === null ? [row(null, null)] : input.every.map((n) => row(null, n))),
-            ...input.own.map((o) => row(o.engagementId, o.budgetLineName)),
+          resource: 'workspace',
+          subjectId: workspaceId,
+          action: 'update',
+          description: `Changed where ${label} goes on the budget`,
+          changes: [
+            {
+              field: `${label}: every engagement`,
+              after: input.every === null ? NOWHERE : input.every.join(', ') || 'None listed',
+            },
+            ...input.own.map((o) => ({
+              field: `${label}: ${names.get(o.engagementId)}`,
+              after: o.budgetLineName ?? NOWHERE,
+            })),
+            ...(changed.length
+              ? [{ field: 'Engagements whose line changed', after: String(changed.length) }]
+              : []),
+            ...(moved ? [{ field: 'Imported payroll rows moved', after: String(moved) }] : []),
           ],
-        })
-        for (const e of read.engagements) {
-          const r = await this.budget.applyRollup(tx, caller, { ...e, workspaceId }, true)
-          if (!r.changed) continue
-          touched.push(e.id)
-          moved += r.rows.moved
-          for (const m of r.backed)
-            backToDraft.push({ engagementName: e.name, period: m.period, was: m.was })
-        }
-      },
-      () => ({
-        workspaceId,
-        resource: 'workspace',
-        subjectId: workspaceId,
-        action: 'update',
-        description: `Changed where ${label} goes on the budget`,
-        changes: [
-          {
-            field: `${label}: every engagement`,
-            after:
-              input.every === null
-                ? NOWHERE
-                : input.every.join(', ') || 'The line of its report line',
-          },
-          ...input.own.map((o) => ({
-            field: `${label}: ${names.get(o.engagementId)}`,
-            after: o.budgetLineName ?? NOWHERE,
-          })),
-          ...(changed.length
-            ? [{ field: 'Engagements whose line changed', after: String(changed.length) }]
-            : []),
-          ...(moved ? [{ field: 'Imported payroll rows moved', after: String(moved) }] : []),
-        ],
-      }),
-      { timeout: 30_000 }
-    )
-    for (const id of touched) await this.budget.recheck(id)
+        }),
+        { timeout: 30_000 }
+      )
+    } catch (e) {
+      // Two saves of the same category at once: the second finds the first's rows (unique key) and is refused in words.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
+        throw new ConflictException(
+          `${label} was changed by someone else just now. Reload the page and try again.`
+        )
+      throw e
+    }
+    // Every engagement is checked again, not only those whose ticks changed: going from unclear to Not linked changes
+    // no tick, and its stored "Workspace configuration issue" must clear.
+    for (const e of read.engagements) await this.budget.recheck(e.id)
     return { ...this.dtoOf(await this.read(workspaceId)), backToDraft }
   }
 }

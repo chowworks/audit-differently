@@ -104,10 +104,21 @@ async function payrollUnclearOf(
     wexPayments: unknown[]
   }
 ): Promise<{ label: string; choices: string[]; engagement: string; workspace: string }[]> {
+  // A staff line Save wrote from payroll details says its kind in its key (`staff:<id>:<run end>:pay|taxes`,
+  // `participants:<run end>:taxes`); a books' payroll row says it in payrollKind.
+  const keyKind = (key: string | null): PayrollBudgetKind | null =>
+    !key
+      ? null
+      : key.startsWith('participants:')
+        ? 'participant-taxes'
+        : key.startsWith('staff:')
+          ? key.endsWith(':taxes')
+            ? 'staff-taxes'
+            : 'staff-pay'
+          : null
   const has = (k: PayrollBudgetKind) =>
-    k.startsWith('participant')
-      ? report.wexPayments.length > 0 || report.expenses.some((e) => e.payrollKind === k)
-      : report.expenses.some((e) => e.payrollKind === k || (k === 'staff-pay' && !!e.payrollKey))
+    (k === 'participant-pay' && report.wexPayments.length > 0) ||
+    report.expenses.some((e) => e.payrollKind === k || keyKind(e.payrollKey) === k)
   const kinds = PAYROLL_BUDGET_KINDS.filter(has)
   if (!kinds.length) return []
   const rows = await prisma.lineAlias.findMany({

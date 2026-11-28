@@ -144,11 +144,6 @@ export function MultiSelect({
       e.preventDefault()
       const o = shown[active] ?? (shown.length === 1 ? shown[0] : undefined)
       if (o) tick(o.value)
-    } else if (e.key === 'Escape') {
-      // Only this list closes, not a modal it sits in.
-      e.preventDefault()
-      e.stopPropagation()
-      close(true)
     } else if (e.key === 'Tab') setOpen(false)
   }
 
