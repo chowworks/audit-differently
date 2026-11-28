@@ -44,6 +44,12 @@ export class BodyReader {
       string | null | undefined
   }
 
+  /** A field that is true or false. */
+  boolean(field: string, allow: Allow = {}): boolean | null | undefined {
+    return this.read(field, allow, 'true or false', (v) => typeof v === 'boolean') as
+      boolean | null | undefined
+  }
+
   /** A field that is a number, or text that the service turns into a number (`''` for none). */
   numberLike(field: string, allow: Allow = {}): number | string | null | undefined {
     return this.read(

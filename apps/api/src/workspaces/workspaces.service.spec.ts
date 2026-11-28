@@ -189,6 +189,16 @@ describe('WorkspacesService', () => {
     await expect(s.addMember(owner, W, { ...invite, role: 'funder' as Role })).rejects.toThrow(
       BadRequestException
     )
+    // An address that is not one, and a long run of dots that a quadratic pattern would take seconds over: refused
+    // at once.
+    for (const email of ['a@b..org', 'a@b.org.', 'a@b', `!@${'!.'.repeat(50_000)}@`]) {
+      const started = Date.now()
+      await expect(s.addMember(owner, W, { ...invite, email })).rejects.toThrow(
+        'An email address is needed'
+      )
+      expect(Date.now() - started).toBeLessThan(200)
+    }
+    await s.addMember(owner, W, { ...invite, email: 'sam@sub.example.org' })
     await expect(s.setRole(owner, W, 'u-bookkeeper-ws-1', 'funder' as Role)).rejects.toThrow(
       BadRequestException
     )
