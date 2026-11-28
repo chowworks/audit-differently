@@ -319,32 +319,40 @@ function usePreview(path: string, kind: PayrollBudgetKind, input: PayrollRollupI
 }
 
 /** The engagements whose line moves, and the months that go back to draft, before Save. */
+/**
+ * What Save does that the form doesn't show (owner's wording, 2026-11-28): pay already on a line that moves, and closed or
+ * submitted months that go back to draft. Settling a line nobody had chosen says nothing.
+ */
 function Changes({ label, preview }: { label: string; preview: PayrollRollupPreviewDto }) {
+  const moved = preview.changes.filter((c) => c.from !== null)
   const months = preview.changes.flatMap((c) => c.backToDraft.map((m) => ({ ...m, name: c.name })))
-  if (!preview.changes.length)
-    return <p className="text-sm text-soft">No engagement&apos;s line changes.</p>
+  if (!moved.length && !months.length) return null
+  const them = months.length === 1 ? 'it' : 'them'
   return (
     <div className="grid gap-2 text-sm">
-      <p className="font-bold">
-        <span aria-hidden="true">⚠️</span> Save moves {label.toLowerCase()} on{' '}
-        {preview.changes.length === 1 ? 'one engagement' : `${preview.changes.length} engagements`},
-        with its payroll rows already imported:
-      </p>
-      <ul className="ml-5 list-disc">
-        {preview.changes.map((c) => (
-          <li key={c.engagementId}>
-            {c.name}: {nameOr(c.from)} → {nameOr(c.to)}
-          </li>
-        ))}
-      </ul>
+      {moved.length > 0 && (
+        <div>
+          <p className="font-bold">
+            <span aria-hidden="true">⚠️</span> Warning: Modifying this configuration shifts{' '}
+            {label.toLowerCase()} on other engagements:
+          </p>
+          <ul className="ml-5 list-disc">
+            {moved.map((c) => (
+              <li key={c.engagementId}>
+                {c.name}: {nameOr(c.from)} → {nameOr(c.to)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {months.length > 0 && (
         <p className="font-bold">
-          Back to draft:{' '}
-          {months.map((m) => `${m.name} ${periodLabel(m.period)} (${m.was})`).join(', ')}. Approve{' '}
-          {months.length === 1 ? 'its' : 'their'} closing again and send{' '}
-          {months.length === 1 ? 'it' : 'them'} again.
+          <span aria-hidden="true">⚠️</span> Warning: Modifying this configuration will alter{' '}
+          {months.map((m) => `already ${m.was} ${m.name}, ${periodLabel(m.period)}`).join('; ')}, shifting{' '}
+          {them} back to draft.
         </p>
       )}
+      <p>Save to continue.</p>
     </div>
   )
 }
