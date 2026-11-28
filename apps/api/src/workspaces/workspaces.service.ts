@@ -66,7 +66,12 @@ export const roleWord = (role: string) => (ROLE_LABELS[role as Role] ?? role).to
 /** A member as the access log names them: by email (`staffName` in core/caller.ts), never a display name. */
 const personEmail = (u: { email: string | null } | null, id: string) => u?.email || id
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+/**
+ * An email address: something, @, then dot-separated labels with no dot inside them. Each part matches its own
+ * characters only, so the check runs in linear time on any input (the older pattern let two parts both take a dot,
+ * which is quadratic on a long string of them: CodeQL's polynomial regular expression alert).
+ */
+const EMAIL = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/
 
 /** Who runs a workspace's people and lists: its owners, and the platform admin on an admin route. */
 const runs = (caller: Caller, id: string) => !!caller.admin || workspaceRole(caller, id, ['owner'])
