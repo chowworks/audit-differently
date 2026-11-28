@@ -361,10 +361,10 @@ export function WorkspacePage() {
               <ProgramNamesCard workspaceId={w.id} canManage={w.myRole === 'owner'} />
             )}
             {(w.myRole === 'owner' || w.myRole === 'bookkeeper') && (
-              <QuickBooksNamesCard workspaceId={w.id} />
+              <PayrollRollupCard workspaceId={w.id} />
             )}
             {(w.myRole === 'owner' || w.myRole === 'bookkeeper') && (
-              <PayrollRollupCard workspaceId={w.id} />
+              <QuickBooksNamesCard workspaceId={w.id} />
             )}
             <MoreLists w={w} onChange={reload} />
           </div>
