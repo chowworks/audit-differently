@@ -348,8 +348,8 @@ function Changes({ label, preview }: { label: string; preview: PayrollRollupPrev
       {months.length > 0 && (
         <p className="font-bold">
           <span aria-hidden="true">⚠️</span> Warning: Modifying this configuration will alter{' '}
-          {months.map((m) => `already ${m.was} ${m.name}, ${periodLabel(m.period)}`).join('; ')}, shifting{' '}
-          {them} back to draft.
+          {months.map((m) => `already ${m.was} ${m.name}, ${periodLabel(m.period)}`).join('; ')},
+          shifting {them} back to draft.
         </p>
       )}
       <p>Save to continue.</p>
