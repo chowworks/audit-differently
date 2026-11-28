@@ -8,7 +8,8 @@ import {
 import {
   PAYROLL_BUDGET_KINDS,
   PAYROLL_BUDGET_KIND_LABELS,
-  payrollDefaults,
+  payrollPlace,
+  payrollRowKey,
   REPORT_LINES,
   REPORT_LINE_LABELS,
   WRITE_ROLES,
@@ -89,6 +90,22 @@ function reportLineOf(given: unknown): ReportLine {
 }
 
 /**
+ * The first month of an engagement with participant payments, or null: participant pay counts on its line in that month
+ * and in every later month's spending to date, so those are the months a move of participant pay changes.
+ */
+export async function firstParticipantPay(
+  db: Pick<Prisma.TransactionClient, 'monthlyReport'>,
+  engagementId: string
+): Promise<string | null> {
+  const m = await db.monthlyReport.findFirst({
+    where: { engagementId, wexPayments: { some: {} } },
+    orderBy: { period: 'asc' },
+    select: { period: true },
+  })
+  return m?.period ?? null
+}
+
+/**
  * The approved budget of an engagement (step 4): its budget lines as the contract names them, each with the funder form
  * line it rolls up to, its approved amount and a note. Every expense is spent against one of them. Owners and bookkeepers add, change and remove lines; an auditor reads them
  * on the engagement page. The month checks compare spending with these lines, so every change runs them again.
@@ -110,32 +127,24 @@ export class BudgetService {
       amount: amountOf(input?.amount),
       narrative: narrativeOf(input?.narrative),
     }
-    // Unticked by the caller: the kinds its report line takes by default that no other line holds yet.
-    const held = new Set(
-      (
-        await this.prisma.budgetLine.findMany({
-          where: { engagementId },
-          select: { payroll: true },
-        })
-      ).flatMap((l) => l.payroll)
-    )
-    const payroll =
-      input && 'payroll' in input
-        ? payrollOf(input.payroll)
-        : payrollDefaults([{ reportLine: values.reportLine }])[0]!.filter((k) => !held.has(k))
+    // Asked for by the payroll page: these kinds on this line, as the engagement's own entries of the rollup.
+    const asked = input && 'payroll' in input ? payrollOf(input.payroll) : []
     await this.refuseTaken(engagementId, values.name)
     const sortOrder = await this.prisma.budgetLine.count({ where: { engagementId } })
     let backed: Sent = []
     let rows = { moved: 0, stayed: 0 }
+    let payroll: PayrollBudgetKind[] = []
     await this.log.change(
       caller,
       async (tx) => {
-        await this.takePayroll(tx, engagementId, null, payroll)
         const row = await tx.budgetLine.create({
-          data: { engagementId, sortOrder, ...values, payroll },
+          data: { engagementId, sortOrder, ...values, payroll: [] },
         })
+        await this.ownEntries(tx, caller, c, Object.fromEntries(asked.map((k) => [k, values.name])))
         backed = await this.backToDraft(tx, caller, c)
-        rows = await this.moveBooksPayroll(tx, engagementId, row.id, payroll)
+        // The payroll rollup says, by name, which payroll the new line holds (#138).
+        rows = (await this.applyRollup(tx, caller, c, false)).rows
+        payroll = await this.payrollOn(tx, row.id)
         return row
       },
       () => ({
@@ -181,28 +190,19 @@ export class BudgetService {
     }
     if (input && 'amount' in input) values.amount = amountOf(input.amount)
     if (input && 'narrative' in input) values.narrative = narrativeOf(input.narrative)
-    const payroll = input && 'payroll' in input ? payrollOf(input.payroll) : null
+    const asked = input && 'payroll' in input ? payrollOf(input.payroll) : []
     const had = line.payroll as PayrollBudgetKind[]
-    const changes = [
-      ...changesOf(line, values, BUDGET_LINE_FIELDS),
-      ...(payroll && payrollWords(payroll) !== payrollWords(had)
-        ? changesOf(
-            { payroll: payrollWords(had) },
-            { payroll: payrollWords(payroll) },
-            BUDGET_LINE_FIELDS
-          )
-        : []),
-    ]
-    if (changes.length === 0)
+    const changes = changesOf(line, values, BUDGET_LINE_FIELDS)
+    if (changes.length === 0 && asked.every((k) => had.includes(k)))
       return { ...(await this.engagements.detail(caller, c.id)), backToDraft: [] }
     let backed: Sent = []
     let rows = { moved: 0, stayed: 0 }
     let carried = 0
+    let payroll = had
     await this.log.change(
       caller,
       async (tx) => {
-        if (payroll) await this.takePayroll(tx, engagementId, line.id, payroll)
-        // The QuickBooks names that point at its old name follow it (#132).
+        // The QuickBooks names and the payroll rollup's entries that point at its old name follow it (#132, #138).
         if (values.name)
           carried = await carryRename(tx, {
             workspaceId: c.workspaceId,
@@ -211,18 +211,23 @@ export class BudgetService {
             to: values.name,
             changedById: caller.userId,
           })
-        const row = await tx.budgetLine.update({
-          where: { id: line.id },
-          data: { ...values, ...(payroll ? { payroll } : {}) },
-        })
+        const row = await tx.budgetLine.update({ where: { id: line.id }, data: values })
+        const name = values.name ?? line.name
+        // A change to a line never moves its payroll by itself (#138): a kind it held that the list would now put
+        // elsewhere stays on it, as the engagement's own entry.
+        const now = await this.rollupOf(tx, c)
+        const kept = had.filter(
+          (k) => payrollPlace(k, c.id, now.list, now.lines).line?.id !== line.id
+        )
+        await this.ownEntries(
+          tx,
+          caller,
+          c,
+          Object.fromEntries([...kept, ...asked].map((k) => [k, name]))
+        )
         backed = await this.backToDraft(tx, caller, c)
-        if (payroll)
-          rows = await this.moveBooksPayroll(
-            tx,
-            engagementId,
-            line.id,
-            payroll.filter((k) => !had.includes(k))
-          )
+        rows = (await this.applyRollup(tx, caller, c, false)).rows
+        payroll = await this.payrollOn(tx, line.id)
         return row
       },
       () => ({
@@ -231,12 +236,19 @@ export class BudgetService {
         subjectId: c.id,
         action: 'update',
         description: `Changed ${label} on the approved budget of ${c.name}${movedWords(rows, values.name ?? label)}`,
-        changes: carried
-          ? [
-              ...changes,
-              { field: 'QuickBooks names moved to the new name', after: String(carried) },
-            ]
-          : changes,
+        changes: [
+          ...changes,
+          ...(payrollWords(payroll) !== payrollWords(had)
+            ? changesOf(
+                { payroll: payrollWords(had) },
+                { payroll: payrollWords(payroll) },
+                BUDGET_LINE_FIELDS
+              )
+            : []),
+          ...(carried
+            ? [{ field: 'QuickBooks names moved to the new name', after: String(carried) }]
+            : []),
+        ],
       })
     )
     return this.done(caller, c.id, backed)
@@ -254,6 +266,7 @@ export class BudgetService {
       async (tx) => {
         const row = await tx.budgetLine.delete({ where: { id: line.id } })
         backed = await this.backToDraft(tx, caller, c)
+        await this.applyRollup(tx, caller, c, false)
         return row
       },
       {
@@ -268,27 +281,125 @@ export class BudgetService {
     return this.done(caller, c.id, backed)
   }
 
-  /** Each payroll kind on one line of the engagement: the kinds this line takes leave the line that held them. */
-  private async takePayroll(
+  /**
+   * Every kind of payroll onto the line the payroll rollup says (#138), on `tx`: each line's ticks follow the list, and
+   * the books' payroll rows of a kind that moved follow its new line, on draft months only (a locked month keeps its
+   * rows, and the match's lines keep theirs). With `sendBack` (the rollup's own save; a budget change has reopened every
+   * month already), only the months whose numbers change go back to draft (owner's decision, 2026-11-27): participant
+   * pay counts on the line that holds it as each month is read, so moving it reopens the locked months from the first
+   * one with participant payments (`participantPayReopens`); staff pay and taxes reopen nothing.
+   */
+  async applyRollup(
     tx: Prisma.TransactionClient,
-    engagementId: string,
-    lineId: string | null,
-    kinds: PayrollBudgetKind[]
+    caller: Caller,
+    c: { id: string; name: string; workspaceId: string },
+    sendBack: boolean
+  ): Promise<{ changed: boolean; rows: { moved: number; stayed: number }; backed: Sent }> {
+    const { list, lines } = await this.rollupOf(tx, c)
+    const want = new Map(lines.map((l) => [l.id, [] as PayrollBudgetKind[]]))
+    const arrived: { lineId: string; kind: PayrollBudgetKind }[] = []
+    for (const kind of PAYROLL_BUDGET_KINDS) {
+      const holder = payrollPlace(kind, c.id, list, lines).line
+      if (!holder) continue
+      want.get(holder.id)!.push(kind)
+      if (!holder.payroll.includes(kind)) arrived.push({ lineId: holder.id, kind })
+    }
+    const movedKinds = new Set<PayrollBudgetKind>()
+    for (const kind of PAYROLL_BUDGET_KINDS) {
+      const before = lines.find((l) => l.payroll.includes(kind))?.id ?? null
+      const after = [...want].find(([, kinds]) => kinds.includes(kind))?.[0] ?? null
+      if (before !== after) movedKinds.add(kind)
+    }
+    const differs = lines.filter(
+      (l) =>
+        want.get(l.id)!.join() !== PAYROLL_BUDGET_KINDS.filter((k) => l.payroll.includes(k)).join()
+    )
+    const rows = { moved: 0, stayed: 0 }
+    if (!differs.length) return { changed: false, rows, backed: [] }
+    for (const l of differs)
+      await tx.budgetLine.update({ where: { id: l.id }, data: { payroll: want.get(l.id)! } })
+    const from = movedKinds.has('participant-pay') ? await firstParticipantPay(tx, c.id) : null
+    const backed = sendBack && from ? await this.backToDraft(tx, caller, c, from) : []
+    for (const a of arrived) {
+      const r = await this.moveBooksPayroll(tx, c.id, a.lineId, [a.kind])
+      rows.moved += r.moved
+      rows.stayed += r.stayed
+    }
+    return { changed: true, rows, backed }
+  }
+
+  /** The payroll entries of an engagement (the workspace's and its own) and its lines, on `tx`. */
+  private async rollupOf(tx: Prisma.TransactionClient, c: { id: string; workspaceId: string }) {
+    const [entries, lines] = await Promise.all([
+      tx.lineAlias.findMany({
+        where: {
+          workspaceId: c.workspaceId,
+          list: 'payroll',
+          OR: [{ engagementId: null }, { engagementId: c.id }],
+        },
+        select: { name: true, engagementId: true, budgetLineName: true, unallowable: true },
+      }),
+      tx.budgetLine.findMany({
+        where: { engagementId: c.id },
+        orderBy: { sortOrder: 'asc' },
+        select: { id: true, name: true, reportLine: true, payroll: true },
+      }),
+    ])
+    const list = entries.flatMap((e) =>
+      (PAYROLL_BUDGET_KINDS as readonly string[]).includes(e.name)
+        ? [
+            {
+              kind: e.name as PayrollBudgetKind,
+              engagementId: e.engagementId,
+              budgetLineName: e.unallowable ? null : e.budgetLineName,
+            },
+          ]
+        : []
+    )
+    return { list, lines }
+  }
+
+  /**
+   * Kinds of payroll put on a line of this engagement (the payroll page's "Add budget line", or a kind a
+   * change to a line keeps on it), kept as this engagement's own entries. A name must be one of its lines.
+   */
+  private async ownEntries(
+    tx: Prisma.TransactionClient,
+    caller: Caller,
+    c: { id: string; workspaceId: string },
+    to: Partial<Record<PayrollBudgetKind, string | null>>
   ) {
+    const kinds = PAYROLL_BUDGET_KINDS.filter((k) => k in to)
     if (!kinds.length) return
-    const others = await tx.budgetLine.findMany({
-      where: {
-        engagementId,
-        ...(lineId ? { id: { not: lineId } } : {}),
-        payroll: { hasSome: kinds },
-      },
-      select: { id: true, payroll: true },
-    })
-    for (const o of others)
-      await tx.budgetLine.update({
-        where: { id: o.id },
-        data: { payroll: (o.payroll ?? []).filter((k) => !(kinds as string[]).includes(k)) },
+    const { lines } = await this.rollupOf(tx, c)
+    for (const kind of kinds) {
+      const name = to[kind] ?? null
+      const line = name && lines.find((l) => l.name.toLowerCase() === name.toLowerCase())
+      if (name && !line)
+        throw new BadRequestException(`${name} is not a budget line of this engagement`)
+      const data = {
+        name: kind,
+        key: payrollRowKey(kind),
+        budgetLineName: line ? line.name : null,
+        unallowable: !line,
+        changedById: caller.userId,
+        changedAt: new Date(),
+      }
+      const had = await tx.lineAlias.findFirst({
+        where: { workspaceId: c.workspaceId, list: 'payroll', engagementId: c.id, name: kind },
+        select: { id: true },
       })
+      if (had) await tx.lineAlias.update({ where: { id: had.id }, data })
+      else
+        await tx.lineAlias.create({
+          data: { ...data, workspaceId: c.workspaceId, engagementId: c.id, list: 'payroll' },
+        })
+    }
+  }
+
+  private async payrollOn(tx: Prisma.TransactionClient, lineId: string) {
+    const l = await tx.budgetLine.findFirst({ where: { id: lineId }, select: { payroll: true } })
+    return (l?.payroll ?? []) as PayrollBudgetKind[]
   }
 
   /**
@@ -359,10 +470,16 @@ export class BudgetService {
   private async backToDraft(
     tx: Prisma.TransactionClient,
     caller: Caller,
-    c: { id: string; name: string; workspaceId: string }
+    c: { id: string; name: string; workspaceId: string },
+    /** Only this month and later (the payroll rollup's own save). */
+    from?: string
   ): Promise<Sent> {
     const locked = await tx.monthlyReport.findMany({
-      where: { engagementId: c.id, status: { in: ['closed', 'submitted'] } },
+      where: {
+        engagementId: c.id,
+        status: { in: ['closed', 'submitted'] },
+        ...(from ? { period: { gte: from } } : {}),
+      },
       select: { id: true },
       orderBy: { period: 'asc' },
     })
@@ -380,11 +497,16 @@ export class BudgetService {
    * data and the months it put back to draft.
    */
   private async done(caller: Caller, engagementId: string, sent: Sent): Promise<BudgetChange> {
+    await this.recheck(engagementId)
+    return { ...(await this.engagements.detail(caller, engagementId)), backToDraft: sent }
+  }
+
+  /** Every month of the engagement checked again (a budget change, or the payroll rollup's). */
+  async recheck(engagementId: string) {
     const reports = await this.prisma.monthlyReport.findMany({
       where: { engagementId },
       select: { id: true },
     })
     for (const r of reports) await this.checks.refresh(r.id)
-    return { ...(await this.engagements.detail(caller, engagementId)), backToDraft: sent }
   }
 }

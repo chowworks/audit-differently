@@ -262,6 +262,9 @@ const GATED = [
   'POST /api/workspaces/:id/line-aliases/group',
   'PATCH /api/workspaces/:id/line-aliases/:aliasId',
   'DELETE /api/workspaces/:id/line-aliases/:aliasId',
+  'GET /api/workspaces/:id/payroll-rollup',
+  'POST /api/workspaces/:id/payroll-rollup/:kind/preview',
+  'PUT /api/workspaces/:id/payroll-rollup/:kind',
   'GET /api/workspaces/:id/expenses/:period',
   'POST /api/workspaces/:id/expenses/:period/save',
   // The receipts of the books' bills, and an owner's word on a bill (owner's decision, 2026-11-12).

@@ -3,8 +3,6 @@ import {
   aliasKey,
   lineKey,
   type LineAliasesDto,
-  PAYROLL_BUDGET_KINDS,
-  PAYROLL_BUDGET_KIND_LABELS,
   REPORT_LINES,
   REPORT_LINE_LABELS,
   type BudgetChange,
@@ -57,7 +55,7 @@ export function BudgetLineModal({
   engagement: EngagementDetail
   /** The line to change; none to add one. */
   line?: Line
-  /** Opened for payroll no line takes (the payroll page): its report line and the payroll ticked to start with. */
+  /** Opened for payroll no line takes (the payroll page): its report line, and the payroll Save puts on this line. */
   preset?: { reportLine: ReportLine; payroll: PayrollBudgetKind[] }
   onClose: () => void
   /** Gets the engagement as saved, so the page shows it without fetching it again. */
@@ -72,17 +70,8 @@ export function BudgetLineModal({
   )
   const [amount, setAmount] = useState<number | null>(line ? line.amount : null)
   const [narrative, setNarrative] = useState(line?.narrative ?? '')
-  // A new line left as it is takes its report line's payroll by default (the server's); ticked, it is sent.
-  const [payroll, setPayroll] = useState<PayrollBudgetKind[] | null>(
-    preset
-      ? [...new Set([...(line?.payroll ?? []), ...preset.payroll])]
-      : line
-        ? line.payroll
-        : null
-  )
-  /** The other line holding each kind now: ticking it here moves it. */
-  const heldBy = (k: PayrollBudgetKind) =>
-    c.budgetLines.find((b) => b.id !== line?.id && b.payroll.includes(k))
+  // The payroll on a line comes from Map Payroll Budget Line Items (#138); the payroll page asks for its kinds here.
+  const asked = (preset?.payroll ?? []).filter((k) => !line?.payroll.includes(k))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // Renaming a line (decision 6 of #132): the QuickBooks names that go to its old name are shown, and follow it on Save.
@@ -126,7 +115,7 @@ export function BudgetLineModal({
     }
   }
   const base = `/engagements/${c.id}/budget-lines`
-  const body = { name, reportLine, amount, narrative, ...(payroll ? { payroll } : {}) }
+  const body = { name, reportLine, amount, narrative, ...(asked.length ? { payroll: asked } : {}) }
   const save = () =>
     run(() =>
       line
@@ -211,44 +200,6 @@ export function BudgetLineModal({
             </p>
           </div>
         )}
-        <Field
-          label="Payroll from the match on this line"
-          hint={
-            payroll === null
-              ? 'Left as it is, the line takes the payroll its report line holds, if no other line does.'
-              : 'What Save puts here from the month’s payroll match. Each kind is on one line only.'
-          }
-        >
-          <span className="grid gap-1 sm:grid-cols-2">
-            {PAYROLL_BUDGET_KINDS.map((k) => {
-              const other = heldBy(k)
-              const on = (payroll ?? []).includes(k)
-              return (
-                <label key={k} className="flex items-start gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={(e) =>
-                      setPayroll(
-                        PAYROLL_BUDGET_KINDS.filter((x) =>
-                          x === k ? e.target.checked : (payroll ?? []).includes(x)
-                        )
-                      )
-                    }
-                  />
-                  <span>
-                    {PAYROLL_BUDGET_KIND_LABELS[k]}
-                    {other && (
-                      <small className="block text-soft">
-                        {on ? `Moves here from ${other.name}` : `On ${other.name}`}
-                      </small>
-                    )}
-                  </span>
-                </label>
-              )
-            })}
-          </span>
-        </Field>
         <Field label="Note">
           <input
             className={inputClass}

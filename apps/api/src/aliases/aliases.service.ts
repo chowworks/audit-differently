@@ -183,7 +183,9 @@ export class AliasesService {
       throw new ConflictException('That name is on the list already: change that entry instead')
     const target = id ?? same?.id
     if (target) return tx.lineAlias.update({ where: { id: target }, data })
-    if ((await tx.lineAlias.count({ where: { workspaceId } })) >= MAX_LINE_ALIASES)
+    if (
+      (await tx.lineAlias.count({ where: { workspaceId, list: 'quickbooks' } })) >= MAX_LINE_ALIASES
+    )
       throw new BadRequestException(`The list keeps at most ${MAX_LINE_ALIASES} names`)
     try {
       return await tx.lineAlias.create({ data: { ...data, workspaceId, list: 'quickbooks' } })
@@ -227,7 +229,9 @@ export class AliasesService {
     given: unknown
   ): Promise<LineAliasesDto> {
     this.keeper(caller, workspaceId)
-    const row = await this.prisma.lineAlias.findFirst({ where: { id: aliasId, workspaceId } })
+    const row = await this.prisma.lineAlias.findFirst({
+      where: { id: aliasId, workspaceId, list: 'quickbooks' },
+    })
     if (!row) throw new NotFoundException()
     const w = await this.clean(workspaceId, given, row)
     const names = new Map((await this.engagements(workspaceId)).map((e) => [e.id, e.name]))
@@ -282,7 +286,9 @@ export class AliasesService {
 
   async remove(caller: Caller, workspaceId: string, aliasId: string): Promise<LineAliasesDto> {
     this.keeper(caller, workspaceId)
-    const row = await this.prisma.lineAlias.findFirst({ where: { id: aliasId, workspaceId } })
+    const row = await this.prisma.lineAlias.findFirst({
+      where: { id: aliasId, workspaceId, list: 'quickbooks' },
+    })
     if (!row) throw new NotFoundException()
     const names = new Map((await this.engagements(workspaceId)).map((e) => [e.id, e.name]))
     await this.log.change(caller, (tx) => tx.lineAlias.delete({ where: { id: row.id } }), {
@@ -306,7 +312,9 @@ export class AliasesService {
     const g = (given && typeof given === 'object' ? given : {}) as Partial<LineAliasGroupInput>
     const ids = Array.isArray(g.ids) ? g.ids.filter((x): x is string => typeof x === 'string') : []
     const rows = ids.length
-      ? await this.prisma.lineAlias.findMany({ where: { id: { in: ids }, workspaceId } })
+      ? await this.prisma.lineAlias.findMany({
+          where: { id: { in: ids }, workspaceId, list: 'quickbooks' },
+        })
       : []
     if (rows.length !== ids.length) throw new NotFoundException()
     const targets =

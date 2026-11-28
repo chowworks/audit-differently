@@ -113,6 +113,11 @@ export interface RuleMonth {
   highlights?: Partial<Record<string, HighlightField[]>>
   /** ISO date-time of submission, when submitted. */
   submittedAt?: string | null
+  /**
+   * The kinds of payroll this month has whose budget line is unclear (Map Payroll Budget Line Items: two lines it could
+   * be, or none fits), with the lines it could be.
+   */
+  payrollUnclear?: { label: string; choices: string[]; engagement: string; workspace: string }[]
   /** Expenses from earlier months of the same contract, for duplicate detection. */
   earlierExpenses?: Pick<RuleExpense, 'id' | 'vendor' | 'totalCost' | 'date'>[]
 }
@@ -217,6 +222,30 @@ export function booksBillsOf(
     // A line saved before payments were kept says nothing of them.
     billsWithoutPayment: kept.filter((b) => b.payment === null).map(named),
   }
+}
+
+/**
+ * What a month's payroll-line-unclear finding says (owner's wording, 2026-11-28): the problem, then the path to the card
+ * that fixes it. The month page and Month End Close link the path (`PAYROLL_CARD_PATH`).
+ */
+export function payrollUnclearMessage(u: {
+  label: string
+  choices: string[]
+  engagement: string
+  workspace: string
+}): string {
+  const q = u.choices.map((c) => `"${c}"`)
+  const maps =
+    q.length === 0
+      ? 'maps to no budget line'
+      : q.length === 2
+        ? `maps to both ${q[0]} and ${q[1]}`
+        : `maps to ${q.slice(0, -1).join(', ')} and ${q[q.length - 1]}`
+  return (
+    `Workspace configuration issue: ${u.label} ${maps} on ${u.engagement}. Fix it in ` +
+    `Workspace Manager > ${u.workspace} > Configuration Data > Map Payroll Budget Line Items: ` +
+    `press Choose beside ${u.engagement} and pick one.`
+  )
 }
 
 export function runRules(month: RuleMonth): Finding[] {
@@ -401,6 +430,15 @@ export function runRules(month: RuleMonth): Finding[] {
         expenseId: e.id,
         message: `${e.itemNumber} (${e.vendor}, ${money(e.allocatedAmount)}): choose the budget line it is spent against.`,
       })
+
+  // A kind of payroll whose line is unclear counts on no line until someone chooses (owner's decision, 2026-11-27), so
+  // the month can't be closed or submitted meanwhile.
+  for (const u of month.payrollUnclear ?? [])
+    findings.push({
+      code: 'payroll-line-unclear',
+      severity: 'blocker',
+      message: payrollUnclearMessage(u),
+    })
 
   // Budget overrun per budget line, as the contract approved it.
   for (const line of month.budgetLines ?? []) {

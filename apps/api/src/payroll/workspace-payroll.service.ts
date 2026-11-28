@@ -3313,6 +3313,11 @@ export class WorkspacePayrollService {
             },
           },
           wexPayments: { select: { grossAmount: true } },
+          // A payroll category with no clear budget line blocks the month: Month End Close shows it too (#138).
+          checks: {
+            where: { code: 'payroll-line-unclear', status: 'open' },
+            select: { message: true },
+          },
         },
       }),
       this.prisma.expense.findMany({
@@ -3445,11 +3450,17 @@ export class WorkspacePayrollService {
         notMatched: m.status === 'draft' && !m.payrollMatchedAt,
         charged,
         chargedByDetails,
-        // Staff payroll the files charge with no budget line to take it: Save leaves it off the budget.
+        payrollUnclear: (m.checks ?? []).map((k) => k.message),
+        // Staff payroll the files charge with no budget line to take it: Save leaves it off the budget. A kind whose line
+        // is unclear is not asked about here: its own row says to choose which line holds it.
         unbudgeted:
           chargedByDetails > 0
             ? (['staff-pay', 'staff-taxes'] as const).filter(
-                (k) => !holdsPayroll(m.engagement.budgetLines, k)
+                (k) =>
+                  !holdsPayroll(m.engagement.budgetLines, k) &&
+                  !(m.checks ?? []).some((c) =>
+                    c.message.includes(`: ${PAYROLL_BUDGET_KIND_LABELS[k]} maps`)
+                  )
               )
             : [],
         lines: computeBudgetLines(

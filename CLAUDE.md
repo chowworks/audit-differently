@@ -87,8 +87,19 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   bulk change (an upload, a replace, a copy) updates a line of the same name in place and never deletes and recreates
   it; renaming a line shows what uses the old name before it is saved (#132).
 - **Payroll on the budget** (owner's decisions, 2026-10-20): the pay the payroll match proves is the staff and
-  participant pay on the budget. Each engagement's owner picks, on the budget line dialog, which line holds staff pay,
-  staff taxes, participant pay and participant taxes (`BudgetLine.payroll`, migration `20261020000100`); Save writes
+  participant pay on the budget. Which line holds staff pay, staff taxes, participant pay and participant taxes is
+  the **payroll rollup** (#138, owner's decisions, 2026-11-27): under Configuration Data (Map Payroll Budget Line
+  Items, laid out and edited row by row as Map Financial Categories, with Applies to), each payroll category to a list of budget line NAMES (no order: any of them) or "Not linked to a Budget Line Item", for the
+  workspace, with an engagement's own line, which wins (`LineAlias`, list 'payroll'; migration `20261128000100` copied
+  the old ticks once, so every engagement's pay stayed where it was). Lookup is `payrollPlace` in `packages/types`: own
+  line; the workspace's "Not linked"; the one listed name the engagement has; else **unclear** (two names, or none; nothing is guessed from a
+  line's report line or fixed in code, owner's decision, 2026-11-28): that pay counts on no line until someone chooses, and someone must: the mapping dialog's
+  Save waits for a choice, kept as the engagement's own line, and a blocking month check (`payroll-line-unclear`)
+  catches the rest (a budget line change or upload is saved and never asks; owner's decision, 2026-11-27). A change to a line never moves its payroll by itself.
+  `BudgetLine.payroll` (migration `20261020000100`) is written only from it (`BudgetService.applyRollup`) and every
+  reader keeps reading it. Saving a category moves it on every engagement whose line changes, and the dialog lists those
+  and the months that go back to draft first: only the months whose numbers change (participant pay, from the first
+  month with participant payments; staff pay and taxes, none); a renamed line carries its entries (`carryRename`). Save writes
   the staff lines from the payroll details file (`Expense.payrollKey`). Importing transactions confirms the payroll
   rows it found ("Payroll transactions" step): they are kept marked (`Expense.payrollKind`, migration
   `20261020000200`), count on the budget until the match covers that kind on the month, then are hidden and kept for

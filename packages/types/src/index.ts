@@ -101,7 +101,10 @@ export interface BudgetLineInput {
   reportLine?: ReportLine
   amount?: number | null
   narrative?: string | null
-  /** The payroll from the match this line holds; ticking a kind here moves it off the line that held it. */
+  /**
+   * Payroll kinds to put on this line for this engagement (the payroll page's "Add budget line"): kept as the
+   * engagement's own entries of the payroll rollup (#138), which then moves each kind off the line that held it.
+   */
   payroll?: PayrollBudgetKind[]
 }
 
@@ -113,13 +116,117 @@ export interface BudgetChange extends EngagementDetail {
   backToDraft: { id: string; period: string; was: 'closed' | 'submitted' }[]
 }
 
+// ── Payroll budget line items (owner's decisions, 2026-11-27, #138) ──────────
+// Which budget line holds each kind of payroll from the match. The workspace lists, per kind, the budget line NAMES that
+// hold it (no order: any of them is that kind's line), or says "Not linked to a Budget Line Item"; an engagement may have its own
+// entry (one of its lines, or Not linked to a Budget Line Item), which wins. Kept on the QuickBooks names table as the list 'payroll'.
+
+/** One entry: a kind of payroll to a budget line's name, or nowhere (null: Not linked to a Budget Line Item). */
+export interface PayrollRollupEntry {
+  kind: PayrollBudgetKind
+  /** null: one of the workspace's entries (several names per kind); otherwise that engagement's own (one). */
+  engagementId: string | null
+  budgetLineName: string | null
+}
+
+/** A row's key on the list: the kind, and for a workspace name, the name as lines compare. */
+export const payrollRowKey = (kind: PayrollBudgetKind, lineName?: string | null) =>
+  lineName ? `${kind}|${lineKey(lineName)}` : kind
+
+/**
+ * Where an engagement's kind of payroll lands, and why (owner's decisions, 2026-11-27; only the list decides, nothing
+ * fixed in code, 2026-11-28):
+ * - `own`: the engagement's own entry (its line, or none for Not linked to a Budget Line Item);
+ * - `nowhere`: the workspace says Not linked to a Budget Line Item;
+ * - `list`: exactly one of its lines has a listed name;
+ * - `unclear`: two listed names, or none. It lands on no line until
+ *   someone chooses one of `choices` (an engagement entry), and its months can't be closed or submitted meanwhile.
+ */
+export interface PayrollPlace<L> {
+  line: L | null
+  by: 'own' | 'nowhere' | 'list' | 'unclear'
+  /** For `unclear`: the listed lines it could be (none: it has none of the listed names). */
+  choices: L[]
+}
+
+export function payrollPlace<L extends { name: string; reportLine: string }>(
+  kind: PayrollBudgetKind,
+  engagementId: string,
+  entries: Pick<PayrollRollupEntry, 'kind' | 'engagementId' | 'budgetLineName'>[],
+  lines: L[]
+): PayrollPlace<L> {
+  const byName = (name: string) => lines.find((l) => lineKey(l.name) === lineKey(name)) ?? null
+  const own = entries.find((e) => e.kind === kind && e.engagementId === engagementId)
+  if (own) {
+    if (!own.budgetLineName) return { line: null, by: 'own', choices: [] }
+    const line = byName(own.budgetLineName)
+    // Its own line gone (removed): asked again.
+    return line ? { line, by: 'own', choices: [] } : { line: null, by: 'unclear', choices: [] }
+  }
+  const every = entries.filter((e) => e.kind === kind && e.engagementId === null)
+  if (every.some((e) => !e.budgetLineName)) return { line: null, by: 'nowhere', choices: [] }
+  const listed = new Set(every.map((e) => lineKey(e.budgetLineName!)))
+  const hits = lines.filter((l) => listed.has(lineKey(l.name)))
+  if (hits.length === 1) return { line: hits[0]!, by: 'list', choices: [] }
+  if (hits.length > 1) return { line: null, by: 'unclear', choices: hits }
+  return { line: null, by: 'unclear', choices: [] }
+}
+
+/** The line that holds a kind of an engagement's payroll, or none (Not linked to a Budget Line Item, or not chosen yet). */
+export function payrollHolder<L extends { name: string; reportLine: string }>(
+  kind: PayrollBudgetKind,
+  engagementId: string,
+  entries: Pick<PayrollRollupEntry, 'kind' | 'engagementId' | 'budgetLineName'>[],
+  lines: L[]
+): L | null {
+  return payrollPlace(kind, engagementId, entries, lines).line
+}
+
+export interface PayrollRollupDto {
+  entries: PayrollRollupEntry[]
+  engagements: {
+    id: string
+    name: string
+    lines: { name: string; reportLine: ReportLine }[]
+  }[]
+}
+
+/**
+ * A kind's entries saved as a whole: the workspace's names (null: Not linked to a Budget Line Item; none listed: every
+ * engagement without its own is unclear), and each engagement's own (none: as the workspace says).
+ */
+export interface PayrollRollupInput {
+  every: string[] | null
+  own: { engagementId: string; budgetLineName: string | null }[]
+}
+
+/** What saving a kind would change, before Save. */
+export interface PayrollRollupPreviewDto {
+  /** Each engagement whose line changes. */
+  changes: {
+    engagementId: string
+    name: string
+    from: string | null
+    to: string | null
+    /** Its closed and submitted months, which go back to draft. */
+    backToDraft: { period: string; was: 'closed' | 'submitted' }[]
+  }[]
+  /** Each engagement with no own entry whose line would be unclear: Save waits for a choice for each. */
+  unclear: { engagementId: string; name: string; choices: string[] }[]
+}
+
+/** What saving a kind answers: the list, and the months each changed engagement put back to draft. */
+export interface PayrollRollupSaved extends PayrollRollupDto {
+  backToDraft: { engagementName: string; period: string; was: 'closed' | 'submitted' }[]
+}
+
 // ── QuickBooks names (owner's decision, 2026-11-27, #132) ────────────────────
 // One list on the workspace says which budget line each QuickBooks account or category goes to, read by Import
 // transactions and Month End Close alike. A name points at a budget line's name (so it carries to every engagement with
 // a line of that name) or is Unallowable; an engagement may override a name for itself.
 
-/** The kinds of list a name is on: QuickBooks names today, the payroll rollup next (#132). */
-export const LINE_ALIAS_LISTS = ['quickbooks'] as const
+/** The kinds of list a name is on: QuickBooks names, and the payroll rollup (#138), whose names are the payroll kinds. */
+export const LINE_ALIAS_LISTS = ['quickbooks', 'payroll'] as const
 export type LineAliasList = (typeof LINE_ALIAS_LISTS)[number]
 
 /** The most names a workspace keeps, overrides included. */
@@ -507,6 +614,7 @@ export const CHECK_CODES = [
   'unallowable-category',
   'proof-mismatch',
   'no-budget-line',
+  'payroll-line-unclear',
   'payroll-counted-twice',
   'bills-without-receipt',
   'bills-without-payment',
@@ -3005,6 +3113,8 @@ export interface EngagementPayrollCardDto {
   charged: number
   /** What payroll details charges to the grant this month for the staff tagged to it (a shared person on each card). */
   chargedByDetails: number
+  /** The month's "Workspace configuration issue" checks: a payroll category with no clear budget line (#138). */
+  payrollUnclear: string[]
   /** The staff payroll kinds the files charge that no budget line of the engagement takes: left off its budget. */
   unbudgeted: PayrollBudgetKind[]
   /** The month page's budget table: each budget line's approved amount, spent before, this month and what is left. */

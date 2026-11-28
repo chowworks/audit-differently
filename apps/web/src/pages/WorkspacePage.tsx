@@ -19,6 +19,7 @@ import { useApi, useLoad } from '@/hooks/useApi'
 import { usePeopleSearch } from '@/hooks/usePeopleSearch'
 import { TagsTable } from '@/pages/TagsTable'
 import { ProgramNamesCard } from '@/pages/ProgramNamesCard'
+import { PayrollRollupCard } from '@/pages/PayrollRollupCard'
 import { QuickBooksNamesCard } from '@/pages/QuickBooksNamesCard'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { nextDue, workflow } from '@/lib/workflow'
@@ -358,6 +359,9 @@ export function WorkspacePage() {
             <Tags w={w} onChange={reload} />
             {(w.myRole === 'owner' || w.myRole === 'auditor') && (
               <ProgramNamesCard workspaceId={w.id} canManage={w.myRole === 'owner'} />
+            )}
+            {(w.myRole === 'owner' || w.myRole === 'bookkeeper') && (
+              <PayrollRollupCard workspaceId={w.id} />
             )}
             {(w.myRole === 'owner' || w.myRole === 'bookkeeper') && (
               <QuickBooksNamesCard workspaceId={w.id} />
