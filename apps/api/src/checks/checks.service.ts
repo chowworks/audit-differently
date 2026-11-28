@@ -90,7 +90,7 @@ export async function refreshChecks(prisma: PrismaClient, reportId: string): Pro
  * The kinds of payroll a month has (staff lines or books' payroll rows, participants' payments) whose budget line is
  * unclear on its engagement (payroll budget line items, #138): they count on no line until someone chooses.
  */
-async function payrollUnclearOf(
+export async function payrollUnclearOf(
   prisma: PrismaClient,
   report: {
     engagementId: string
@@ -102,6 +102,7 @@ async function payrollUnclearOf(
     }
     expenses: { payrollKey: string | null; payrollKind: string | null }[]
     wexPayments: unknown[]
+    payrollMatchedAt?: Date | null
   }
 ): Promise<{ label: string; choices: string[]; engagement: string; workspace: string }[]> {
   // A staff line Save wrote from payroll details says its kind in its key (`staff:<id>:<run end>:pay|taxes`,
@@ -120,6 +121,14 @@ async function payrollUnclearOf(
     (k === 'participant-pay' && report.wexPayments.length > 0) ||
     report.expenses.some((e) => e.payrollKind === k || keyKind(e.payrollKey) === k)
   const kinds = PAYROLL_BUDGET_KINDS.filter(has)
+  // A matched month of an engagement with staff has staff pay even when none was written: the match writes no staff
+  // line while staff pay's line is unclear, and that must still block the month (review, 2026-11-28).
+  if (
+    report.payrollMatchedAt &&
+    !kinds.includes('staff-pay') &&
+    (await prisma.staffAssignment.count({ where: { engagementId: report.engagementId } })) > 0
+  )
+    kinds.unshift('staff-pay')
   if (!kinds.length) return []
   const rows = await prisma.lineAlias.findMany({
     where: {
