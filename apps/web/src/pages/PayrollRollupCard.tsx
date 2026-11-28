@@ -472,7 +472,9 @@ function RowModal({
           : !nowhere && names.length
             ? (() => {
                 const off = picked.filter((id) => !lineOn(data, id, names))
-                return off.length ? off.map((id) => offWords(id)).join(' ') : null
+                return off.length
+                  ? `Invalid configuration: ${off.map((id) => offWords(id)).join(' ')}`
+                  : null
               })()
             : null,
   }
@@ -482,11 +484,11 @@ function RowModal({
     const keys = new Set(names.map(lineKey))
     const hits = lines.filter((l) => keys.has(lineKey(l.name))).map((l) => l.name)
     if (hits.length > 1)
-      return `${nameOf(id)} has both ${orList(hits, 'and')}. Tick only the one that holds its ${label.toLowerCase()}.`
+      return `${nameOf(id)} has both ${orList(hits, 'and')} as budget line items. Tick only one.`
     return lines.length
-      ? `${nameOf(id)} has no budget line item named ${orList(names, 'or')}. Pick one it has: ${orList(
+      ? `${nameOf(id)} doesn't have ${orList(names, 'or')} as a budget line item. It has ${orList(
           lines.map((l) => l.name),
-          'or'
+          'and'
         ).replace(/\.?$/, '.')}`
       : `${nameOf(id)} has no budget line items yet.`
   }
