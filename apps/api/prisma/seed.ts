@@ -5,7 +5,13 @@ import 'reflect-metadata'
 import {
   DOCUMENT_SENSITIVITY,
   REPORT_LINE_LABELS,
+  aliasKey,
   payrollDefaults,
+  payrollHolder,
+  payrollPlace,
+  payrollRowKey,
+  PAYROLL_BUDGET_KINDS,
+  type PayrollBudgetKind,
   type ReportLine,
   type DocumentKind,
   type EligibilityItem,
@@ -163,7 +169,81 @@ async function engagement(
     if (line) await prisma.budgetLine.update({ where: { id: line.id }, data })
     else await prisma.budgetLine.create({ data: { engagementId: c.id, ...data } })
   }
+  await seedPayrollRollup(
+    ws.id,
+    c.id,
+    budget.map(([r], i) => [String(r), payroll[i]!] as const)
+  )
   return c
+}
+
+/**
+ * Map Payroll Budget Line Items for the seed (#138): the workspace lists the names the seed's lines hold each kind on,
+ * once (a list someone has changed since stays as it is), and every line's payroll then follows the list, as
+ * `BudgetService.applyRollup` writes it, so the demo never shows pay on a line the list doesn't give it.
+ */
+async function seedPayrollRollup(
+  workspaceId: string,
+  engagementId: string,
+  held: (readonly [string, PayrollBudgetKind[]])[]
+) {
+  for (const kind of PAYROLL_BUDGET_KINDS) {
+    const kept = await prisma.lineAlias.count({
+      where: { workspaceId, list: 'payroll', name: kind },
+    })
+    if (kept) continue
+    const names = held
+      .filter(([, kinds]) => kinds.includes(kind))
+      .map(([r]) => REPORT_LINE_LABELS[r as ReportLine])
+    const rows = names.length
+      ? names.map((n) => ({ key: payrollRowKey(kind, n), budgetLineName: n, unallowable: false }))
+      : [{ key: payrollRowKey(kind), budgetLineName: null, unallowable: true }]
+    await prisma.lineAlias.createMany({
+      data: rows.map((r) => ({
+        ...r,
+        workspaceId,
+        list: 'payroll',
+        name: kind,
+        changedById: 'seed',
+      })),
+    })
+  }
+  const entries = (
+    await prisma.lineAlias.findMany({
+      where: { workspaceId, list: 'payroll', OR: [{ engagementId: null }, { engagementId }] },
+    })
+  ).map((r) => ({
+    kind: r.name as PayrollBudgetKind,
+    engagementId: r.engagementId,
+    budgetLineName: r.unallowable ? null : r.budgetLineName,
+  }))
+  const lines = await prisma.budgetLine.findMany({ where: { engagementId } })
+  // Where the list alone leaves a kind undecided here, the engagement's own row says what the seed means: the line it
+  // holds the kind on, or Not linked to a Budget Line Item (as the one-time copy, migration 20261128000100, does).
+  for (const kind of PAYROLL_BUDGET_KINDS) {
+    if (payrollPlace(kind, engagementId, entries, lines).by !== 'unclear') continue
+    const on = held.find(([, kinds]) => kinds.includes(kind))
+    const name = on ? REPORT_LINE_LABELS[on[0] as ReportLine] : null
+    await prisma.lineAlias.create({
+      data: {
+        workspaceId,
+        engagementId,
+        list: 'payroll',
+        name: kind,
+        key: payrollRowKey(kind),
+        budgetLineName: name,
+        unallowable: !name,
+        changedById: 'seed',
+      },
+    })
+    entries.push({ kind, engagementId, budgetLineName: name })
+  }
+  for (const l of lines) {
+    const payroll = PAYROLL_BUDGET_KINDS.filter(
+      (k) => payrollHolder(k, engagementId, entries, lines)?.id === l.id
+    )
+    await prisma.budgetLine.update({ where: { id: l.id }, data: { payroll } })
+  }
 }
 
 const participant = (engagementId: string, pid: string, name: string, enrollmentStatus: string) =>
@@ -1252,15 +1332,8 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
       category: 'Class',
       amount: 'Amount',
     },
-    categories: {
-      'Program supplies': 'supplies',
-      Training: 'participant-training',
-      'Contract services': 'contractual',
-      Travel: 'travel',
-      'Payroll - staff': 'personnel',
-      'Payroll - WEX': 'wex',
-      'Bank fees': 'skip',
-    },
+    // The columns only: where each category goes is on the QuickBooks names list (#132).
+    categories: {},
   }
   await prisma.importMapping.upsert({
     where: { workspaceId_name: { workspaceId: riverbend.id, name: 'Ledger & Co. export' } },
@@ -1272,6 +1345,33 @@ export async function seedDemoWorkspace(opts: DemoOptions): Promise<{ workspaceI
       ...mapping,
     },
   })
+
+  // ── The QuickBooks names list (#132) ── Each category of that export, as the books write it, and the budget line it
+  // goes to by the line's name (or Unallowable), for every engagement of the workspace.
+  const names: [string, ReportLine | null][] = [
+    ['Program supplies', 'program-costs'],
+    ['Training', 'program-costs'],
+    ['Contract services', 'program-costs'],
+    ['Travel', 'program-costs'],
+    ['Payroll - staff', 'staff-salaries'],
+    ['Payroll - WEX', 'wex'],
+    ['Entertainment', null],
+  ]
+  for (const [name, line] of names) {
+    const key = aliasKey(name)
+    const data = {
+      name,
+      key,
+      budgetLineName: line ? REPORT_LINE_LABELS[line] : null,
+      unallowable: line === null,
+      changedById: 'demo-dana',
+    }
+    const had = await prisma.lineAlias.findFirst({
+      where: { workspaceId: riverbend.id, list: 'quickbooks', engagementId: null, key },
+    })
+    if (had) await prisma.lineAlias.update({ where: { id: had.id }, data })
+    else await prisma.lineAlias.create({ data: { workspaceId: riverbend.id, ...data } })
+  }
 
   // ── A second engagement ── Adult IT Training shares Riverbend's staff with In-School Youth, for the workspace payroll
   // tour (GitHub issue #22): its September staff charge is covered by its own tagged staff's pay, but the two

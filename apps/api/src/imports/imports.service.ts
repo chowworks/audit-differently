@@ -10,6 +10,7 @@ import {
   IMPORT_FIELD_LABELS,
   IMPORT_FIELDS,
   IMPORT_SKIP,
+  aliasKey,
   REPORT_STATUS_LABELS,
   WRITE_ROLES,
   type BudgetOption,
@@ -29,6 +30,8 @@ import {
   type PayrollBudgetKind,
 } from '@ad/types'
 import { payrollRowKind } from '../reports/report-lines'
+import { AliasesService, aliasDto } from '../aliases/aliases.service'
+import { resolveAlias, writeFor, type AliasChoice, type AliasRow } from '../aliases/resolve'
 import { ChecksService } from '../checks/checks.service'
 import { dueDate } from '../checks/rules'
 import { AccessLogService } from '../core/access-log.service'
@@ -120,7 +123,8 @@ export class ImportsService {
     private readonly checks: ChecksService,
     private readonly log: AccessLogService,
     private readonly engagements: EngagementsService,
-    private readonly reports: ReportsService
+    private readonly reports: ReportsService,
+    private readonly aliases: AliasesService
   ) {}
 
   private find(caller: Caller, engagementId: string) {
@@ -164,6 +168,13 @@ export class ImportsService {
     return this.options(c).find((o) => o.label.toLowerCase() === saved.toLowerCase())?.key ?? null
   }
 
+  /** The QuickBooks names list as this engagement reads it: the workspace's entries and its own overrides. */
+  private async listFor(c: Engagement): Promise<AliasRow[]> {
+    return (await this.aliases.rows(c.workspaceId)).filter(
+      (a) => a.engagementId === null || a.engagementId === c.id
+    )
+  }
+
   /** Step 1: the file's columns, a few rows, the saved mappings, and the first guess at the mapping. */
   async read(caller: Caller, engagementId: string, file: ImportFile): Promise<ImportFileDto> {
     const c = await this.writable(caller, engagementId)
@@ -172,18 +183,13 @@ export class ImportsService {
       where: { workspaceId: c.workspaceId },
       orderBy: { updatedAt: 'desc' },
     })
-    // A saved mapping may come from another engagement: its category choices for budget lines this one does not have
-    // are left out, so those categories wait for the person in step 3 instead of refusing the import.
+    // A saved mapping keeps which column holds what; where each category goes is the QuickBooks names list's (#132).
     const mappings: ImportMappingDto[] = saved.map((m) => ({
       id: m.id,
       name: m.name,
       headers: m.headers,
       columns: m.columns as ImportColumns,
-      categories: Object.fromEntries(
-        Object.entries(m.categories as ImportCategories)
-          .map(([from, to]) => [from, this.lineFor(c, to)] as const)
-          .filter((e): e is readonly [string, string] => e[1] !== null)
-      ),
+      categories: {},
       matches: sameHeaders(m.headers, table.headers),
     }))
     const match = mappings.find((m) => m.matches)
@@ -199,6 +205,7 @@ export class ImportsService {
       mappings,
       mappingId: match?.id ?? null,
       budgetOptions: this.options(c),
+      aliases: (await this.listFor(c)).map(aliasDto),
     }
   }
 
@@ -245,12 +252,23 @@ export class ImportsService {
     const c = await this.writable(caller, engagementId)
     const table = await readTable(file.buffer, file.originalname)
     const { preview, ready, updates, columns, categories } = await this.plan(c, table, request)
+    const choices = this.choicesOf(
+      c,
+      columns,
+      categories,
+      preview.categories.map((v) => v.value)
+    )
+    let learning = 0
     const req = (request ?? {}) as ImportRequest
     const reportId = typeof req.reportId === 'string' ? req.reportId : null
     if (reportId && !c.monthlyReports.some((m) => m.id === reportId)) throw new NotFoundException()
-    if (ready.length === 0 && updates.length === 0)
-      throw new BadRequestException('Nothing to import: every row is listed under Not imported')
-    if (req.saveAs != null) await this.save(caller, c, req.saveAs, table, columns, categories)
+    // Every row left out (each one Unallowable, say) still keeps the person's new answers on the list for the next file.
+    if (ready.length === 0 && updates.length === 0) {
+      const list = await this.aliases.rows(c.workspaceId)
+      if (!choices.some((ch) => writeFor(ch, list)))
+        throw new BadRequestException('Nothing to import: every row is listed under Not imported')
+    }
+    if (req.saveAs != null) await this.save(caller, c, req.saveAs, table, columns)
 
     // Never the file's name (it may name a person): the SHA-256 below identifies the file.
     const source = /\.xlsx$/i.test(file.originalname) ? 'an Excel file' : 'a CSV file'
@@ -308,12 +326,14 @@ export class ImportsService {
                 createdById: caller.userId,
               })),
             })
+          // Each category's budget line as chosen, kept on the QuickBooks names list for the next file (#132).
+          learning = await this.aliases.learn(tx, caller, c.workspaceId, choices)
           return [
             ...preview.months.map((m) => ids.get(m.period)!),
             ...updates.map((u) => ids.get(u.period!)).filter((id): id is string => !!id),
           ]
         },
-        {
+        () => ({
           workspaceId: c.workspaceId,
           resource: 'expense',
           subjectId: c.id,
@@ -336,13 +356,18 @@ export class ImportsService {
                 ]
               : []),
             { field: 'Not imported', after: String(preview.notImported.length) },
+            ...(learning
+              ? [{ field: 'QuickBooks names added to the list', after: String(learning) }]
+              : []),
             { field: 'File size (bytes)', after: String(file.buffer.length) },
             {
               field: 'File SHA-256',
               after: createHash('sha256').update(file.buffer).digest('hex'),
             },
           ],
-        }
+        }),
+        // A large file can teach the list many names, one write each: past Prisma's 5 seconds.
+        { timeout: 30_000 }
       )
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
@@ -369,21 +394,16 @@ export class ImportsService {
     c: Engagement,
     given: unknown,
     table: Table,
-    columns: ImportColumns,
-    categories: ImportCategories
+    columns: ImportColumns
   ) {
     const name = typeof given === 'string' ? given.trim() : ''
     if (!name) throw new BadRequestException('Name the mapping to save it')
     if (name.length > 60) throw new BadRequestException('Keep the mapping name under 60 characters')
-    // Saved by the budget lines' names, not this engagement's ids, so the mapping carries to another engagement.
-    const names = new Map(this.options(c).map((o) => [o.key, o.label]))
-    const byName = Object.fromEntries(
-      Object.entries(categories).map(([from, to]) => [from, names.get(to) ?? to])
-    )
+    // The columns only: where each category goes is kept on the QuickBooks names list (#132).
     const data = {
       headers: table.headers,
       columns: columns as Prisma.InputJsonValue,
-      categories: byName as Prisma.InputJsonValue,
+      categories: {} as Prisma.InputJsonValue,
     }
     const columnWords = IMPORT_FIELDS.filter((f) => columns[f])
       .map((f) => `${IMPORT_FIELD_LABELS[f]}: ${columns[f]}`)
@@ -407,13 +427,7 @@ export class ImportsService {
         subjectId: row.id,
         action: row.updated ? 'update' : 'create',
         description: `${row.updated ? 'Changed' : 'Saved'} the import mapping ${name}`,
-        changes: [
-          { field: 'Columns', after: columnWords.slice(0, 1000) },
-          {
-            field: 'Categories',
-            after: `${howMany(Object.keys(categories).length, 'category', 'categories')} mapped`,
-          },
-        ],
+        changes: [{ field: 'Columns', after: columnWords.slice(0, 1000) }],
       })
     )
   }
@@ -430,6 +444,7 @@ export class ImportsService {
     const start = isoDate(c.periodStart)
     const end = isoDate(c.periodEnd)
     const months = new Map(c.monthlyReports.map((m) => [m.period, m]))
+    const list = await this.listFor(c)
     const existing = await this.prisma.expense.findMany({
       where: { engagementId: c.id },
       select: {
@@ -558,7 +573,7 @@ export class ImportsService {
         continue
       }
       if (target === IMPORT_SKIP) {
-        out('Skipped: its category is set to skip')
+        out('Unallowable')
         continue
       }
       const reportLine = isPayroll
@@ -613,7 +628,7 @@ export class ImportsService {
           value,
           rows: s.rows,
           total: round(s.total),
-          match: columns.category ? matchItem(value, [...items.values()]) : null,
+          ...this.matchOf(c, value, list, columns, items),
         }))
         .sort((a, b) => a.value.localeCompare(b.value)),
       months: [...perMonth]
@@ -642,6 +657,52 @@ export class ImportsService {
       })),
       assignable,
     }
-    return { preview, ready, updates, columns, categories }
+    return { preview, ready, updates, columns, categories, list }
+  }
+
+  /**
+   * A category's budget line as the QuickBooks names list says (its Unallowable as IMPORT_SKIP), else the one budget
+   * line named as it is; pre-filled, for the person to confirm or change.
+   */
+  private matchOf(
+    c: Engagement,
+    value: string,
+    list: AliasRow[],
+    columns: ImportColumns,
+    items: Map<string, BudgetOption>
+  ): { match: string | null; from: 'list' | 'name' | null } {
+    if (!columns.category) return { match: null, from: null }
+    const lines = [...items.values()].map((i) => ({ id: i.key, name: i.label }))
+    // As Month End Close reads an account: exactly as the books write it, parents included (owner's rule, 2026-11-27).
+    const found = resolveAlias(value.trim(), c.id, list, lines)
+    if (found.status === 'unallowable') return { match: IMPORT_SKIP, from: 'list' }
+    if (found.status === 'line')
+      return { match: found.line.id, from: found.alias ? 'list' : 'name' }
+    // The list names a line this engagement doesn't have: asked about, as Month End Close does, never guessed by name.
+    if (found.status === 'no-line') return { match: null, from: null }
+    const byName = matchItem(value, [...items.values()])
+    return { match: byName, from: byName ? 'name' : null }
+  }
+
+  /** What the person chose for each category, as the list keeps it (a budget line's name, or Unallowable). */
+  private choicesOf(
+    c: Engagement,
+    columns: ImportColumns,
+    categories: ImportCategories,
+    /** The file's own category values: a choice left over from another column is never kept. */
+    inFile: string[]
+  ): AliasChoice[] {
+    if (!columns.category) return []
+    const names = new Map(this.options(c).map((o) => [o.key, o.label]))
+    const here = new Set(inFile)
+    return Object.entries(categories)
+      .filter(
+        ([value, to]) => here.has(value) && aliasKey(value) && (to === IMPORT_SKIP || names.has(to))
+      )
+      .map(([value, to]) => ({
+        name: value.trim(),
+        engagementId: c.id,
+        budgetLineName: to === IMPORT_SKIP ? null : names.get(to)!,
+      }))
   }
 }

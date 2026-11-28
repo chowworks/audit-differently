@@ -79,7 +79,26 @@ const same = () =>
     'Rent,Program Costs,900,'
   )
 
-function service(lines = budget(), months = drafts()) {
+/** An entry of the payroll rollup (Map Payroll Budget Line Items, #142): a kind to a budget line's name. */
+const rollup = (
+  kind: string,
+  budgetLineName: string | null,
+  engagementId: string | null = null
+) => ({
+  id: `p-${kind}-${engagementId ?? 'ws'}`,
+  engagementId,
+  list: 'payroll',
+  name: kind,
+  budgetLineName,
+  unallowable: budgetLineName === null,
+})
+
+function service(
+  lines = budget(),
+  months = drafts(),
+  payrollList: ReturnType<typeof rollup>[] = [],
+  expenses: { id: string; payrollKind: string; budgetLineId: string | null }[] = []
+) {
   const files: object[] = [
     {
       id: 'f-1',
@@ -95,23 +114,65 @@ function service(lines = budget(), months = drafts()) {
   ]
   const prisma = {
     engagement: scoped(engagement()),
+    // The budget as each write leaves it, so the payroll placed after the writes sees the new lines.
     budgetLine: {
-      findMany: jest.fn(async () => lines),
-      create: jest.fn(async ({ data }: { data: object }) => ({ id: 'b-new', ...data })),
-      update: jest.fn(async ({ data }: { data: object }) => data),
-      delete: jest.fn(async () => ({})),
+      // A new array on every read, as Prisma's.
+      findMany: jest.fn(async () => [...lines]),
+      create: jest.fn(async ({ data }: { data: object }) => {
+        const row = {
+          ...line('b-new', '', '', 0, null),
+          payroll: [] as string[],
+          ...data,
+          id: 'b-new',
+        }
+        lines.push(row as ReturnType<typeof line>)
+        return row
+      }),
+      update: jest.fn(async ({ where, data }: { where: { id: string }; data: object }) =>
+        Object.assign(lines.find((l) => l.id === where.id) ?? {}, data)
+      ),
+      delete: jest.fn(async ({ where }: { where: { id: string } }) => {
+        lines.splice(
+          lines.findIndex((l) => l.id === where.id),
+          1
+        )
+        return {}
+      }),
+    },
+    lineAlias: {
+      findMany: jest.fn(async () => payrollList),
+    },
+    // The books' payroll rows: they follow the line that takes their kind.
+    expense: {
+      updateMany: jest.fn(
+        async (args: {
+          where: { payrollKind: { in: string[] } }
+          data: { budgetLineId: string }
+        }) => {
+          const moved = expenses.filter(
+            (e) =>
+              args.where.payrollKind.in.includes(e.payrollKind) &&
+              e.budgetLineId !== args.data.budgetLineId
+          )
+          for (const e of moved) e.budgetLineId = args.data.budgetLineId
+          return { count: moved.length }
+        }
+      ),
+      count: jest.fn(async () => 0),
     },
     budgetFile: {
       ...scoped(...(files as { id: string }[])),
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'f-2', ...data })),
     },
     monthlyReport: {
-      findMany: jest.fn(async (args: { where: { status?: { in: string[] } } }) =>
-        months
-          .filter((m) => !args.where.status || args.where.status.in.includes(m.status))
-          .map((m) => ({ id: m.id }))
+      findMany: jest.fn(
+        async (args: { where: { status?: { in: string[] }; period?: { gte: string } } }) =>
+          months
+            .filter((m) => !args.where.status || args.where.status.in.includes(m.status))
+            .filter((m) => !args.where.period || m.period >= args.where.period.gte)
+            .map((m) => ({ id: m.id }))
       ),
-      findFirst: jest.fn(async (args: { where: { id: string } }) => {
+      findFirst: jest.fn(async (args: { where: { id?: string } }) => {
         const m = months.find((x) => x.id === args.where.id)
         return m ? { ...m } : null
       }),
@@ -360,5 +421,57 @@ describe('BudgetService', () => {
     await expect(s.historyFile(member('owner'), 'e-1', 'f-other')).rejects.toThrow(
       NotFoundException
     )
+  })
+
+  it("places payroll by Map Payroll Budget Line Items: a new line takes its kind, and the books' rows follow it", async () => {
+    const rows = [{ id: 'x-1', payrollKind: 'staff-pay', budgetLineId: 'b-2' }]
+    const { service: s, prisma } = service(
+      budget(),
+      drafts(),
+      [rollup('staff-pay', 'Personnel')],
+      rows
+    )
+    await s.upload(
+      member('owner'),
+      'e-1',
+      csv(
+        'Travel,Program Costs,1500,Site visits',
+        'Staff Salaries,Staff Salaries,42000,',
+        'Rent,Program Costs,900,',
+        'Personnel,Staff Salaries,30000,'
+      )
+    )
+    // The list names Personnel for staff pay: the new line takes it, and Staff Salaries gives it up.
+    expect(prisma.budgetLine.update).toHaveBeenCalledWith({
+      where: { id: 'b-new' },
+      data: { payroll: ['staff-pay'] },
+    })
+    expect(prisma.budgetLine.update).toHaveBeenCalledWith({
+      where: { id: 'b-2' },
+      data: { payroll: [] },
+    })
+    expect(rows[0]!.budgetLineId).toBe('b-new')
+  })
+
+  it("on the rollup's own save, reopens only the months a participant pay move changes, and none for staff pay", async () => {
+    const lines = [
+      line('b-1', 'Travel', 'program-costs', 1500, null, 0, ['staff-pay']),
+      line('b-2', 'Work Experience', 'wex', 0, null, 0, ['participant-pay']),
+      line('b-3', 'Salaries', 'staff-salaries', 0, null),
+    ]
+    const list = [rollup('staff-pay', 'Travel'), rollup('participant-pay', null)]
+    const { service: s, prisma, months } = service(lines, mixed(), list)
+    const c = { id: 'e-1', name: 'Coding Pathway', workspaceId: W }
+    // Participant payments from September: September (closed) and later go back; August (submitted) stays.
+    prisma.monthlyReport.findFirst.mockResolvedValueOnce({ period: '2026-09' } as never)
+    const r = await s.applyRollup(prisma as never, member('owner'), c, true)
+    expect(r.changed).toBe(true)
+    expect(r.backed.map((m) => m.period)).toEqual(['2026-09'])
+    expect(months.map((m) => m.status)).toEqual(['submitted', 'draft', 'draft'])
+    // Staff pay to Salaries: the lines change, no month reopens.
+    list[0] = rollup('staff-pay', 'Salaries')
+    const staff = await s.applyRollup(prisma as never, member('owner'), c, true)
+    expect(staff).toMatchObject({ changed: true, backed: [] })
+    expect(months[0]!.status).toBe('submitted')
   })
 })

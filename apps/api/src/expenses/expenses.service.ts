@@ -24,7 +24,6 @@ import {
   type EmailedKind,
   type EmailedMoveDto,
   type FileManagementChangeDto,
-  type AccountMappingDto,
   type BooksBillInput,
   type BooksBillSaved,
   type BooksLineDto,
@@ -65,25 +64,12 @@ import { readStatement } from '../payroll/statement-lines'
 import { programNamesIn } from '../payroll/program-names'
 import { PrismaService } from '../prisma/prisma.service'
 import { DOCUMENT_STORAGE, type DocumentStorage } from '../storage/document-storage.interface'
-import {
-  categoriesOf,
-  engagementOfMapping,
-  readAccountMapping,
-  budgetLineOfCategory,
-  type AccountMappingRead,
-} from './account-mapping'
+import { aliasDto } from '../aliases/aliases.service'
 import { booksTransactions, type BooksTransaction } from './books'
 import type { PlanStatement } from './books-payments'
 import type { PlanBillChoice } from './books-receipts'
 import { ExpenseMatchingService } from './expense-matching.service'
-import {
-  SKIP,
-  allocationNote,
-  planBooks,
-  savedBills,
-  type PlanEngagement,
-  type PlanMapping,
-} from './books-plan'
+import { allocationNote, planBooks, savedBills, type PlanEngagement } from './books-plan'
 
 const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null)
 const CSV = 'text/csv'
@@ -91,8 +77,6 @@ const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 /** The payroll details files an accounting export can be: the sheets. */
 const SHEET_TYPES = [XLSX, CSV]
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
-/** A mapping file's rows are a chart of accounts: a few hundred at most. */
-const MAX_ACCOUNTS = 5000
 /** Receipts are PDFs or photos, as the month's receipts are (receipts.service.ts). */
 const RECEIPT_TYPES = ['application/pdf', 'image/png', 'image/jpeg']
 export const MAX_BOOKS_RECEIPTS = 20
@@ -152,7 +136,7 @@ export function saveRefusal(e: unknown): unknown {
   }
   if (isCheckViolation(e))
     return new ConflictException(
-      "The database refused a line as the books have it now (a budget line that is not its engagement's, say). Open the expenses again, and check the account mappings"
+      "The database refused a line as the books have it now (a budget line that is not its engagement's, say). Open the expenses again, and check the QuickBooks names"
     )
   return e
 }
@@ -195,7 +179,7 @@ export class ExpensesService {
     return given
   }
 
-  // ── Account mappings ─────────────────────────────────────────────────────
+  // ── Engagements ──────────────────────────────────────────────────────────
 
   private async engagementsOf(workspaceId: string) {
     return this.prisma.engagement.findMany({
@@ -205,228 +189,6 @@ export class ExpensesService {
         budgetLines: { orderBy: { sortOrder: 'asc' } },
         monthlyReports: { select: { id: true, period: true, status: true } },
       },
-    })
-  }
-
-  private mappingDto(
-    row: {
-      id: string
-      fileName: string
-      engagementId: string | null
-      read: unknown
-      chosen: unknown
-      changedAt: Date
-    },
-    engagements: Awaited<ReturnType<ExpensesService['engagementsOf']>>
-  ): AccountMappingDto {
-    const read = row.read as AccountMappingRead
-    const chosen = (row.chosen ?? {}) as Record<string, string>
-    const e = engagements.find((x) => x.id === row.engagementId) ?? null
-    const lines = (e?.budgetLines ?? []).map((b) => ({
-      id: b.id,
-      name: b.name,
-      amount: Number(b.amount),
-    }))
-    return {
-      id: row.id,
-      fileName: row.fileName,
-      title: read.title,
-      engagementId: e?.id ?? null,
-      engagementName: e?.name ?? null,
-      uploadedAt: row.changedAt.toISOString(),
-      categories: categoriesOf(read).map((category) => {
-        const pick = chosen[category]
-        const line =
-          pick === SKIP
-            ? null
-            : pick
-              ? (lines.find((l) => l.id === pick) ?? null)
-              : budgetLineOfCategory(category, read, lines)
-        return {
-          category,
-          accounts: Object.values(read.accounts).filter((c) => c === category).length,
-          budgetLineId: pick === SKIP ? SKIP : (line?.id ?? null),
-          budgetLineName: line?.name ?? null,
-          chosen: !!pick,
-        }
-      }),
-    }
-  }
-
-  /**
-   * An account mapping file (the zip's "Account mapping" folder): read, and kept for the engagement it names (its
-   * contract total and period, or its name). The engagement's mapping before is replaced; one whose engagement it does
-   * not say waits for an owner to choose. The file itself is not kept.
-   */
-  async addMapping(
-    caller: Caller,
-    workspaceId: string,
-    file: { buffer: Buffer; originalname: string } | undefined
-  ): Promise<AccountMappingDto> {
-    this.owner(caller, workspaceId)
-    if (!file) throw new BadRequestException('Choose the account mapping file')
-    const read = await readAccountMapping(file.buffer, file.originalname)
-    const accounts = Object.keys(read.accounts).length
-    if (!accounts)
-      throw new BadRequestException(
-        `${file.originalname}: no account numbers found. An account mapping has a column of account numbers and one of the category each bills to.`
-      )
-    if (accounts > MAX_ACCOUNTS) throw new BadRequestException('The file has too many accounts')
-    const engagements = await this.engagementsOf(workspaceId)
-    const e = engagementOfMapping(
-      read,
-      engagements.map((x) => ({
-        id: x.id,
-        name: x.name,
-        number: x.number,
-        code: x.code,
-        periodStart: day(x.periodStart),
-        periodEnd: day(x.periodEnd),
-        budgets: [
-          x.budgetLines.reduce((t, b) => t + Number(b.amount), 0),
-          ...(x.awardAmount ? [Number(x.awardAmount)] : []),
-        ],
-      }))
-    )
-    const sha256 = createHash('sha256').update(file.buffer).digest('hex')
-    const data = {
-      fileName: file.originalname.slice(0, 200),
-      sha256,
-      read: read as unknown as Prisma.InputJsonValue,
-      changedById: caller.userId,
-      changedAt: new Date(),
-    }
-    const row = await this.log.change(
-      caller,
-      async (tx) => {
-        const before = e
-          ? await tx.accountMapping.findFirst({ where: { workspaceId, engagementId: e.id } })
-          : await tx.accountMapping.findFirst({
-              where: { workspaceId, sha256, engagementId: null },
-            })
-        return before
-          ? tx.accountMapping.update({ where: { id: before.id }, data })
-          : tx.accountMapping.create({
-              data: { ...data, workspaceId, engagementId: e?.id ?? null, chosen: {} },
-            })
-      },
-      (r) => ({
-        workspaceId,
-        resource: 'engagement',
-        subjectId: r.engagementId ?? workspaceId,
-        action: 'update',
-        description: e
-          ? `Added the account mapping for ${e.name} from a file`
-          : 'Added an account mapping from a file; its engagement is to be chosen',
-        changes: [
-          { field: 'Accounts', after: String(accounts) },
-          {
-            field: 'Billable accounts',
-            after: String(Object.values(read.accounts).filter(Boolean).length),
-          },
-          { field: 'File SHA-256', after: sha256 },
-        ],
-      })
-    )
-    return this.mappingDto(row, engagements)
-  }
-
-  /** An owner's change to a mapping: whose engagement it is, and a category's budget line (or skip, or the file's own). */
-  async setMapping(
-    caller: Caller,
-    workspaceId: string,
-    mappingId: string,
-    body: { engagementId?: unknown; category?: unknown; budgetLineId?: unknown }
-  ): Promise<AccountMappingDto> {
-    this.owner(caller, workspaceId)
-    const row = await this.prisma.accountMapping.findFirst({
-      where: { id: mappingId, workspaceId },
-    })
-    if (!row) throw new NotFoundException()
-    const engagements = await this.engagementsOf(workspaceId)
-    const data: Prisma.AccountMappingUpdateInput = {
-      changedById: caller.userId,
-      changedAt: new Date(),
-    }
-    const changes: { field: string; after: string }[] = []
-    let engagementId = row.engagementId
-    if (body.engagementId !== undefined) {
-      if (
-        typeof body.engagementId !== 'string' ||
-        !engagements.some((x) => x.id === body.engagementId)
-      )
-        throw new BadRequestException('Choose one of the workspace’s engagements')
-      engagementId = body.engagementId
-      data.engagement = { connect: { id: engagementId } }
-      // Another category's budget lines were the old engagement's: the choices start again.
-      if (engagementId !== row.engagementId) data.chosen = {}
-      changes.push({
-        field: 'Engagement',
-        after: engagements.find((x) => x.id === engagementId)!.name,
-      })
-    }
-    if (body.category !== undefined) {
-      const read = row.read as unknown as AccountMappingRead
-      if (typeof body.category !== 'string' || !categoriesOf(read).includes(body.category))
-        throw new BadRequestException('Choose a category of the mapping')
-      const lines = engagements.find((x) => x.id === engagementId)?.budgetLines ?? []
-      const pick = body.budgetLineId
-      if (
-        pick !== null &&
-        pick !== SKIP &&
-        !(typeof pick === 'string' && lines.some((l) => l.id === pick))
-      )
-        throw new BadRequestException('Choose one of the engagement’s budget lines, or skip')
-      const chosen = { ...((data.chosen ?? row.chosen ?? {}) as Record<string, string>) }
-      if (pick === null) delete chosen[body.category]
-      else chosen[body.category] = pick as string
-      data.chosen = chosen
-      changes.push({
-        field: `Budget line for ${body.category}`.slice(0, 120),
-        after:
-          pick === null
-            ? 'As the file says'
-            : pick === SKIP
-              ? 'Not billed'
-              : lines.find((l) => l.id === pick)!.name,
-      })
-    }
-    let saved
-    try {
-      saved = await this.log.change(
-        caller,
-        (tx) => tx.accountMapping.update({ where: { id: row.id }, data }),
-        {
-          workspaceId,
-          resource: 'engagement',
-          subjectId: engagementId ?? workspaceId,
-          action: 'update',
-          description: 'Changed an account mapping',
-          changes,
-        }
-      )
-    } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')
-        throw new ConflictException(
-          'That engagement has an account mapping already: remove it first'
-        )
-      throw e
-    }
-    return this.mappingDto(saved, engagements)
-  }
-
-  async removeMapping(caller: Caller, workspaceId: string, mappingId: string): Promise<void> {
-    this.owner(caller, workspaceId)
-    const row = await this.prisma.accountMapping.findFirst({
-      where: { id: mappingId, workspaceId },
-    })
-    if (!row) throw new NotFoundException()
-    await this.log.change(caller, (tx) => tx.accountMapping.delete({ where: { id: row.id } }), {
-      workspaceId,
-      resource: 'engagement',
-      subjectId: row.engagementId ?? workspaceId,
-      action: 'delete',
-      description: 'Removed an account mapping',
     })
   }
 
@@ -474,7 +236,7 @@ export class ExpensesService {
     const [
       { files, unread },
       engagements,
-      mappings,
+      aliases,
       workspace,
       receipts,
       choices,
@@ -483,9 +245,16 @@ export class ExpensesService {
     ] = await Promise.all([
       this.booksOf(workspaceId, period),
       this.engagementsOf(workspaceId),
-      this.prisma.accountMapping.findMany({
-        where: { workspaceId },
-        orderBy: { changedAt: 'asc' },
+      this.prisma.lineAlias.findMany({
+        where: { workspaceId, list: 'quickbooks' },
+        orderBy: [{ name: 'asc' }, { engagementId: 'asc' }],
+        select: {
+          id: true,
+          engagementId: true,
+          name: true,
+          budgetLineName: true,
+          unallowable: true,
+        },
       }),
       this.prisma.workspace.findFirst({
         where: { id: workspaceId },
@@ -520,18 +289,12 @@ export class ExpensesService {
       budgetLines: e.budgetLines.map((b) => ({ id: b.id, name: b.name, amount: Number(b.amount) })),
       months: e.monthlyReports.map((m) => ({ period: m.period, status: m.status })),
     }))
-    const planMappings: PlanMapping[] = mappings.map((m) => ({
-      id: m.id,
-      engagementId: m.engagementId,
-      read: m.read as unknown as AccountMappingRead,
-      chosen: (m.chosen ?? {}) as Record<string, string>,
-    }))
     const lines = planBooks({
       period,
       transactions,
       programs: programNamesIn(workspace?.programNames, new Set(engagements.map((e) => e.id))),
       engagements: planEngagements,
-      mappings: planMappings,
+      aliases,
       existing: existing.map((x) => ({
         id: x.id,
         engagementId: x.engagementId,
@@ -578,7 +341,7 @@ export class ExpensesService {
       files,
       unread,
       engagements,
-      mappings,
+      aliases,
       lines,
       existing,
       receipts,
@@ -645,10 +408,13 @@ export class ExpensesService {
 
   /**
    * The lines Save wrote before that the books no longer bill there, on a month still a draft: what Save removes, and
-   * what the page lists before it does (review fix, 2026-11-12). A month no longer a draft keeps its lines.
+   * what the page lists before it does (review fix, 2026-11-12). A month no longer a draft keeps its lines, and so does
+   * a line whose account waits for an answer on the financial categories list (unmapped, or a budget line it lacks):
+   * it is asked about, never removed for it (#132).
    */
   private removable(plan: Awaited<ReturnType<ExpensesService['planOf']>>, period: string) {
-    const keys = new Set(plan.lines.filter((l) => l.status === 'billed').map((l) => l.key))
+    const waits = new Set(['billed', 'unmapped', 'no-budget-line'])
+    const keys = new Set(plan.lines.filter((l) => waits.has(l.status)).map((l) => l.key))
     return plan.existing.filter(
       (x) =>
         x.booksKey?.startsWith(`${period}:`) &&
@@ -667,7 +433,7 @@ export class ExpensesService {
       workspaceId,
       period,
       file: plan.files[0] ? { id: plan.files[0].id, fileName: plan.files[0].fileName } : null,
-      mappings: plan.mappings.map((m) => this.mappingDto(m, plan.engagements)),
+      aliases: plan.aliases.map(aliasDto),
       engagements: plan.engagements.map((e) => ({
         id: e.id,
         name: e.name,

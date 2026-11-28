@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   Param,
   Post,
+  Put,
   Res,
   UploadedFile,
   UseGuards,
@@ -12,11 +14,19 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express'
 import { Throttle } from '@nestjs/throttler'
 import type { Response } from 'express'
-import type { BudgetFileDto, BudgetFileVersionDto, BudgetUploadChange } from '@ad/types'
+import type {
+  BudgetFileDto,
+  BudgetFileVersionDto,
+  BudgetUploadChange,
+  PayrollRollupDto,
+  PayrollRollupPreviewDto,
+  PayrollRollupSaved,
+} from '@ad/types'
 import { AuthenticatedGuard } from '../auth/authenticated.guard'
 import { CallerService, UserId } from '../core/caller'
 import { MAX_IMPORT_BYTES } from '../imports/table'
 import { BudgetService } from './budget.service'
+import { PayrollRollupService } from './payroll-rollup.service'
 
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 /** A budget file is read in memory: one file, as small as an import's. */
@@ -105,5 +115,41 @@ export class BudgetController {
   ): Promise<void> {
     const file = await this.budget.historyFile(await this.callers.load(userId), id, fileId)
     send(res, file.name, file.contentType, file.bytes)
+  }
+}
+
+/** Map Payroll Budget Line Items (#138): which budget lines hold each kind of payroll, on the workspace page. */
+@Controller('workspaces/:id/payroll-rollup')
+@UseGuards(AuthenticatedGuard)
+export class PayrollRollupController {
+  constructor(
+    private readonly rollup: PayrollRollupService,
+    private readonly callers: CallerService
+  ) {}
+
+  @Get()
+  async list(@UserId() userId: string, @Param('id') id: string): Promise<PayrollRollupDto> {
+    return this.rollup.list(await this.callers.load(userId), id)
+  }
+
+  /** What saving a kind would change: the engagements whose line changes and their months that go back to draft. */
+  @Post(':kind/preview')
+  async preview(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('kind') kind: string,
+    @Body() body: unknown
+  ): Promise<PayrollRollupPreviewDto> {
+    return this.rollup.preview(await this.callers.load(userId), id, kind, body)
+  }
+
+  @Put(':kind')
+  async save(
+    @UserId() userId: string,
+    @Param('id') id: string,
+    @Param('kind') kind: string,
+    @Body() body: unknown
+  ): Promise<PayrollRollupSaved> {
+    return this.rollup.save(await this.callers.load(userId), id, kind, body)
   }
 }

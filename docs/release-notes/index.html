@@ -638,6 +638,106 @@
               months back to draft. The screen tells you first.
             </li>
             <li>You no longer add or edit budget lines one at a time: the file does it.</li>
+            <li>
+              Which budget line holds each kind of payroll is set in Map Payroll Budget Line Items,
+              on the workspace page. A new line from the file takes its payroll from there.
+            </li>
+          </ul>
+        </div>
+      </article>
+
+      <article
+        class="entry"
+        id="payroll-rollup"
+        data-status="shipped"
+        data-short="Map payroll budget line items"
+        data-summary="One list on the workspace page says which budget lines hold staff pay, staff taxes, participant pay and participant taxes, for every engagement at once."
+      >
+        <div class="meta">
+          <span class="chip shipped">SHIPPED</span><time datetime="2026-11-27">Nov 27, 2026</time>
+        </div>
+        <h2>Map payroll budget line items</h2>
+        <p>
+          Which budget line holds each payroll category the payroll match proves is now set once,
+          for the whole workspace: Map Payroll Budget Line Items, under Configuration Data. It
+          replaces the payroll checkboxes on each budget line.
+        </p>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>
+              Each category lists the budget line names that hold it, such as Staff Salaries and
+              Personnel, or Not linked to a Budget Line Item. Each engagement uses the name it has.
+            </li>
+            <li>
+              It reads like Map Financial Categories: each row has an Applies to, so an engagement
+              can have a row of its own that maps a category to another of its lines, or to none.
+            </li>
+            <li>
+              An engagement with two of the names, or none that fits, is asked which line holds it.
+              Until someone chooses, that pay counts on no line and the month can't be closed. The
+              month page and Month End Close both say so, with a link to the card.
+            </li>
+            <li>
+              Before you save, the dialog lists each engagement whose line changes and the closed or
+              submitted months that go back to draft: only months whose numbers change.
+            </li>
+            <li>
+              Your current choices were copied over: every engagement's lines hold the same payroll
+              as before.
+            </li>
+            <li>Changing or renaming a budget line keeps its payroll with it.</li>
+            <li>Map Payroll Programs is now called Map Payroll Project Names.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article
+        class="entry"
+        id="quickbooks-names"
+        data-status="review"
+        data-short="Map financial categories to budget categories"
+        data-summary="One list on the workspace page says which budget category each financial category of your books maps to, and Import transactions and Month End Close both read it."
+      >
+        <div class="meta">
+          <span class="chip review">IN REVIEW</span><time datetime="2026-11-27">Nov 27, 2026</time>
+        </div>
+        <h2>Map financial categories to budget categories</h2>
+        <p>
+          Where each financial category of your books goes is now kept in one place: Map Financial
+          Categories, under Configuration Data on your workspace page. Import transactions and
+          <a href="#month-end-close">Month End Close</a> both read it, so an account can no longer
+          go to one budget line in one screen and another line in the other.
+        </p>
+        <div class="know">
+          <strong>Good to know</strong>
+          <ul>
+            <li>
+              Each financial category is written exactly as your financial system (QuickBooks,
+              FreshBooks, etc.) writes it, account number included when your books have one ("60901
+              Rent Expense"). It maps to a budget category by the line's name, so it works for every
+              engagement with a line of that name.
+            </li>
+            <li>
+              An engagement can map a category somewhere else, or mark it Unallowable there only.
+            </li>
+            <li>
+              Unallowable replaces leaving a category blank. Those rows aren't imported, need no
+              proof and count in no total. Owners and bookkeepers still see them listed, marked
+              Unallowable.
+            </li>
+            <li>
+              A name that isn't on the list yet asks where it goes, and first offers the names it
+              may be the same as, in case the account was renamed in your books. Your answer is kept
+              on the list.
+            </li>
+            <li>
+              Renaming a budget line shows the financial categories that map to it, and they move to
+              the new name when you save. Bulk Add Names takes a filled-in sample, or an account
+              mapping spreadsheet, and adds its rows to the list. Each row has Edit and Remove, and
+              Remove asks first.
+            </li>
+            <li>Owners and bookkeepers keep the list. Auditors don't see it.</li>
           </ul>
         </div>
       </article>

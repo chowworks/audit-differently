@@ -6,19 +6,16 @@ import {
   Get,
   HttpCode,
   Param,
-  Patch,
   Post,
   Put,
   Res,
-  UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common'
-import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express'
+import { FilesInterceptor } from '@nestjs/platform-express'
 import type { Response } from 'express'
 import type {
-  AccountMappingDto,
   BooksBillInput,
   BooksPaymentInput,
   EmailedFilesDto,
@@ -36,7 +33,7 @@ import { sendInline } from '../payroll/payroll-match.controller'
 
 /**
  * The month's expenses from the books (owner's decision, 2026-11-09): the lines of the accounting export in the month's
- * payroll files, routed to engagements and budget lines, and each engagement's account mapping. Owners save and
+ * payroll files, routed to engagements and budget lines by the QuickBooks names list. Owners save and
  * read; no one else sees it (owner's decision, 2026-11-14).
  */
 @Controller()
@@ -46,38 +43,6 @@ export class ExpensesController {
     private readonly expenses: ExpensesService,
     private readonly callers: CallerService
   ) {}
-
-  /** An account mapping file (the payroll zip's "Account mapping" folder): read, kept for its engagement. */
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
-  @Post('workspaces/:id/account-mappings')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
-  async addMapping(
-    @UserId() userId: string,
-    @Param('id') id: string,
-    @UploadedFile() file: Express.Multer.File | undefined
-  ): Promise<AccountMappingDto> {
-    return this.expenses.addMapping(await this.callers.load(userId), id, file)
-  }
-
-  @Patch('workspaces/:id/account-mappings/:mappingId')
-  async setMapping(
-    @UserId() userId: string,
-    @Param('id') id: string,
-    @Param('mappingId') mappingId: string,
-    @Body() body: { engagementId?: unknown; category?: unknown; budgetLineId?: unknown }
-  ): Promise<AccountMappingDto> {
-    return this.expenses.setMapping(await this.callers.load(userId), id, mappingId, body ?? {})
-  }
-
-  @Delete('workspaces/:id/account-mappings/:mappingId')
-  @HttpCode(204)
-  async removeMapping(
-    @UserId() userId: string,
-    @Param('id') id: string,
-    @Param('mappingId') mappingId: string
-  ): Promise<void> {
-    await this.expenses.removeMapping(await this.callers.load(userId), id, mappingId)
-  }
 
   @Get('workspaces/:id/expenses/:period')
   async list(

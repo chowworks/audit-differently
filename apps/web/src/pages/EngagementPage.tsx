@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ENGAGEMENT_KIND_LABELS,
   tagValueLabel,
@@ -88,9 +88,8 @@ export function EngagementPage() {
   const [participantsOpen, setParticipantsOpen] = useState<{ fileFor?: string } | null>(null)
   const [monthsOpen, setMonthsOpen] = useState<'ledger' | 'submission' | null>(null)
   const [importing, setImporting] = useState(false)
-  // Manage Budget is open: also on arrival from a link that asks for it (Month End Close's "Open its budget").
-  const [searchParams] = useSearchParams()
-  const [managing, setManaging] = useState(searchParams.get('manage') === 'budget')
+  // Manage Budget is open.
+  const [managing, setManaging] = useState(false)
   // The budget upload and the budget history (GitHub issue #98), opened from Manage Budget; it shows again after.
   const [budgetDialog, setBudgetDialog] = useState<'upload' | 'history' | null>(null)
   const [menu, setMenu] = useState<{

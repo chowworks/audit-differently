@@ -5,7 +5,7 @@
   gap: 24px;
   align-items: start;
 }
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .sd-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -22,7 +22,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
 }
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .sd-rail {
     position: static;
     grid-auto-flow: column;
@@ -519,6 +519,41 @@
 }
 
 /* Step 3, Review staff payroll (StaffReview.tsx). */
+/* On a phone the proof column takes the row's full width under what was paid, when and how much. */
+@media (max-width: 700px) {
+  /* Hidden from sight only: a screen reader still reads each cell's column. */
+  .sr-grid thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .sr-grid tr[class^='sr-row-'] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 0 12px;
+  }
+  .sr-grid tr[class^='sr-row-'] > td:nth-child(4) {
+    grid-column: 1 / -1;
+    padding-top: 0;
+  }
+  /* The engagement's name first, its link or Complete chip under it. */
+  .sr-grid tr.wpd-group {
+    display: block;
+  }
+  .sr-grid tr.wpd-group > td {
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .sr-grid tr.wpd-group .wpd-group-end {
+    float: none;
+    margin: 0;
+  }
+}
 .sr-chipbtn {
   font: inherit;
   color: inherit;
@@ -571,6 +606,11 @@
 .sr-amber,
 .sr-amber .sr-problem-words {
   color: #8a5a00;
+}
+/* The coloured bar is drawn inside the cell, so the words keep clear of it. */
+.sr-grid .sr-row-red > td:first-child,
+.sr-grid .sr-row-yellow > td:first-child {
+  padding-left: 14px;
 }
 .sr-row-red > td:first-child {
   box-shadow: inset 3px 0 0 var(--danger, #b42318);

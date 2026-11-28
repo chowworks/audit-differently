@@ -2,7 +2,9 @@ import { Injectable } from '@nestjs/common'
 import type { PrismaClient } from '@prisma/client'
 import {
   DEFAULT_HIGHLIGHTS,
+  PAYROLL_BUDGET_KINDS,
   PAYROLL_BUDGET_KIND_LABELS,
+  payrollPlace,
   type DocumentPurpose,
   type HighlightField,
   type PayrollBudgetKind,
@@ -84,12 +86,91 @@ export async function refreshChecks(prisma: PrismaClient, reportId: string): Pro
   return findings
 }
 
+/**
+ * The kinds of payroll a month has (staff lines or books' payroll rows, participants' payments) whose budget line is
+ * unclear on its engagement (payroll budget line items, #138): they count on no line until someone chooses.
+ */
+export async function payrollUnclearOf(
+  prisma: PrismaClient,
+  report: {
+    engagementId: string
+    engagement: {
+      name: string
+      workspaceId: string
+      workspace: { name: string }
+      budgetLines: { name: string; reportLine: string }[]
+    }
+    expenses: { payrollKey: string | null; payrollKind: string | null }[]
+    wexPayments: unknown[]
+    payrollMatchedAt?: Date | null
+  }
+): Promise<{ label: string; choices: string[]; engagement: string; workspace: string }[]> {
+  // A staff line Save wrote from payroll details says its kind in its key (`staff:<id>:<run end>:pay|taxes`,
+  // `participants:<run end>:taxes`); a books' payroll row says it in payrollKind.
+  const keyKind = (key: string | null): PayrollBudgetKind | null =>
+    !key
+      ? null
+      : key.startsWith('participants:')
+        ? 'participant-taxes'
+        : key.startsWith('staff:')
+          ? key.endsWith(':taxes')
+            ? 'staff-taxes'
+            : 'staff-pay'
+          : null
+  const has = (k: PayrollBudgetKind) =>
+    (k === 'participant-pay' && report.wexPayments.length > 0) ||
+    report.expenses.some((e) => e.payrollKind === k || keyKind(e.payrollKey) === k)
+  const kinds = PAYROLL_BUDGET_KINDS.filter(has)
+  // A matched month has the payroll it pays even when none was written: the match writes no line of a kind while that
+  // kind's line is unclear, and that must still block the month (review, 2026-11-28). Staff pay and taxes when the
+  // engagement has staff; participant taxes when it paid participants.
+  if (report.payrollMatchedAt) {
+    const add = (k: PayrollBudgetKind) => !kinds.includes(k) && kinds.push(k)
+    if (report.wexPayments.length) add('participant-taxes')
+    if (
+      !(['staff-pay', 'staff-taxes'] as const).every((k) => kinds.includes(k)) &&
+      (await prisma.staffAssignment.count({ where: { engagementId: report.engagementId } })) > 0
+    ) {
+      add('staff-pay')
+      add('staff-taxes')
+    }
+    kinds.sort((x, y) => PAYROLL_BUDGET_KINDS.indexOf(x) - PAYROLL_BUDGET_KINDS.indexOf(y))
+  }
+  if (!kinds.length) return []
+  const rows = await prisma.lineAlias.findMany({
+    where: {
+      workspaceId: report.engagement.workspaceId,
+      list: 'payroll',
+      OR: [{ engagementId: null }, { engagementId: report.engagementId }],
+    },
+    select: { name: true, engagementId: true, budgetLineName: true, unallowable: true },
+  })
+  const entries = rows.map((r) => ({
+    kind: r.name as PayrollBudgetKind,
+    engagementId: r.engagementId,
+    budgetLineName: r.unallowable ? null : r.budgetLineName,
+  }))
+  return kinds.flatMap((k) => {
+    const p = payrollPlace(k, report.engagementId, entries, report.engagement.budgetLines)
+    return p.by === 'unclear'
+      ? [
+          {
+            label: PAYROLL_BUDGET_KIND_LABELS[k],
+            choices: p.choices.map((l) => l.name),
+            engagement: report.engagement.name,
+            workspace: report.engagement.workspace.name,
+          },
+        ]
+      : []
+  })
+}
+
 async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Finding[]> {
   {
     const report = await prisma.monthlyReport.findUniqueOrThrow({
       where: { id: reportId },
       include: {
-        engagement: { include: { budgetLines: true } },
+        engagement: { include: { budgetLines: true, workspace: { select: { name: true } } } },
         expenses: { include: { documents: { include: { document: { select: { kind: true } } } } } },
         wexPayments: {
           include: {
@@ -204,6 +285,7 @@ async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Findi
         proofs: w.documents.map(proofOf),
       })),
       highlights: await highlightsNow(prisma),
+      payrollUnclear: await payrollUnclearOf(prisma, report),
       earlierExpenses: earlier.map((e) => ({
         id: e.id,
         vendor: e.vendor,

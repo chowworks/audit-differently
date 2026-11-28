@@ -1,7 +1,7 @@
 import { StaffReview } from '@/components/payroll-match/StaffReview'
+import { Link } from 'react-router-dom'
 import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react'
 import type {
-  AccountMappingDto,
   BooksBillDto,
   BooksBillInput,
   BooksLineDto,
@@ -12,7 +12,7 @@ import type {
   WorkspaceExpensesDto,
   WorkspaceExpensesSavedDto,
 } from '@ad/types'
-import { ACCOUNT_MAPPING_FOLDER, zipFolder } from '@ad/types'
+import { aliasKey, lineKey, suggestAliases, zipFolder } from '@ad/types'
 import { useApi, useLoad } from '@/hooks/useApi'
 import { money, periodLabel, shortDate } from '@/lib/format'
 import { Button, Card, Chip, Empty, ErrorNote, Modal, Notice } from '@/components/ui'
@@ -50,9 +50,9 @@ const BILLS_SHOWN = 3
 const PLAIN_REASON: Partial<Record<BooksLineStatus, string>> = {
   'allocation-pool': 'Allocation entries: their shares are the lines billed',
   'not-ours': 'Other programs: their class has no engagement here',
-  'no-mapping': 'No account mapping for the engagement yet',
-  'not-billable': 'Not billable: the account mapping leaves the account out',
-  'no-budget-line': 'No budget line for the category',
+  unmapped: 'Not mapped to a budget category yet',
+  unallowable: 'Unallowable: not imported, not included in reports/budget',
+  'no-budget-line': "The list's budget line is not on the engagement",
   'payroll-account': 'Payroll: done in Payroll matching',
   credit: 'Refunds and credits: never billed',
   'outside-contract': "Outside the engagement's contract dates",
@@ -126,11 +126,11 @@ export function WorkspaceExpenses({
   const allSaved = nothingNew(d)
   const loose = unmatchedReceipts(d)
 
-  const changeMapping = async (m: AccountMappingDto, body: Record<string, unknown>) => {
+  const chooseLine = async (body: Record<string, unknown>) => {
     setError(null)
     setBusy('Saving the mapping…')
     try {
-      await api.patch(`/workspaces/${workspaceId}/account-mappings/${m.id}`, body)
+      await api.post(`/workspaces/${workspaceId}/line-aliases/choose`, body)
       await load.reload()
     } catch (e) {
       setError((e as Error).message)
@@ -252,9 +252,10 @@ export function WorkspaceExpenses({
 
       {!d.file ? (
         <Empty>
-          The month&apos;s files have no books export with expenses. Put the month&apos;s QuickBooks
-          Transaction List with Splits in the zip&apos;s{' '}
-          {zipFolder('payroll-proof', 'payroll-details').name} folder, and upload again.
+          The month&apos;s files have no books export with expenses. Put the month&apos;s
+          transaction list from your financial system (in QuickBooks, the Transaction List with
+          Splits) in the zip&apos;s {zipFolder('payroll-proof', 'payroll-details').name} folder, and
+          upload again.
         </Empty>
       ) : (
         <>
@@ -382,7 +383,7 @@ export function WorkspaceExpenses({
       <MatchPanel
         label="How the books were read"
         title="How the books were read"
-        sub="Why each line of the books was billed, or why not, and the account mapping used."
+        sub="Why each line of the books was billed, or why not, and the categories not mapped yet."
       >
         <div className="grid gap-4 pt-3">
           {d.file && (
@@ -401,7 +402,13 @@ export function WorkspaceExpenses({
               ))}
             </div>
           )}
-          <Mappings d={d} can={can} busy={!!busy} onChange={changeMapping} />
+          <UnmappedNames
+            workspaceId={workspaceId}
+            d={d}
+            can={can}
+            busy={!!busy}
+            onChoose={chooseLine}
+          />
         </div>
       </MatchPanel>
 
@@ -742,107 +749,128 @@ function PaymentOfBill({
   )
 }
 
-/** Each engagement's account mapping: its categories and the budget line each bills to. */
-function Mappings({
+/**
+ * The books' accounts no budget line takes yet, on each engagement (owner's decisions, 2026-11-27, #132): each asks
+ * where it goes, offering first the names on the QuickBooks names list it may be the same as (an account renamed in
+ * QuickBooks), then the engagement's budget lines, then Unallowable. The choice is kept on the list.
+ */
+function UnmappedNames({
+  workspaceId,
   d,
   can,
   busy,
-  onChange,
+  onChoose,
 }: {
+  workspaceId: string
   d: WorkspaceExpensesDto
   can: boolean
   busy: boolean
-  onChange: (m: AccountMappingDto, body: Record<string, unknown>) => Promise<void>
+  onChoose: (body: Record<string, unknown>) => Promise<void>
 }) {
-  if (d.mappings.length === 0)
+  // Every account of this month's books, wherever its line went: a listed name not among them may have been renamed.
+  const inFile = new Set(d.lines.map((l) => l.account.trim()).filter(Boolean))
+  const asks = new Map<
+    string,
+    { name: string; engagementId: string; engagementName: string; lines: number }
+  >()
+  for (const l of d.lines) {
+    if (
+      (l.status !== 'unmapped' && l.status !== 'no-budget-line') ||
+      !l.engagementId ||
+      !l.category
+    )
+      continue
+    const k = `${l.engagementId}|${aliasKey(l.category)}`
+    const at = asks.get(k)
+    if (at) at.lines++
+    else
+      asks.set(k, {
+        name: l.category,
+        engagementId: l.engagementId,
+        engagementName: l.engagementName ?? '',
+        lines: 1,
+      })
+  }
+  if (asks.size === 0)
     return (
       <p className="text-sm text-soft">
-        No account mapping yet. Put each engagement&apos;s chart of accounts mapping (account number
-        and the category it bills to) in the zip&apos;s <b>{ACCOUNT_MAPPING_FOLDER}</b> folder.
+        Every account in the books goes to a budget line or is Unallowable, by{' '}
+        <Link to={`/workspaces/${workspaceId}#financial-categories`}>Map Financial Categories</Link>{' '}
+        on the workspace page.
       </p>
     )
   return (
-    <div className="grid gap-3">
-      <h4 className="font-bold">{ACCOUNT_MAPPING_FOLDER}</h4>
-      {d.mappings.map((m) => {
-        const e = d.engagements.find((x) => x.id === m.engagementId)
-        return (
-          <div key={m.id} className="wex-mapping">
-            <div className="wex-mapping-head">
-              <b>{m.fileName}</b>
-              {can ? (
-                <select
-                  aria-label={`Engagement of ${m.fileName}`}
-                  value={m.engagementId ?? ''}
-                  disabled={busy}
-                  onChange={(ev) => void onChange(m, { engagementId: ev.target.value })}
-                >
-                  {!m.engagementId && <option value="">Choose its engagement…</option>}
-                  {d.engagements.map((x) => (
-                    <option key={x.id} value={x.id}>
-                      {x.name}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <span>{m.engagementName ?? 'No engagement'}</span>
-              )}
-            </div>
-            {m.engagementId && (
-              <div className="ad-tablewrap">
-                <table className="ad-table">
-                  <thead>
-                    <tr>
-                      <th>Category in the file</th>
-                      <th className="ad-num">Accounts</th>
-                      <th>Budget line</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {m.categories.map((c) => (
-                      <tr key={c.category}>
-                        <td>{c.category}</td>
-                        <td className="ad-num">{c.accounts}</td>
-                        <td>
-                          {can ? (
-                            <select
-                              aria-label={`Budget line for ${c.category}`}
-                              value={c.chosen ? (c.budgetLineId ?? '') : ''}
-                              disabled={busy}
-                              onChange={(ev) =>
-                                void onChange(m, {
-                                  category: c.category,
-                                  budgetLineId: ev.target.value || null,
-                                })
-                              }
-                            >
-                              <option value="">
-                                {c.chosen || !c.budgetLineName
-                                  ? c.chosen
-                                    ? 'As the file says'
-                                    : 'Choose a budget line…'
-                                  : `${c.budgetLineName} (as the file says)`}
+    <div className="grid gap-2">
+      <h4 className="font-bold">Categories not mapped to a budget category yet</h4>
+      <div className="ad-tablewrap">
+        <table className="ad-table">
+          <thead>
+            <tr>
+              <th>Financial Category</th>
+              <th>Engagement</th>
+              <th className="ad-num">Lines</th>
+              <th>Maps to</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...asks.values()].map((a) => {
+              const lines = d.engagements.find((e) => e.id === a.engagementId)?.budgetLines ?? []
+              const has = (n: string) => lines.some((b) => lineKey(b.name) === lineKey(n))
+              const same = suggestAliases(a.name, d.aliases, inFile, a.engagementId).filter(
+                (s) => s.unallowable || has(s.budgetLineName ?? '')
+              )
+              return (
+                <tr key={`${a.engagementId}|${a.name}`}>
+                  <td>{a.name}</td>
+                  <td>{a.engagementName}</td>
+                  <td className="ad-num">{a.lines}</td>
+                  <td>
+                    {can ? (
+                      <select
+                        aria-label={`Where ${a.name} goes`}
+                        value=""
+                        disabled={busy}
+                        onChange={(ev) => {
+                          const v = ev.target.value
+                          if (!v) return
+                          const unallowable = v === SKIP
+                          void onChoose({
+                            name: a.name,
+                            engagementId: a.engagementId,
+                            unallowable,
+                            budgetLineName: unallowable ? null : v,
+                          })
+                        }}
+                      >
+                        <option value="">Choose where it goes…</option>
+                        {same.length > 0 && (
+                          <optgroup label="Is it the same as one of these?">
+                            {same.map((s) => (
+                              <option key={s.name} value={s.unallowable ? SKIP : s.budgetLineName!}>
+                                {s.name} → {s.unallowable ? 'Unallowable' : s.budgetLineName}
                               </option>
-                              {e?.budgetLines.map((b) => (
-                                <option key={b.id} value={b.id}>
-                                  {b.name}
-                                </option>
-                              ))}
-                              <option value={SKIP}>Not billed</option>
-                            </select>
-                          ) : (
-                            (c.budgetLineName ?? (c.budgetLineId === SKIP ? 'Not billed' : 'None'))
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )
-      })}
+                            ))}
+                          </optgroup>
+                        )}
+                        <optgroup label="A budget line">
+                          {lines.map((b) => (
+                            <option key={b.id} value={b.name}>
+                              {b.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                        <option value={SKIP}>Unallowable (not included in reports/budget)</option>
+                      </select>
+                    ) : (
+                      'Not mapped'
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

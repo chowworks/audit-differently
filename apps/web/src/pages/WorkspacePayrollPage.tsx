@@ -640,6 +640,7 @@ export function WorkspacePayrollPage() {
           {!focus && (
             <div style={{ order: 1 }}>
               <PayrollActions
+                workspaceId={id}
                 programs={
                   programNames.data
                     ? {
@@ -1057,7 +1058,7 @@ function WorkspaceMatch({
     where: 'files' | 'match',
     /** The zip's "Program names" files: merged into the workspace's program names first, so the match reads by them. */
     names: File[] = [],
-    /** The zip's "Account mapping" files: each kept as its engagement's account mapping, for the expenses step. */
+    /** The zip's "Account mapping" files: merged into the QuickBooks names list. */
     mappings: File[] = [],
     /** The zip's "Receipts" files: the month's receipts of the books' bills, for the expenses step. */
     receipts: File[] = []
@@ -1083,11 +1084,11 @@ function WorkspaceMatch({
       const left: string[] = [...(oversizeExpenseFiles(mappings, receipts) ?? [])]
       for (const file of mappings) {
         if (file.size > MAPPING_MAX_BYTES) continue
-        setBusy(`Reading the account mapping in ${file.name}…`)
+        setBusy(`Adding the accounts in ${file.name}…`)
         const form = new FormData()
         form.append('file', file)
         try {
-          await api.upload(`/workspaces/${workspaceId}/account-mappings`, form)
+          await api.upload(`/workspaces/${workspaceId}/line-aliases/file`, form)
         } catch (e) {
           left.push(`${ACCOUNT_MAPPING_FOLDER}/${file.name} (${(e as Error).message})`)
         }

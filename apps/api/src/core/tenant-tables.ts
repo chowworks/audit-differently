@@ -61,6 +61,8 @@ export const TENANT_TABLES: ReadonlySet<string> = new Set([
   // Each engagement's account mapping, for the month's expenses from the books (migration 20261109000100): owners
   // and auditors read it, owners change it.
   'AccountMapping',
+  // The QuickBooks names list (migration 20261127000100): owners and bookkeepers read and keep it.
+  'LineAlias',
   // An owner's word on a bill of the books: its receipt, its payment, or dropped (migrations 20261112000100, 0200). Read and changed as
   // the account mappings are.
   'BooksBill',

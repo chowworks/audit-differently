@@ -3,7 +3,7 @@
  * bookkeeper's payroll proof: each step says what was done and what was found, with an animated "Analyzing and
  * reconciling" step, and every footer is Back, Cancel and Next.
  */
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { PayrollMatchFileDto, PayrollMatchProgress } from '@ad/types'
 import './StepperDesign.css'
 
@@ -19,9 +19,18 @@ export interface RailStep {
 
 /** The steps down the side, the step's own screen beside them. */
 export function StepRail({ steps, children }: { steps: RailStep[]; children: ReactNode }) {
+  // Below 1100px the rail is a strip that scrolls sideways: it keeps the step you're on in view.
+  const rail = useRef<HTMLOListElement>(null)
+  const at = steps.findIndex((s) => s.state === 'current' || s.state === 'working')
+  useEffect(() => {
+    const el = rail.current
+    const step = el?.children[at] as HTMLElement | undefined
+    if (!el || !step || el.scrollWidth <= el.clientWidth) return
+    el.scrollLeft = step.offsetLeft - el.offsetLeft - (el.clientWidth - step.offsetWidth) / 2
+  }, [at])
   return (
     <div className="sd-layout">
-      <ol className="sd-rail" aria-label="Steps">
+      <ol ref={rail} className="sd-rail" aria-label="Steps">
         {steps.map((s, i) => (
           <li
             key={s.label}

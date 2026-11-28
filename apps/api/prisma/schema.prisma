@@ -57,6 +57,7 @@ model Workspace {
   droppedPayrollDecisions    PayrollDroppedDecision[]
   payrollFileAiReadings      PayrollFileAiReading[]
   accountMappings            AccountMapping[]
+  lineAliases                LineAlias[]
   booksBills                 BooksBill[]
 }
 
@@ -204,6 +205,7 @@ model Engagement {
   inboundReceipts        InboundReceipt[]
   staffAssignments       StaffAssignment[]
   accountMapping         AccountMapping?
+  lineAliases            LineAlias[]
 
   @@unique([workspaceId, number])
   @@unique([workspaceId, code])
@@ -890,6 +892,27 @@ model PayrollFileAiReading {
   readAt      DateTime  @default(now())
 
   @@unique([workspaceId, sha256])
+}
+
+// The QuickBooks names list (migration 20261127000100, #132): a QuickBooks account or category as written, and the budget
+// line's NAME it goes to, or Unallowable; on an engagement's override, that engagement. One per name on the workspace and
+// per name on each engagement (a unique index on the key, the engagement or none, Prisma cannot declare). Owners and
+// bookkeepers read and keep it. Replaces ImportMapping.categories and AccountMapping, which stay unread until dropped.
+model LineAlias {
+  id             String      @id @default(uuid())
+  workspaceId    String
+  engagementId   String?
+  list           String      @default("quickbooks") // LINE_ALIAS_LISTS in packages/types
+  name           String
+  key            String // aliasKey(name)
+  budgetLineName String?
+  unallowable    Boolean     @default(false)
+  changedById    String
+  changedAt      DateTime    @default(now())
+  workspace      Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  engagement     Engagement? @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+
+  @@index([engagementId])
 }
 
 // An engagement's account mapping (migration 20261109000100): its chart of accounts mapped to the categories its funder

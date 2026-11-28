@@ -1815,6 +1815,13 @@
     font-size: 14px;
     opacity: 0.88;
   }
+  /* A button waiting for input inside the navy card: dimmed on navy, not a muddy green */
+  .ad-hand form button:disabled {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: transparent;
+    color: rgba(255, 255, 255, 0.6);
+    opacity: 1;
+  }
   /* The encouragement card beside the tiles */
   .ad-cheer {
     display: grid;
@@ -2434,12 +2441,15 @@
     border-radius: var(--radius);
     background: var(--surface);
     box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+    display: flex;
+    flex-direction: column;
   }
   .ad-ms-search {
     width: 100%;
     margin-bottom: 6px;
   }
   .ad-ms-pop ul {
+    min-height: 0;
     max-height: 240px;
     overflow-y: auto;
     margin: 0;

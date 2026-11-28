@@ -225,6 +225,39 @@ describe('runRules', () => {
     ])
   })
 
+  it('blocks a month whose payroll has no clear budget line', () => {
+    const found = runRules(
+      month({
+        payrollUnclear: [
+          {
+            label: 'Staff pay',
+            choices: ['Staff Salaries', 'Personnel'],
+            engagement: 'Youth Jobs',
+            workspace: 'Riverbend',
+          },
+          {
+            label: 'Participant taxes',
+            choices: [],
+            engagement: 'Youth Jobs',
+            workspace: 'Riverbend',
+          },
+        ],
+      })
+    )
+    expect(found).toEqual([
+      expect.objectContaining({
+        code: 'payroll-line-unclear',
+        severity: 'blocker',
+        message:
+          'Workspace configuration issue: Staff pay maps to both "Staff Salaries" and "Personnel" on Youth Jobs. Fix it in Workspace Manager > Riverbend > Configuration Data > Map Payroll Budget Line Items: press Choose beside Youth Jobs and pick one.',
+      }),
+      expect.objectContaining({
+        message:
+          'Workspace configuration issue: Participant taxes maps to no budget line on Youth Jobs. Fix it in Workspace Manager > Riverbend > Configuration Data > Map Payroll Budget Line Items: press Choose beside Youth Jobs and pick one.',
+      }),
+    ])
+  })
+
   it('flags a duplicate against this month and earlier months', () => {
     const found = codes(
       month({

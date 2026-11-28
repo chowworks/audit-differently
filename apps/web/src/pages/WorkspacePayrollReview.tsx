@@ -72,8 +72,8 @@ export function PlanWords({
                     <Link to={`/workspaces/${run.workspaceId}/staff`}>Tag staff →</Link>
                   )}
                   {x.missing.includes('budget') && (
-                    <Link to={`/engagements/${x.engagementId}?manage=budget`}>
-                      Open its budget →
+                    <Link to={`/workspaces/${run.workspaceId}#payroll-rollup`}>
+                      Map Payroll Budget Line Items →
                     </Link>
                   )}
                 </li>
@@ -120,7 +120,9 @@ export function PlanWords({
                     {u.engagementName}: {money(u.amount)} of{' '}
                     {PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}
                   </span>
-                  <Link to={`/engagements/${u.engagementId}?manage=budget`}>Open its budget →</Link>
+                  <Link to={`/workspaces/${run.workspaceId}#payroll-rollup`}>
+                    Map Payroll Budget Line Items →
+                  </Link>
                 </li>
               ))}
             </ul>

@@ -121,6 +121,7 @@ const colorAt = (order: string[], id: string, i: number) => {
 
 /** What to do this month: match it when it has no payroll files yet, else each thing to fix and where. */
 export function PayrollActions({
+  workspaceId,
   period,
   matched,
   cards,
@@ -132,6 +133,7 @@ export function PayrollActions({
   expenses,
   added,
 }: {
+  workspaceId: string
   period: string
   matched: boolean
   /**
@@ -177,6 +179,22 @@ export function PayrollActions({
     go: ReactNode
   }[] = []
   const all = cards ?? []
+  // A payroll category with no clear budget line blocks the month (#138): first, as the month page shows it.
+  for (const c of all)
+    for (const message of c.payrollUnclear ?? [])
+      rows.push({
+        key: `${c.engagementId}-unclear-${message}`,
+        sign: '⛔',
+        color: colorOf(colors, c.engagementId),
+        who: c.engagementName,
+        text: 'Workspace configuration issue',
+        sub: message.replace(/^Workspace configuration issue: /, ''),
+        go: (
+          <Link to={`/workspaces/${workspaceId}#payroll-rollup`}>
+            Map Payroll Budget Line Items →
+          </Link>
+        ),
+      })
   if (!matched) {
     // The engagements' payroll is on their months already (the bookkeeper's ledger); the files that prove it are not.
     const staffPay = all.reduce((t, c) => t + c.charged, 0)
@@ -229,7 +247,7 @@ export function PayrollActions({
       sign: '⚠️',
       who: name,
       text: 'No program name is linked to it',
-      sub: "Its timesheets' projects prove none of its pay until one is. Link its program on the Program names card.",
+      sub: "Its timesheets' projects prove none of its pay until one is. Link its program under Map Payroll Project Names on the workspace page.",
       go: <Link to={programs!.href}>Link its program →</Link>,
     })
   for (const c of all) {
@@ -251,8 +269,12 @@ export function PayrollActions({
         color,
         who: c.engagementName,
         text: `No budget line takes ${PAYROLL_BUDGET_KIND_LABELS[k].toLowerCase()}`,
-        sub: 'Its payroll from the files is left off the budget. Add the line, then Re-match with same files and Save.',
-        go: <Link to={`/engagements/${c.engagementId}?manage=budget`}>Open its budget →</Link>,
+        sub: 'Its payroll from the files is left off the budget. Link it to one of its budget lines, then Re-match with same files and Save.',
+        go: (
+          <Link to={`/workspaces/${workspaceId}#payroll-rollup`}>
+            Map Payroll Budget Line Items →
+          </Link>
+        ),
       })
     for (const l of c.lines)
       if (l.remaining < 0)

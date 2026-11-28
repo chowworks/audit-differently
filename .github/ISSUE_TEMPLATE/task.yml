@@ -1,0 +1,29 @@
+name: Task or bug
+description: Report a bug or request work. Priority is required.
+title: "[Area] "
+labels: ["♻️ Need Grooming"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start the title with its area, e.g. `[Proposal]`, `[Award]`, `[Budgets]`, `[Participants]`, `[Expenses]`,
+        `[Payroll]`, `[Reports]`, `[Audit]`, `[Workspace]`, `[Checks]` or `[Platform]`.
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How soon does this need to be done?
+      options:
+        - critical
+        - high
+        - medium
+        - low
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What and why
+      description: What should change, or what went wrong? Include steps to reproduce for bugs.
+    validations:
+      required: true
