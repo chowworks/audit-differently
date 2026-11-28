@@ -248,6 +248,14 @@ export function BudgetLineModal({
         )}
         <div className="text-sm">
           <p className="font-semibold">Payroll Category</p>
+          {renamed && line!.payroll.length > 0 && (
+            <p className="font-semibold">
+              {line!.payroll.length === 1
+                ? 'This payroll category maps'
+                : 'These payroll categories map'}{' '}
+              to {line!.name} and will go to {name.trim()} after Save.
+            </p>
+          )}
           {[...(line?.payroll ?? []), ...asked].length ? (
             <ul className="ml-5 list-disc">
               {[...(line?.payroll ?? []), ...asked].map((k) => (
