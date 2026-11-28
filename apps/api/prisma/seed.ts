@@ -8,6 +8,7 @@ import {
   aliasKey,
   payrollDefaults,
   payrollHolder,
+  payrollPlace,
   payrollRowKey,
   PAYROLL_BUDGET_KINDS,
   type PayrollBudgetKind,
@@ -217,6 +218,26 @@ async function seedPayrollRollup(
     budgetLineName: r.unallowable ? null : r.budgetLineName,
   }))
   const lines = await prisma.budgetLine.findMany({ where: { engagementId } })
+  // Where the list alone leaves a kind undecided here, the engagement's own row says what the seed means: the line it
+  // holds the kind on, or Not linked to a Budget Line Item (as the one-time copy, migration 20261128000100, does).
+  for (const kind of PAYROLL_BUDGET_KINDS) {
+    if (payrollPlace(kind, engagementId, entries, lines).by !== 'unclear') continue
+    const on = held.find(([, kinds]) => kinds.includes(kind))
+    const name = on ? REPORT_LINE_LABELS[on[0] as ReportLine] : null
+    await prisma.lineAlias.create({
+      data: {
+        workspaceId,
+        engagementId,
+        list: 'payroll',
+        name: kind,
+        key: payrollRowKey(kind),
+        budgetLineName: name,
+        unallowable: !name,
+        changedById: 'seed',
+      },
+    })
+    entries.push({ kind, engagementId, budgetLineName: name })
+  }
   for (const l of lines) {
     const payroll = PAYROLL_BUDGET_KINDS.filter(
       (k) => payrollHolder(k, engagementId, entries, lines)?.id === l.id

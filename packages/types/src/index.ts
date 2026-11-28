@@ -145,7 +145,7 @@ export const payrollRowKey = (kind: PayrollBudgetKind, lineName?: string | null)
 export interface PayrollPlace<L> {
   line: L | null
   by: 'own' | 'nowhere' | 'list' | 'unclear'
-  /** For `unclear`: the lines it could be (none: no line looks like it). */
+  /** For `unclear`: the listed lines it could be (none: it has none of the listed names). */
   choices: L[]
 }
 
@@ -161,7 +161,7 @@ export function payrollPlace<L extends { name: string; reportLine: string }>(
     if (!own.budgetLineName) return { line: null, by: 'own', choices: [] }
     const line = byName(own.budgetLineName)
     // Its own line gone (removed): asked again.
-    return line ? { line, by: 'own', choices: [] } : { line: null, by: 'unclear', choices: lines }
+    return line ? { line, by: 'own', choices: [] } : { line: null, by: 'unclear', choices: [] }
   }
   const every = entries.filter((e) => e.kind === kind && e.engagementId === null)
   if (every.some((e) => !e.budgetLineName)) return { line: null, by: 'nowhere', choices: [] }
@@ -169,7 +169,7 @@ export function payrollPlace<L extends { name: string; reportLine: string }>(
   const hits = lines.filter((l) => listed.has(lineKey(l.name)))
   if (hits.length === 1) return { line: hits[0]!, by: 'list', choices: [] }
   if (hits.length > 1) return { line: null, by: 'unclear', choices: hits }
-  return { line: null, by: 'unclear', choices: lines }
+  return { line: null, by: 'unclear', choices: [] }
 }
 
 /** The line that holds a kind of an engagement's payroll, or none (Not linked to a Budget Line Item, or not chosen yet). */

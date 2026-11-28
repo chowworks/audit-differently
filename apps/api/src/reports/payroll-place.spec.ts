@@ -38,7 +38,7 @@ describe('payrollPlace', () => {
       null,
       ['Staff Salaries', 'Personnel'],
     ])
-    expect(at([])).toEqual(['unclear', null, ['Staff Salaries', 'Personnel', 'Work-Experience']])
+    expect(at([])).toEqual(['unclear', null, []])
   })
 
   it("lets the engagement's own entry win, and the workspace's Not on the budget win over a name", () => {

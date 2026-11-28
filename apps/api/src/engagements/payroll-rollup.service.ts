@@ -224,7 +224,14 @@ export class PayrollRollupService {
       if (payrollPlace(kind, e.id, read.entries, e.budgetLines).by === 'unclear') return []
       const p = payrollPlace(kind, e.id, next, e.budgetLines)
       return p.by === 'unclear'
-        ? [{ engagementId: e.id, name: e.name, choices: p.choices.map((l) => l.name) }]
+        ? [
+            {
+              engagementId: e.id,
+              name: e.name,
+              // The lines to choose from: the listed ones it has, else every line it has.
+              choices: (p.choices.length ? p.choices : e.budgetLines).map((l) => l.name),
+            },
+          ]
         : []
     })
   }

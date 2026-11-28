@@ -25,10 +25,6 @@ const nameOr = (n: string | null) => n ?? NOWHERE
 /** A kind the workspace has no row for: no line until each engagement is given one. */
 const NOT_SET = 'Not set yet: each engagement is asked to choose'
 
-/** "could go to A or B", or "has no budget line it fits". */
-const unclearWords = (choices: string[]) =>
-  choices.length > 1 ? `could go to ${choices.join(' or ')}` : 'has no budget line it fits'
-
 /**
  * One row of the card, as Map Financial Categories shows them: a payroll category, the budget line names it maps to
  * (null: Not linked), and the engagements it applies to: every engagement (the workspace's row, `every`), or the
@@ -249,8 +245,9 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
           <ul className="ml-5 list-disc">
             {unclear.map((u) => (
               <li key={`${u.kind}-${u.id}`}>
-                {u.name}: {PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}{' '}
-                {unclearWords(u.choices)}.{' '}
+                {u.choices.length > 1
+                  ? `${u.name}: ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()} could go to ${u.choices.join(' or ')}.`
+                  : `${u.name} has none of the budget line items listed for ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}.`}{' '}
                 <button
                   type="button"
                   className="wpd-linkbtn"
@@ -377,7 +374,7 @@ function Chooser({
           key={u.engagementId}
           label={u.name}
           required
-          hint={`${label} ${unclearWords(u.choices)} there`}
+          hint={`Choose which of its budget line items holds ${label.toLowerCase()}`}
           error={chosen[u.engagementId] ? null : 'Choose one'}
         >
           <select
