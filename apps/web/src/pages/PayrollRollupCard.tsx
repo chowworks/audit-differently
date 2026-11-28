@@ -498,6 +498,13 @@ function RowModal({
     }
   }
   const excepted = every ? of.filter((e) => e.engagementId).map((e) => e.engagementId!) : []
+  // What an edit takes away, as Map Financial Categories warns: the engagements this row covered and no longer will.
+  const covered = (all: boolean, ids: string[]) =>
+    all
+      ? data.engagements.filter((e) => !of.some((o) => o.engagementId === e.id)).map((e) => e.id)
+      : ids
+  const kept = new Set(covered(every, picked))
+  const lost = row ? covered(row.every, row.engagementIds).filter((id) => !kept.has(id)) : []
 
   return (
     <Modal
@@ -582,6 +589,21 @@ function RowModal({
             </small>
           )}
         </fieldset>
+        {lost.length > 0 && kind && (
+          <div className="text-sm">
+            <p className="font-semibold">
+              <span aria-hidden="true">⚠️</span> {lost.map(nameOf).join(', ')} will no longer map{' '}
+              {label.toLowerCase()} on this row.
+            </p>
+            <p className="text-soft">
+              {row!.every
+                ? `${lost.length === 1 ? 'It then uses its' : 'They then use their'} ${REPORT_LINE_LABELS[PAYROLL_BUDGET_DEFAULTS[kind][0]!]} line, unless ${lost.length === 1 ? 'it gets a row' : 'they get rows'} of ${lost.length === 1 ? 'its' : 'their'} own.`
+                : of.some((e) => e.engagementId === null)
+                  ? `${lost.length === 1 ? 'It goes' : 'They go'} back to the every-engagement row.`
+                  : `${lost.length === 1 ? 'It then uses its' : 'They then use their'} ${REPORT_LINE_LABELS[PAYROLL_BUDGET_DEFAULTS[kind][0]!]} line.`}
+            </p>
+          </div>
+        )}
         {preview && kind && (
           <>
             <Chooser label={label} preview={preview} chosen={chosen} setChosen={setChosen} />
