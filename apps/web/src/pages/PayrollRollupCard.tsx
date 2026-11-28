@@ -253,7 +253,7 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
             {unclear.map((u) => (
               <li key={`${u.kind}-${u.id}`}>
                 {u.choices.length > 1
-                  ? `${u.name}: ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()} could go to ${u.choices.join(' or ')}.`
+                  ? `${u.name}: ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()} could go to ${u.choices.join(' or ').replace(/\.?$/, '.')}`
                   : `${u.name} has none of the budget line items listed for ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}.`}{' '}
                 <button
                   type="button"
