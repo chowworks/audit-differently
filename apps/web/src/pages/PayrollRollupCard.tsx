@@ -6,6 +6,7 @@ import {
   PAYROLL_BUDGET_KIND_LABELS,
   REPORT_LINE_LABELS,
   lineKey,
+  payrollPlace,
   type PayrollBudgetKind,
   type PayrollRollupDto,
   type PayrollRollupInput,
@@ -15,6 +16,7 @@ import {
 import { useApi, useLoad } from '@/hooks/useApi'
 import { periodLabel } from '@/lib/format'
 import { Button, Card, ErrorNote, Field, Modal, Notice, inputClass } from '@/components/ui'
+import { MultiSelect } from '@/components/MultiSelect'
 
 const NOWHERE = 'Not on the budget'
 /** The select's value for "Not on the budget". */
@@ -24,11 +26,21 @@ const SAME = '__same__'
 
 const nameOr = (n: string | null) => n ?? NOWHERE
 
+/** Where a kind goes when the workspace lists no name: each engagement's line of its report line. */
+const byReportLine = (k: PayrollBudgetKind) =>
+  `Each engagement's ${REPORT_LINE_LABELS[PAYROLL_BUDGET_DEFAULTS[k][0]!]} line`
+
+/** "could go to A or B", or "no line fits it". */
+const unclearWords = (choices: string[]) =>
+  choices.length > 1 ? `could go to ${choices.join(' or ')}` : 'has no budget line it fits'
+
 /**
- * The payroll rollup (owner's decisions, 2026-11-27, #138): which budget line holds each kind of payroll from the
- * match, by the line's name, for every engagement, with an engagement's own line where it differs. Saving a kind moves
- * that payroll on every engagement whose line changes, so the dialog lists those engagements, and the closed and
- * submitted months that go back to draft, before Save. Owners and bookkeepers.
+ * Map Payroll Budget Line Items (owner's decisions, 2026-11-27, #138): for each payroll category from the match, the
+ * budget line names that hold it (several, no order: any of them is that category's line on an engagement), or Not on
+ * the budget, with an engagement's own line where it differs. An engagement with two of the names, or none that fits,
+ * gets no line until someone chooses, so the card names it and its months can't be closed. Saving a category moves that
+ * payroll on every engagement whose line changes, so the dialog lists those engagements, and the closed and submitted
+ * months that go back to draft, before Save. Owners and bookkeepers.
  */
 export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
   const path = `/workspaces/${workspaceId}/payroll-rollup`
@@ -45,15 +57,26 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
   const entries = data?.entries ?? []
   const nameOf = (id: string) => data?.engagements.find((e) => e.id === id)?.name ?? 'An engagement'
   const every = (k: PayrollBudgetKind) =>
-    entries.find((e) => e.kind === k && e.engagementId === null)
+    entries.filter((e) => e.kind === k && e.engagementId === null)
   const own = (k: PayrollBudgetKind) =>
     entries.filter((e) => e.kind === k && e.engagementId !== null)
+  // Each engagement with budget lines whose line for a category is unclear.
+  const unclear = (data?.engagements ?? []).flatMap((e) =>
+    e.lines.length
+      ? PAYROLL_BUDGET_KINDS.flatMap((k) => {
+          const p = payrollPlace(k, e.id, entries, e.lines)
+          return p.by === 'unclear'
+            ? [{ kind: k, name: e.name, choices: p.choices.map((l) => l.name) }]
+            : []
+        })
+      : []
+  )
 
   return (
-    <Card id="payroll-rollup" title="Map Payroll to Budget Lines">
+    <Card id="payroll-rollup" title="Map Payroll Budget Line Items">
       <p className="mb-3 text-sm text-soft">
-        The budget line that holds each kind of payroll the payroll match proves. A line is found by
-        its name on each engagement; an engagement can use another line, or keep it off the budget.
+        The budget lines that hold each payroll category the payroll match proves, by name. An
+        engagement uses the one it has; it can have its own line, or keep it off the budget.
       </p>
       <ErrorNote message={error} />
       {done && (
@@ -66,8 +89,8 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
           <table className="ad-table">
             <thead>
               <tr>
-                <th>Payroll</th>
-                <th>Maps to</th>
+                <th>Payroll Category</th>
+                <th>Budget Line Item</th>
                 <th>Engagements with their own line</th>
                 <th aria-label="Edit" />
               </tr>
@@ -79,15 +102,12 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
                   <tr key={k}>
                     <td>{PAYROLL_BUDGET_KIND_LABELS[k]}</td>
                     <td>
-                      {!ws ? (
-                        <span className="text-soft">
-                          Each engagement&apos;s{' '}
-                          {REPORT_LINE_LABELS[PAYROLL_BUDGET_DEFAULTS[k][0]!]} line
-                        </span>
-                      ) : ws.budgetLineName ? (
-                        ws.budgetLineName
-                      ) : (
+                      {!ws.length ? (
+                        <span className="text-soft">{byReportLine(k)}</span>
+                      ) : ws.some((e) => !e.budgetLineName) ? (
                         <span className="ad-chip ad-chip-muted">{NOWHERE}</span>
+                      ) : (
+                        ws.map((e) => e.budgetLineName).join(', ')
                       )}
                     </td>
                     <td>
@@ -110,6 +130,25 @@ export function PayrollRollupCard({ workspaceId }: { workspaceId: string }) {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+      {unclear.length > 0 && (
+        <div className="mt-3 grid gap-1 text-sm">
+          <p className="font-bold text-danger">
+            <span aria-hidden="true">⚠️</span> Choose a line for these: until then the payroll
+            counts on no line, and the month can&apos;t be closed.
+          </p>
+          <ul className="ml-5 list-disc">
+            {unclear.map((u) => (
+              <li key={`${u.kind}-${u.name}`}>
+                {u.name}: {PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}{' '}
+                {unclearWords(u.choices)}.{' '}
+                <button type="button" className="wpd-linkbtn" onClick={() => setEditing(u.kind)}>
+                  Choose
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {editing && data && (
@@ -149,9 +188,10 @@ function RollupModal({
 }) {
   const api = useApi()
   const label = PAYROLL_BUDGET_KIND_LABELS[kind]
-  const ws = data.entries.find((e) => e.kind === kind && e.engagementId === null)
-  const [every, setEvery] = useState<string>(
-    ws ? (ws.budgetLineName ?? NONE) : '' // no entry yet: chosen here
+  const ws = data.entries.filter((e) => e.kind === kind && e.engagementId === null)
+  const [nowhere, setNowhere] = useState(ws.some((e) => !e.budgetLineName))
+  const [names, setNames] = useState<string[]>(
+    ws.flatMap((e) => (e.budgetLineName ? [e.budgetLineName] : []))
   )
   const [own, setOwn] = useState<Record<string, string>>(() =>
     Object.fromEntries(
@@ -173,19 +213,16 @@ function RollupModal({
     return [...seen.values()].sort((a, b) => a.localeCompare(b))
   }, [data.engagements])
 
-  const input: PayrollRollupInput | null = every
-    ? {
-        every: every === NONE ? null : every,
-        own: Object.entries(own)
-          .filter(([, v]) => v !== SAME)
-          .map(([engagementId, v]) => ({ engagementId, budgetLineName: v === NONE ? null : v })),
-      }
-    : null
+  const input: PayrollRollupInput = {
+    every: nowhere ? null : names,
+    own: Object.entries(own)
+      .filter(([, v]) => v !== SAME)
+      .map(([engagementId, v]) => ({ engagementId, budgetLineName: v === NONE ? null : v })),
+  }
   const body = JSON.stringify(input)
 
   // What Save would change, worked out again as the choices change.
   useEffect(() => {
-    if (!input) return setPreview(null)
     let stale = false
     setPreview(null)
     api
@@ -199,7 +236,6 @@ function RollupModal({
   }, [body])
 
   const save = async () => {
-    if (!input) return
     setBusy(true)
     setError(null)
     try {
@@ -210,47 +246,78 @@ function RollupModal({
     }
   }
 
+  const unclearOf = (id: string) => preview?.unclear.find((u) => u.engagementId === id)
   const months =
     preview?.changes.flatMap((c) => c.backToDraft.map((m) => ({ ...m, name: c.name }))) ?? []
   return (
     <Modal title={`Where ${label} goes`} onClose={onClose} wide>
       <ErrorNote message={error} />
+      {preview && preview.unclear.length > 0 && (
+        <p className="mb-3 text-sm font-bold text-danger">
+          Choose a line for {preview.unclear.map((u) => u.name).join(', ')} before saving.
+        </p>
+      )}
       <div className="grid gap-4">
-        <Field label="Every engagement" required error={!every ? 'Choose a budget line' : null}>
-          <select className={inputClass} value={every} onChange={(e) => setEvery(e.target.value)}>
-            <option value="" disabled>
-              Choose a budget line
-            </option>
-            {lineNames.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-            <option value={NONE}>{NOWHERE}</option>
-          </select>
+        <Field
+          label="Budget line items, for every engagement"
+          hint={
+            nowhere
+              ? undefined
+              : names.length
+                ? 'Any of these names: each engagement uses the one it has'
+                : `None chosen: ${byReportLine(kind).toLowerCase()}`
+          }
+        >
+          {!nowhere && (
+            <MultiSelect
+              label={`Budget line items for ${label}`}
+              options={lineNames.map((n) => ({ value: n, label: n }))}
+              value={names}
+              onChange={setNames}
+              placeholder="Choose budget lines"
+            />
+          )}
+          <label className="mt-2 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={nowhere}
+              onChange={(e) => setNowhere(e.target.checked)}
+            />
+            {NOWHERE}
+          </label>
         </Field>
         {data.engagements.length > 0 && (
           <fieldset className="grid gap-2">
             <legend className="mb-1 text-sm font-semibold">Engagements with their own line</legend>
-            {data.engagements.map((e) => (
-              <label key={e.id} className="grid items-center gap-2 text-sm sm:grid-cols-[1fr_1fr]">
-                <span>{e.name}</span>
-                <select
-                  className={inputClass}
-                  aria-label={`${label} on ${e.name}`}
-                  value={own[e.id]}
-                  onChange={(x) => setOwn({ ...own, [e.id]: x.target.value })}
-                >
-                  <option value={SAME}>Same as every engagement</option>
-                  {e.lines.map((l) => (
-                    <option key={l.name} value={l.name}>
-                      {l.name}
-                    </option>
-                  ))}
-                  <option value={NONE}>{NOWHERE}</option>
-                </select>
-              </label>
-            ))}
+            {data.engagements.map((e) => {
+              const u = unclearOf(e.id)
+              return (
+                <label key={e.id} className="grid items-start gap-2 text-sm sm:grid-cols-[1fr_1fr]">
+                  <span className="pt-2">{e.name}</span>
+                  <span>
+                    <select
+                      className={inputClass}
+                      aria-label={`${label} on ${e.name}`}
+                      value={own[e.id]}
+                      onChange={(x) => setOwn({ ...own, [e.id]: x.target.value })}
+                    >
+                      <option value={SAME}>Same as every engagement</option>
+                      {e.lines.map((l) => (
+                        <option key={l.name} value={l.name}>
+                          {l.name}
+                        </option>
+                      ))}
+                      <option value={NONE}>{NOWHERE}</option>
+                    </select>
+                    {u && (
+                      <small className="mt-1 block font-semibold text-danger">
+                        {label} {unclearWords(u.choices)} here: choose one
+                      </small>
+                    )}
+                  </span>
+                </label>
+              )
+            })}
           </fieldset>
         )}
         {preview && preview.changes.length > 0 && (
@@ -279,7 +346,7 @@ function RollupModal({
             )}
           </div>
         )}
-        {preview && preview.changes.length === 0 && (
+        {preview && preview.changes.length === 0 && preview.unclear.length === 0 && (
           <p className="text-sm text-soft">No engagement&apos;s line changes.</p>
         )}
       </div>
@@ -287,7 +354,11 @@ function RollupModal({
         <Button kind="ghost" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
-        <Button kind="navy" onClick={() => void save()} disabled={busy || !preview}>
+        <Button
+          kind="navy"
+          onClick={() => void save()}
+          disabled={busy || !preview || preview.unclear.length > 0}
+        >
           Save
         </Button>
       </div>

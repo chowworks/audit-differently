@@ -8,8 +8,8 @@ import {
 import {
   PAYROLL_BUDGET_KINDS,
   PAYROLL_BUDGET_KIND_LABELS,
-  aliasKey,
-  payrollHolder,
+  payrollPlace,
+  payrollRowKey,
   REPORT_LINES,
   REPORT_LINE_LABELS,
   WRITE_ROLES,
@@ -60,6 +60,32 @@ function payrollOf(given: unknown): PayrollBudgetKind[] {
   if (bad.length) throw new BadRequestException('Choose payroll this line can hold')
   return PAYROLL_BUDGET_KINDS.filter((k) => given.includes(k))
 }
+
+/** The answers to "Which holds it?" (`BudgetLineInput.payrollChoices`): known kinds, each to a name or null. */
+function choicesOf(given: unknown): Partial<Record<PayrollBudgetKind, string | null>> {
+  if (!given || typeof given !== 'object' || Array.isArray(given))
+    throw new BadRequestException('Say which line holds each kind of payroll')
+  const out: Partial<Record<PayrollBudgetKind, string | null>> = {}
+  for (const [k, v] of Object.entries(given)) {
+    if (
+      !(PAYROLL_BUDGET_KINDS as readonly string[]).includes(k) ||
+      (v !== null && typeof v !== 'string')
+    )
+      throw new BadRequestException('Say which line holds each kind of payroll')
+    out[k as PayrollBudgetKind] = v === null ? null : v.trim()
+  }
+  return out
+}
+
+type RollupState = Awaited<ReturnType<BudgetService['rollupOf']>>
+
+/** The kinds of payroll whose line is unclear (two it could be, or none fits) on an engagement. */
+const unclearOf = (s: RollupState, engagementId: string) =>
+  new Set(
+    PAYROLL_BUDGET_KINDS.filter(
+      (k) => payrollPlace(k, engagementId, s.list, s.lines).by === 'unclear'
+    )
+  )
 
 /** The payroll kinds as the access log shows them: their screen words. */
 const payrollWords = (kinds: PayrollBudgetKind[]) =>
@@ -129,6 +155,7 @@ export class BudgetService {
     }
     // Asked for by the payroll page: these kinds on this line, as the engagement's own entries of the rollup.
     const asked = input && 'payroll' in input ? payrollOf(input.payroll) : []
+    const choices = input && 'payrollChoices' in input ? choicesOf(input.payrollChoices) : {}
     await this.refuseTaken(engagementId, values.name)
     const sortOrder = await this.prisma.budgetLine.count({ where: { engagementId } })
     let backed: Sent = []
@@ -137,10 +164,15 @@ export class BudgetService {
     await this.log.change(
       caller,
       async (tx) => {
-        await this.ownEntries(tx, caller, c, values.name, asked)
+        const was = unclearOf(await this.rollupOf(tx, c), c.id)
         const row = await tx.budgetLine.create({
           data: { engagementId, sortOrder, ...values, payroll: [] },
         })
+        await this.ownEntries(tx, caller, c, {
+          ...choices,
+          ...Object.fromEntries(asked.map((k) => [k, values.name])),
+        })
+        await this.refuseUnclear(tx, c, was)
         backed = await this.backToDraft(tx, caller, c)
         // The payroll rollup says, by name, which payroll the new line holds (#138).
         rows = (await this.applyRollup(tx, caller, c, false)).rows
@@ -191,9 +223,14 @@ export class BudgetService {
     if (input && 'amount' in input) values.amount = amountOf(input.amount)
     if (input && 'narrative' in input) values.narrative = narrativeOf(input.narrative)
     const asked = input && 'payroll' in input ? payrollOf(input.payroll) : []
+    const choices = input && 'payrollChoices' in input ? choicesOf(input.payrollChoices) : {}
     const had = line.payroll as PayrollBudgetKind[]
     const changes = changesOf(line, values, BUDGET_LINE_FIELDS)
-    if (changes.length === 0 && asked.every((k) => had.includes(k)))
+    if (
+      changes.length === 0 &&
+      asked.every((k) => had.includes(k)) &&
+      Object.keys(choices).length === 0
+    )
       return { ...(await this.engagements.detail(caller, c.id)), backToDraft: [] }
     let backed: Sent = []
     let rows = { moved: 0, stayed: 0 }
@@ -202,6 +239,7 @@ export class BudgetService {
     await this.log.change(
       caller,
       async (tx) => {
+        const was = unclearOf(await this.rollupOf(tx, c), c.id)
         // The QuickBooks names and the payroll rollup's entries that point at its old name follow it (#132, #138).
         if (values.name)
           carried = await carryRename(tx, {
@@ -212,7 +250,18 @@ export class BudgetService {
             changedById: caller.userId,
           })
         const row = await tx.budgetLine.update({ where: { id: line.id }, data: values })
-        await this.ownEntries(tx, caller, c, values.name ?? line.name, asked)
+        const name = values.name ?? line.name
+        // A change to a line never moves its payroll by itself (#138): a kind it held that the list would now put
+        // elsewhere stays on it, as the engagement's own entry.
+        const now = await this.rollupOf(tx, c)
+        const kept = had.filter(
+          (k) => !(k in choices) && payrollPlace(k, c.id, now.list, now.lines).line?.id !== line.id
+        )
+        await this.ownEntries(tx, caller, c, {
+          ...Object.fromEntries([...kept, ...asked].map((k) => [k, name])),
+          ...choices,
+        })
+        await this.refuseUnclear(tx, c, was)
         backed = await this.backToDraft(tx, caller, c)
         rows = (await this.applyRollup(tx, caller, c, false)).rows
         payroll = await this.payrollOn(tx, line.id)
@@ -252,8 +301,11 @@ export class BudgetService {
     await this.log.change(
       caller,
       async (tx) => {
+        const was = unclearOf(await this.rollupOf(tx, c), c.id)
         const row = await tx.budgetLine.delete({ where: { id: line.id } })
+        await this.refuseUnclear(tx, c, was)
         backed = await this.backToDraft(tx, caller, c)
+        await this.applyRollup(tx, caller, c, false)
         return row
       },
       {
@@ -282,36 +334,11 @@ export class BudgetService {
     c: { id: string; name: string; workspaceId: string },
     sendBack: boolean
   ): Promise<{ changed: boolean; rows: { moved: number; stayed: number }; backed: Sent }> {
-    const [entries, lines] = await Promise.all([
-      tx.lineAlias.findMany({
-        where: {
-          workspaceId: c.workspaceId,
-          list: 'payroll',
-          OR: [{ engagementId: null }, { engagementId: c.id }],
-        },
-        select: { name: true, engagementId: true, budgetLineName: true, unallowable: true },
-      }),
-      tx.budgetLine.findMany({
-        where: { engagementId: c.id },
-        orderBy: { sortOrder: 'asc' },
-        select: { id: true, name: true, reportLine: true, payroll: true },
-      }),
-    ])
-    const list = entries.flatMap((e) =>
-      (PAYROLL_BUDGET_KINDS as readonly string[]).includes(e.name)
-        ? [
-            {
-              kind: e.name as PayrollBudgetKind,
-              engagementId: e.engagementId,
-              budgetLineName: e.unallowable ? null : e.budgetLineName,
-            },
-          ]
-        : []
-    )
+    const { list, lines } = await this.rollupOf(tx, c)
     const want = new Map(lines.map((l) => [l.id, [] as PayrollBudgetKind[]]))
     const arrived: { lineId: string; kind: PayrollBudgetKind }[] = []
     for (const kind of PAYROLL_BUDGET_KINDS) {
-      const holder = payrollHolder(kind, c.id, list, lines)
+      const holder = payrollPlace(kind, c.id, list, lines).line
       if (!holder) continue
       want.get(holder.id)!.push(kind)
       if (!holder.payroll.includes(kind)) arrived.push({ lineId: holder.id, kind })
@@ -340,20 +367,83 @@ export class BudgetService {
     return { changed: true, rows, backed }
   }
 
-  /** The kinds asked for on a line (the payroll page) kept as this engagement's own entries of the rollup. */
+  /** The payroll entries of an engagement (the workspace's and its own) and its lines, on `tx`. */
+  private async rollupOf(tx: Prisma.TransactionClient, c: { id: string; workspaceId: string }) {
+    const [entries, lines] = await Promise.all([
+      tx.lineAlias.findMany({
+        where: {
+          workspaceId: c.workspaceId,
+          list: 'payroll',
+          OR: [{ engagementId: null }, { engagementId: c.id }],
+        },
+        select: { name: true, engagementId: true, budgetLineName: true, unallowable: true },
+      }),
+      tx.budgetLine.findMany({
+        where: { engagementId: c.id },
+        orderBy: { sortOrder: 'asc' },
+        select: { id: true, name: true, reportLine: true, payroll: true },
+      }),
+    ])
+    const list = entries.flatMap((e) =>
+      (PAYROLL_BUDGET_KINDS as readonly string[]).includes(e.name)
+        ? [
+            {
+              kind: e.name as PayrollBudgetKind,
+              engagementId: e.engagementId,
+              budgetLineName: e.unallowable ? null : e.budgetLineName,
+            },
+          ]
+        : []
+    )
+    return { list, lines }
+  }
+
+  /**
+   * A change that leaves a kind of payroll with two lines it could be, or none, is refused unless it says which (the
+   * dialog asks first; owner's decision, 2026-11-27): every such kind in one message.
+   */
+  private async refuseUnclear(
+    tx: Prisma.TransactionClient,
+    c: { id: string; workspaceId: string },
+    was: Set<PayrollBudgetKind>
+  ) {
+    const s = await this.rollupOf(tx, c)
+    const problems = PAYROLL_BUDGET_KINDS.flatMap((k) => {
+      const p = payrollPlace(k, c.id, s.list, s.lines)
+      if (p.by !== 'unclear' || was.has(k)) return []
+      const label = PAYROLL_BUDGET_KIND_LABELS[k]
+      return [
+        p.choices.length > 1
+          ? `${label} could go to ${p.choices.map((l) => l.name).join(' or ')}: choose which holds it`
+          : `${label} has no line it fits: choose which holds it`,
+      ]
+    })
+    if (problems.length) throw new BadRequestException(problems.join('. '))
+  }
+
+  /**
+   * Kinds of payroll put on a line of this engagement (the payroll page's "Add budget line", or "Which holds it?"), or
+   * off the budget (null), kept as this engagement's own entries. A name must be one of its lines.
+   */
   private async ownEntries(
     tx: Prisma.TransactionClient,
     caller: Caller,
     c: { id: string; workspaceId: string },
-    lineName: string,
-    kinds: PayrollBudgetKind[]
+    to: Partial<Record<PayrollBudgetKind, string | null>>
   ) {
+    const kinds = PAYROLL_BUDGET_KINDS.filter((k) => k in to)
+    if (!kinds.length) return
+    const { lines } = await this.rollupOf(tx, c)
     for (const kind of kinds) {
+      const name = to[kind] ?? null
+      const line = name && lines.find((l) => l.name.toLowerCase() === name.toLowerCase())
+      if (name && !line)
+        throw new BadRequestException(`${name} is not a budget line of this engagement`)
       const data = {
         name: kind,
-        key: aliasKey(kind),
-        budgetLineName: lineName,
-        unallowable: false,
+        key: payrollRowKey(kind),
+        budgetLineName: line ? line.name : null,
+        unallowable: !line,
         changedById: caller.userId,
         changedAt: new Date(),
       }

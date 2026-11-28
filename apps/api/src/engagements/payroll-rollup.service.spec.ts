@@ -90,7 +90,7 @@ describe('PayrollRollupService', () => {
     )
     await expect(
       s.save(member('owner'), W, 'staff-pay', {
-        every: 'Mileage',
+        every: ['Mileage'],
         own: [{ engagementId: 'e-1', budgetLineName: 'Personnel' }],
       })
     ).rejects.toThrow(
@@ -105,7 +105,7 @@ describe('PayrollRollupService', () => {
     // Dropping Youth Jobs' own entry: its Staff Salaries line takes staff pay; Adult IT is unchanged. Staff pay on a
     // closed or submitted month stays where it is, so no month goes back to draft.
     expect(
-      await s.preview(member('owner'), W, 'staff-pay', { every: 'staff salaries', own: [] })
+      await s.preview(member('owner'), W, 'staff-pay', { every: ['staff salaries'], own: [] })
     ).toEqual({
       changes: [
         {
@@ -116,6 +116,7 @@ describe('PayrollRollupService', () => {
           backToDraft: [],
         },
       ],
+      unclear: [],
     })
     // Participant pay off the budget: from October, the first month with participant payments, it counted there.
     expect(
@@ -130,6 +131,7 @@ describe('PayrollRollupService', () => {
           backToDraft: [{ period: '2026-10', was: 'closed' }],
         },
       ],
+      unclear: [],
     })
     // Not on the budget for every engagement: both lose it.
     const none = await s.preview(member('owner'), W, 'staff-pay', { every: null, own: [] })
@@ -139,11 +141,33 @@ describe('PayrollRollupService', () => {
     ])
   })
 
+  it('names each engagement that has two of the listed names, and Save waits for its own choice', async () => {
+    const { s, prisma } = service()
+    const both = { every: ['Staff Salaries', 'Personnel'], own: [] }
+    expect((await s.preview(member('owner'), W, 'staff-pay', both)).unclear).toEqual([
+      { engagementId: 'e-2', name: 'Youth Jobs', choices: ['Personnel', 'Staff Salaries'] },
+    ])
+    await expect(s.save(member('owner'), W, 'staff-pay', both)).rejects.toThrow(
+      new BadRequestException('Choose which line holds staff pay on Youth Jobs')
+    )
+    expect(prisma.lineAlias.deleteMany).not.toHaveBeenCalled()
+    // Its own choice settles it.
+    const chosen = {
+      ...both,
+      own: [{ engagementId: 'e-2', budgetLineName: 'Personnel' }],
+    }
+    const p = await s.preview(member('owner'), W, 'staff-pay', chosen)
+    expect([p.unclear, p.changes]).toEqual([[], []])
+  })
+
   it("saves the kind's entries as a whole, puts every engagement in step, and logs it in the screen's words", async () => {
     const { s, prisma, budget, log } = service()
     const saved = await s.save(member('owner'), W, 'staff-pay', {
-      every: 'Staff Salaries',
-      own: [{ engagementId: 'e-1', budgetLineName: null }],
+      every: ['Staff Salaries', 'Personnel'],
+      own: [
+        { engagementId: 'e-1', budgetLineName: null },
+        { engagementId: 'e-2', budgetLineName: 'Staff Salaries' },
+      ],
     })
     expect(prisma.lineAlias.deleteMany).toHaveBeenCalledWith({
       where: { workspaceId: W, list: 'payroll', name: 'staff-pay' },
@@ -152,10 +176,22 @@ describe('PayrollRollupService', () => {
       data: [
         expect.objectContaining({
           engagementId: null,
+          key: 'staff-pay|staff salaries',
           budgetLineName: 'Staff Salaries',
           unallowable: false,
         }),
-        expect.objectContaining({ engagementId: 'e-1', budgetLineName: null, unallowable: true }),
+        expect.objectContaining({
+          engagementId: null,
+          key: 'staff-pay|personnel',
+          budgetLineName: 'Personnel',
+        }),
+        expect.objectContaining({
+          engagementId: 'e-1',
+          key: 'staff-pay',
+          budgetLineName: null,
+          unallowable: true,
+        }),
+        expect.objectContaining({ engagementId: 'e-2', key: 'staff-pay' }),
       ],
     })
     expect(budget.applyRollup).toHaveBeenCalledTimes(2)
@@ -166,7 +202,7 @@ describe('PayrollRollupService', () => {
     expect(log.entries.at(-1)).toMatchObject({
       description: 'Changed where Staff pay goes on the budget',
       changes: expect.arrayContaining([
-        { field: 'Staff pay: every engagement', after: 'Staff Salaries' },
+        { field: 'Staff pay: every engagement', after: 'Staff Salaries, Personnel' },
         { field: 'Staff pay: Adult IT', after: 'Not on the budget' },
         { field: 'Imported payroll rows moved', after: '2' },
       ]),

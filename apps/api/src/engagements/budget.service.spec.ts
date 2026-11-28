@@ -128,7 +128,9 @@ function service(
               (!args.where.name || a.name === args.where.name)
           ) ?? null
       ),
-      update: jest.fn(async () => ({})),
+      update: jest.fn(async ({ where, data }: { where: { id: string }; data: object }) =>
+        Object.assign(payrollList.find((a) => a.id === where.id) ?? {}, data)
+      ),
       create: jest.fn(async ({ data }: { data: ReturnType<typeof rollup> }) => {
         payrollList.push({ ...data, id: `p-new-${payrollList.length}` })
         return data
@@ -158,10 +160,12 @@ function service(
         lines.push(row as (typeof lines)[number])
         return row
       }),
-      // A line's payroll (the rollup's) is kept; other fields answer as written, the row as it was.
+      // A line's payroll (the rollup's) and report line are kept; other fields answer as written, the row as it was.
       update: jest.fn(async ({ where, data }: { where: { id: string }; data: object }) => {
         const l = lines.find((x) => x.id === where.id) ?? travel()
-        return 'payroll' in data ? Object.assign(l, data) : { ...l, ...data }
+        return 'payroll' in data || 'reportLine' in data
+          ? Object.assign(l, data)
+          : { ...l, ...data }
       }),
       delete: jest.fn(async () => travel()),
     },
@@ -681,5 +685,73 @@ describe('BudgetService', () => {
     const staff = await s.applyRollup(prisma as never, member('owner'), c, true)
     expect(staff).toMatchObject({ changed: true, backed: [] })
     expect(months[0]!.status).toBe('submitted')
+  })
+
+  it('asks which line holds a kind when a new line gives it two it could be, and keeps the answer', async () => {
+    const salaries = {
+      ...travel(),
+      id: 'b-2',
+      name: 'Salaries',
+      reportLine: 'staff-salaries',
+      payroll: ['staff-pay', 'staff-taxes'] as string[],
+    }
+    const list = () => [rollup('staff-pay', 'Salaries'), rollup('staff-pay', 'Personnel')]
+    const personnel = { name: 'Personnel', reportLine: 'program-costs' as const }
+    const first = service([travel(), { ...salaries }], drafts(), 0, [], list())
+    await expect(first.service.add(member('owner'), 'e-1', personnel)).rejects.toThrow(
+      new BadRequestException('Staff pay could go to Salaries or Personnel: choose which holds it')
+    )
+    const { service: s, prisma } = service([travel(), { ...salaries }], drafts(), 0, [], list())
+    await s.add(member('owner'), 'e-1', {
+      ...personnel,
+      payrollChoices: { 'staff-pay': 'salaries' },
+    })
+    expect(prisma.lineAlias.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        engagementId: 'e-1',
+        name: 'staff-pay',
+        key: 'staff-pay',
+        budgetLineName: 'Salaries',
+      }),
+    })
+    // Staff pay stays where it was: no line's payroll changes.
+    expect(prisma.budgetLine.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: { payroll: expect.anything() } })
+    )
+    await expect(
+      s.add(member('owner'), 'e-1', {
+        name: 'Rent',
+        reportLine: 'program-costs',
+        payrollChoices: { 'staff-pay': 'Mileage' },
+      })
+    ).rejects.toThrow('Mileage is not a budget line of this engagement')
+  })
+
+  it("never moves a line's payroll by changing the line: it stays as the engagement's own entry", async () => {
+    // Wages holds staff pay and taxes as the line of its report line (no entry on the list).
+    const wages = {
+      ...travel(),
+      id: 'b-2',
+      name: 'Wages',
+      reportLine: 'staff-salaries',
+      payroll: ['staff-pay', 'staff-taxes'] as string[],
+    }
+    const { service: s, prisma } = service([travel(), wages])
+    await s.update(member('owner'), 'e-1', 'b-2', { reportLine: 'program-costs' })
+    expect(prisma.lineAlias.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        engagementId: 'e-1',
+        name: 'staff-pay',
+        budgetLineName: 'Wages',
+      }),
+    })
+    expect(prisma.lineAlias.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        engagementId: 'e-1',
+        name: 'staff-taxes',
+        budgetLineName: 'Wages',
+      }),
+    })
+    expect(wages.payroll).toEqual(['staff-pay', 'staff-taxes'])
   })
 })

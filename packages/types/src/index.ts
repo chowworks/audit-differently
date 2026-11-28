@@ -106,6 +106,12 @@ export interface BudgetLineInput {
    * engagement's own entries of the payroll rollup (#138), which then moves each kind off the line that held it.
    */
   payroll?: PayrollBudgetKind[]
+  /**
+   * The answers when this change leaves a kind of payroll with two lines it could be, or none (the dialog asks
+   * "Which holds it?"): each kind to one of the engagement's line names (this one's new name included) or null (Not on
+   * the budget), kept as the engagement's own entries.
+   */
+  payrollChoices?: Partial<Record<PayrollBudgetKind, string | null>>
 }
 
 /**
@@ -116,16 +122,75 @@ export interface BudgetChange extends EngagementDetail {
   backToDraft: { id: string; period: string; was: 'closed' | 'submitted' }[]
 }
 
-// ── The payroll rollup (owner's decisions, 2026-11-27, #138) ─────────────────
-// Which budget line holds each kind of payroll from the match, by the line's NAME, for the workspace, with an
-// engagement's own entry; "Not on the budget" is an entry too. Kept on the QuickBooks names table as the list 'payroll'.
+// ── Payroll budget line items (owner's decisions, 2026-11-27, #138) ──────────
+// Which budget line holds each kind of payroll from the match. The workspace lists, per kind, the budget line NAMES that
+// hold it (no order: any of them is that kind's line), or says "Not on the budget"; an engagement may have its own
+// entry (one of its lines, or Not on the budget), which wins. Kept on the QuickBooks names table as the list 'payroll'.
 
 /** One entry: a kind of payroll to a budget line's name, or nowhere (null: Not on the budget). */
 export interface PayrollRollupEntry {
   kind: PayrollBudgetKind
-  /** null: the workspace's entry; otherwise that engagement's own. */
+  /** null: one of the workspace's entries (several names per kind); otherwise that engagement's own (one). */
   engagementId: string | null
   budgetLineName: string | null
+}
+
+/** A row's key on the list: the kind, and for a workspace name, the name as lines compare. */
+export const payrollRowKey = (kind: PayrollBudgetKind, lineName?: string | null) =>
+  lineName ? `${kind}|${lineKey(lineName)}` : kind
+
+/**
+ * Where an engagement's kind of payroll lands, and why (owner's decisions, 2026-11-27):
+ * - `own`: the engagement's own entry (its line, or none for Not on the budget);
+ * - `nowhere`: the workspace says Not on the budget;
+ * - `list`: exactly one of its lines has a listed name;
+ * - `report-line`: none has, and exactly one of its lines is on the kind's report line (as a new line took it before);
+ * - `unclear`: two listed names, or no listed name and no single line on the report line. It lands on no line until
+ *   someone chooses one of `choices` (an engagement entry), and its months can't be closed or submitted meanwhile.
+ */
+export interface PayrollPlace<L> {
+  line: L | null
+  by: 'own' | 'nowhere' | 'list' | 'report-line' | 'unclear'
+  /** For `unclear`: the lines it could be (none: no line looks like it). */
+  choices: L[]
+}
+
+export function payrollPlace<L extends { name: string; reportLine: string }>(
+  kind: PayrollBudgetKind,
+  engagementId: string,
+  entries: Pick<PayrollRollupEntry, 'kind' | 'engagementId' | 'budgetLineName'>[],
+  lines: L[]
+): PayrollPlace<L> {
+  const byName = (name: string) => lines.find((l) => lineKey(l.name) === lineKey(name)) ?? null
+  const own = entries.find((e) => e.kind === kind && e.engagementId === engagementId)
+  if (own) {
+    if (!own.budgetLineName) return { line: null, by: 'own', choices: [] }
+    const line = byName(own.budgetLineName)
+    // Its own line gone (removed): asked again.
+    return line ? { line, by: 'own', choices: [] } : { line: null, by: 'unclear', choices: lines }
+  }
+  const every = entries.filter((e) => e.kind === kind && e.engagementId === null)
+  if (every.some((e) => !e.budgetLineName)) return { line: null, by: 'nowhere', choices: [] }
+  const listed = new Set(every.map((e) => lineKey(e.budgetLineName!)))
+  const hits = lines.filter((l) => listed.has(lineKey(l.name)))
+  if (hits.length === 1) return { line: hits[0]!, by: 'list', choices: [] }
+  if (hits.length > 1) return { line: null, by: 'unclear', choices: hits }
+  for (const want of PAYROLL_BUDGET_DEFAULTS[kind]) {
+    const on = lines.filter((l) => l.reportLine === want)
+    if (on.length === 1) return { line: on[0]!, by: 'report-line', choices: [] }
+    if (on.length > 1) return { line: null, by: 'unclear', choices: on }
+  }
+  return { line: null, by: 'unclear', choices: lines }
+}
+
+/** The line that holds a kind of an engagement's payroll, or none (Not on the budget, or not chosen yet). */
+export function payrollHolder<L extends { name: string; reportLine: string }>(
+  kind: PayrollBudgetKind,
+  engagementId: string,
+  entries: Pick<PayrollRollupEntry, 'kind' | 'engagementId' | 'budgetLineName'>[],
+  lines: L[]
+): L | null {
+  return payrollPlace(kind, engagementId, entries, lines).line
 }
 
 export interface PayrollRollupDto {
@@ -137,14 +202,18 @@ export interface PayrollRollupDto {
   }[]
 }
 
-/** A kind's entries saved as a whole: the workspace's, and each engagement's own (none: as the workspace says). */
+/**
+ * A kind's entries saved as a whole: the workspace's names (null: Not on the budget; none: each engagement's line of the
+ * kind's report line), and each engagement's own (none: as the workspace says).
+ */
 export interface PayrollRollupInput {
-  every: string | null
+  every: string[] | null
   own: { engagementId: string; budgetLineName: string | null }[]
 }
 
-/** What saving a kind would change, per engagement whose line changes, before Save. */
+/** What saving a kind would change, before Save. */
 export interface PayrollRollupPreviewDto {
+  /** Each engagement whose line changes. */
   changes: {
     engagementId: string
     name: string
@@ -153,32 +222,13 @@ export interface PayrollRollupPreviewDto {
     /** Its closed and submitted months, which go back to draft. */
     backToDraft: { period: string; was: 'closed' | 'submitted' }[]
   }[]
+  /** Each engagement with no own entry whose line would be unclear: Save waits for a choice for each. */
+  unclear: { engagementId: string; name: string; choices: string[] }[]
 }
 
 /** What saving a kind answers: the list, and the months each changed engagement put back to draft. */
 export interface PayrollRollupSaved extends PayrollRollupDto {
   backToDraft: { engagementName: string; period: string; was: 'closed' | 'submitted' }[]
-}
-
-/**
- * The line of an engagement that holds a kind of payroll: its own entry, else the workspace's (a line of that name, or
- * none), else, with no entry at all (a new workspace), its first-choice report line's line, as a new line took it before.
- */
-export function payrollHolder<L extends { name: string; reportLine: string }>(
-  kind: PayrollBudgetKind,
-  engagementId: string,
-  entries: Pick<PayrollRollupEntry, 'kind' | 'engagementId' | 'budgetLineName'>[],
-  lines: L[]
-): L | null {
-  const hit =
-    entries.find((e) => e.kind === kind && e.engagementId === engagementId) ??
-    entries.find((e) => e.kind === kind && e.engagementId === null)
-  if (hit)
-    return hit.budgetLineName
-      ? (lines.find((l) => lineKey(l.name) === lineKey(hit.budgetLineName!)) ?? null)
-      : null
-  const at = payrollDefaults(lines).findIndex((kinds) => kinds.includes(kind))
-  return at >= 0 ? lines[at]! : null
 }
 
 // ── QuickBooks names (owner's decision, 2026-11-27, #132) ────────────────────
@@ -575,6 +625,7 @@ export const CHECK_CODES = [
   'unallowable-category',
   'proof-mismatch',
   'no-budget-line',
+  'payroll-line-unclear',
   'payroll-counted-twice',
   'bills-without-receipt',
   'bills-without-payment',

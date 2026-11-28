@@ -1,19 +1,27 @@
 import type { PGlite } from '@electric-sql/pglite'
+import { PAYROLL_BUDGET_KINDS, payrollHolder } from '@ad/types'
 import { applyMigration, dbTestsEnabled, insert, migratedDb } from '../core/testing/tenant-db'
 
-// The payroll budget rollup filled once from each line's payroll ticks (#138, migration 20261128000100).
+// Payroll budget line items filled once from each line's payroll ticks (#138, migration 20261128000100).
 const suite = dbTestsEnabled ? describe : describe.skip
 const MIGRATION = '20261128000100_payroll_rollup'
 
-suite('the payroll rollup from the payroll ticks', () => {
+suite('payroll budget line items from the payroll ticks', () => {
   let db: PGlite
   afterAll(() => db.close())
 
-  const line = (id: string, engagementId: string, name: string, payroll: string[] = []) =>
+  const line = (
+    id: string,
+    engagementId: string,
+    name: string,
+    reportLine: string,
+    payroll: string[] = []
+  ) =>
     insert(db, 'BudgetLine', {
       id,
       engagementId,
       name,
+      reportLine,
       amount: 100,
       payroll: `{${payroll.join(',')}}`,
     })
@@ -21,48 +29,94 @@ suite('the payroll rollup from the payroll ticks', () => {
   beforeAll(async () => {
     db = await migratedDb(MIGRATION)
     await insert(db, 'Workspace', { id: 'W1', name: 'W1' })
-    for (const e of ['E1', 'E2', 'E3', 'E4'])
+    for (const e of ['E1', 'E2', 'E3', 'E4', 'E5'])
       await insert(db, 'Engagement', { id: e, workspaceId: 'W1', name: e, number: e })
-    // Staff pay on Staff Salaries at E1 and E2 (the most): the workspace's. E3 holds it on Personnel.
-    await line('E1-ss', 'E1', 'Staff Salaries', ['staff-pay', 'staff-taxes'])
-    await line('E2-ss', 'E2', 'staff salaries', ['staff-pay'])
-    await line('E3-p', 'E3', 'Personnel', ['staff-pay'])
-    // E2 has a Staff Fringe line holding the taxes; E4 has a Staff Salaries line holding nothing.
-    await line('E2-sf', 'E2', 'Staff Fringe', ['staff-taxes'])
-    await line('E4-ss', 'E4', 'Staff Salaries')
-    // Participant pay on Work Experience (one engagement): punctuation counts, so "Work-Experience" elsewhere differs.
-    await line('E1-we', 'E1', 'Work Experience', ['participant-pay'])
-    await line('E3-we', 'E3', 'Work-Experience')
+    // Staff pay on Staff Salaries at E1 and E2, on Personnel at E3.
+    await line('E1-ss', 'E1', 'Staff Salaries', 'staff-salaries', ['staff-pay', 'staff-taxes'])
+    await line('E2-ss', 'E2', 'staff salaries', 'staff-salaries', ['staff-pay'])
+    await line('E3-p', 'E3', 'Personnel', 'staff-salaries', ['staff-pay'])
+    // E2 holds the taxes on Staff Fringe.
+    await line('E2-sf', 'E2', 'Staff Fringe', 'staff-fringe', ['staff-taxes'])
+    // E4 has both listed names, ticked on Personnel: a clash the copy settles with its own row.
+    await line('E4-ss', 'E4', 'Staff Salaries', 'staff-salaries')
+    await line('E4-p', 'E4', 'Personnel', 'staff-salaries', ['staff-pay'])
+    // E5 has a Staff Salaries line holding nothing today: it must stay off the budget.
+    await line('E5-ss', 'E5', 'Staff Salaries', 'staff-salaries')
+    // Participant pay on Work Experience; punctuation counts, so E3's "Work-Experience" is another line, unticked,
+    // and the report line would take it without its own row.
+    await line('E1-we', 'E1', 'Work Experience', 'wex', ['participant-pay'])
+    await line('E3-we', 'E3', 'Work-Experience', 'wex')
     await applyMigration(db, MIGRATION)
   })
 
-  const list = async () =>
+  const rows = async () =>
     (
-      await db.query<{ e: string | null; name: string; goes: string | null; list: string }>(
-        `SELECT "engagementId" AS e, "name", "list",
-           CASE WHEN "unallowable" THEN 'Not on the budget' ELSE "budgetLineName" END AS goes
-         FROM "LineAlias" ORDER BY "name", "engagementId" NULLS FIRST`
+      await db.query<{
+        e: string | null
+        kind: string
+        key: string
+        goes: string | null
+      }>(
+        `SELECT "engagementId" AS e, "name" AS kind, "key",
+           CASE WHEN "unallowable" THEN NULL ELSE "budgetLineName" END AS goes
+         FROM "LineAlias" WHERE "list" = 'payroll'
+         ORDER BY "name", "engagementId" NULLS FIRST, "key"`
       )
-    ).rows.map((r) => [r.list, r.name, r.e, r.goes])
+    ).rows
 
-  it("makes the most-ticked line the workspace's, and keeps every engagement's lines as they are", async () => {
-    expect(await list()).toEqual([
-      ['payroll', 'participant-pay', null, 'Work Experience'],
-      // No engagement ticks participant taxes.
-      ['payroll', 'participant-taxes', null, 'Not on the budget'],
-      ['payroll', 'staff-pay', null, 'Staff Salaries'],
-      ['payroll', 'staff-pay', 'E3', 'Personnel'],
-      // E4 has a Staff Salaries line that holds nothing today.
-      ['payroll', 'staff-pay', 'E4', 'Not on the budget'],
-      // A tie (one each): the name first in order is the workspace's.
-      ['payroll', 'staff-taxes', null, 'Staff Fringe'],
-      ['payroll', 'staff-taxes', 'E1', 'Staff Salaries'],
+  it('lists every ticked name for the workspace, and gives an engagement its own row only where needed', async () => {
+    expect((await rows()).map((r) => [r.kind, r.e, r.goes, r.key])).toEqual([
+      ['participant-pay', null, 'Work Experience', 'participant-pay|work experience'],
+      ['participant-pay', 'E2', null, 'participant-pay'],
+      ['participant-pay', 'E3', null, 'participant-pay'],
+      ['participant-pay', 'E4', null, 'participant-pay'],
+      ['participant-pay', 'E5', null, 'participant-pay'],
+      // Nobody ticks participant taxes: off the budget everywhere, no engagement row needed.
+      ['participant-taxes', null, null, 'participant-taxes'],
+      ['staff-pay', null, 'Personnel', 'staff-pay|personnel'],
+      ['staff-pay', null, 'Staff Salaries', 'staff-pay|staff salaries'],
+      ['staff-pay', 'E4', 'Personnel', 'staff-pay'],
+      ['staff-pay', 'E5', null, 'staff-pay'],
+      ['staff-taxes', null, 'Staff Fringe', 'staff-taxes|staff fringe'],
+      ['staff-taxes', null, 'Staff Salaries', 'staff-taxes|staff salaries'],
+      // E1 has exactly one listed line, the one it ticks; E2 has both; the others tick nothing.
+      ['staff-taxes', 'E2', 'Staff Fringe', 'staff-taxes'],
+      ['staff-taxes', 'E3', null, 'staff-taxes'],
+      ['staff-taxes', 'E4', null, 'staff-taxes'],
+      ['staff-taxes', 'E5', null, 'staff-taxes'],
     ])
   })
 
+  it("puts every engagement's pay exactly where its ticks put it", async () => {
+    const entries = (await rows()).map((r) => ({
+      kind: r.kind as (typeof PAYROLL_BUDGET_KINDS)[number],
+      engagementId: r.e,
+      budgetLineName: r.goes,
+    }))
+    const lines = (
+      await db.query<{
+        id: string
+        e: string
+        name: string
+        reportLine: string
+        payroll: string[]
+      }>(`SELECT "id", "engagementId" AS e, "name", "reportLine", "payroll" FROM "BudgetLine"`)
+    ).rows
+    for (const e of ['E1', 'E2', 'E3', 'E4', 'E5'])
+      for (const kind of PAYROLL_BUDGET_KINDS) {
+        const mine = lines.filter((l) => l.e === e)
+        const today = mine.find((l) => l.payroll.includes(kind))?.id ?? null
+        expect([e, kind, payrollHolder(kind, e, entries, mine)?.id ?? null]).toEqual([
+          e,
+          kind,
+          today,
+        ])
+      }
+  })
+
   it('adds nothing when it runs again', async () => {
-    const before = await list()
+    const before = await rows()
     await applyMigration(db, MIGRATION)
-    expect(await list()).toEqual(before)
+    expect(await rows()).toEqual(before)
   })
 })

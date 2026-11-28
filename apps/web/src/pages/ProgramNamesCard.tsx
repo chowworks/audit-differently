@@ -96,7 +96,7 @@ export function ProgramNamesCard({
   return (
     <Card
       id="program-names"
-      title="Map Payroll Programs"
+      title="Map Payroll Project Names"
       aside={
         canManage && (
           <div className="flex flex-wrap items-center gap-2">

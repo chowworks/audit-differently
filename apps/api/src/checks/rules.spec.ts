@@ -225,6 +225,29 @@ describe('runRules', () => {
     ])
   })
 
+  it('blocks a month whose payroll has no clear budget line', () => {
+    const found = runRules(
+      month({
+        payrollUnclear: [
+          { label: 'Staff pay', choices: ['Staff Salaries', 'Personnel'] },
+          { label: 'Participant taxes', choices: [] },
+        ],
+      })
+    )
+    expect(found).toEqual([
+      expect.objectContaining({
+        code: 'payroll-line-unclear',
+        severity: 'blocker',
+        message:
+          'Staff pay could go to Staff Salaries or Personnel: choose which holds it in Map Payroll Budget Line Items.',
+      }),
+      expect.objectContaining({
+        message:
+          'Participant taxes has no budget line it fits: choose one in Map Payroll Budget Line Items.',
+      }),
+    ])
+  })
+
   it('flags a duplicate against this month and earlier months', () => {
     const found = codes(
       month({

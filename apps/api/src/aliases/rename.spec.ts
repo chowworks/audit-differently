@@ -37,11 +37,18 @@ function fakeTx(rows: Row[], otherLines: string[]) {
       update: jest.fn(async ({ where, data }: { where: { id: string }; data: Partial<Row> }) =>
         Object.assign(
           rows.find((r) => r.id === where.id)!,
-          { budgetLineName: data.budgetLineName }
+          { budgetLineName: data.budgetLineName },
+          data.key ? { key: data.key } : {}
         )
       ),
       create: jest.fn(async ({ data }: { data: Row }) => {
         rows.push({ ...data, id: `new-${rows.length}` })
+      }),
+      delete: jest.fn(async ({ where }: { where: { id: string } }) => {
+        rows.splice(
+          rows.findIndex((r) => r.id === where.id),
+          1
+        )
       }),
       deleteMany: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) => {
         for (const id of where.id.in)
@@ -87,40 +94,40 @@ describe('carryRename', () => {
     expect(rows.map((r) => [r.engagementId, r.budgetLineName])).toEqual([[null, 'Staff Salaries']])
   })
 
-  it("carries the payroll rollup's entries too, each on its own list", async () => {
-    const rows: Row[] = [
-      {
-        id: 'a-1',
-        engagementId: null,
-        list: 'quickbooks',
-        name: 'Staff Pay',
-        key: 'staff pay',
-        budgetLineName: 'Staff Salaries',
-        unallowable: false,
-      },
-      {
-        id: 'p-1',
-        engagementId: null,
-        list: 'payroll',
-        name: 'staff-pay',
-        key: 'staff pay',
-        budgetLineName: 'Staff Salaries',
-        unallowable: false,
-      },
-    ]
-    const tx = fakeTx(rows, ['Staff Salaries'])
-    expect(await carryRename(tx, input('Staff Salaries', 'Personnel'))).toBe(2)
-    expect(rows.map((r) => [r.list, r.engagementId, r.budgetLineName])).toEqual([
-      ['quickbooks', null, 'Staff Salaries'],
-      ['payroll', null, 'Staff Salaries'],
-      ['quickbooks', 'e-1', 'Personnel'],
-      ['payroll', 'e-1', 'Personnel'],
+  it('moves a payroll name with its key, and leaves one another engagement has', async () => {
+    const payroll = (id: string, line: string, engagementId: string | null = null): Row => ({
+      id,
+      engagementId,
+      list: 'payroll',
+      name: 'staff-pay',
+      key: engagementId ? 'staff-pay' : `staff-pay|${line.toLowerCase()}`,
+      budgetLineName: line,
+      unallowable: false,
+    })
+    // No other engagement has either name: the workspace's name moves, with its key.
+    let rows = [payroll('p-1', 'Staff Salaries'), payroll('p-2', 'Personnel')]
+    expect(await carryRename(fakeTx(rows, []), input('Staff Salaries', 'Salaries'))).toBe(1)
+    expect(rows.map((r) => [r.engagementId, r.budgetLineName, r.key])).toEqual([
+      [null, 'Salaries', 'staff-pay|salaries'],
+      [null, 'Personnel', 'staff-pay|personnel'],
     ])
-    // Back again: each list's own entry goes, though the two share a key.
-    await carryRename(tx, input('Personnel', 'Staff Salaries'))
-    expect(rows.map((r) => [r.list, r.engagementId])).toEqual([
-      ['quickbooks', null],
-      ['payroll', null],
+    // Renamed to a name already listed: one row stays.
+    await carryRename(fakeTx(rows, []), input('Salaries', 'Personnel'))
+    expect(rows.map((r) => r.key)).toEqual(['staff-pay|personnel'])
+    // Another engagement still has the old name, or has the new one: the list stays, and nothing is added here.
+    for (const other of ['Staff Salaries', 'Salaries']) {
+      rows = [payroll('p-1', 'Staff Salaries')]
+      expect(await carryRename(fakeTx(rows, [other]), input('Staff Salaries', 'Salaries'))).toBe(0)
+      expect(rows.map((r) => [r.engagementId, r.budgetLineName])).toEqual([
+        [null, 'Staff Salaries'],
+      ])
+    }
+    // The engagement's own entry follows its line, and stays though the list now names it too.
+    rows = [payroll('p-1', 'Personnel'), payroll('p-3', 'Staff Salaries', 'e-1')]
+    await carryRename(fakeTx(rows, ['Personnel']), input('Staff Salaries', 'Personnel'))
+    expect(rows.map((r) => [r.engagementId, r.budgetLineName])).toEqual([
+      [null, 'Personnel'],
+      ['e-1', 'Personnel'],
     ])
   })
 })

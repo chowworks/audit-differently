@@ -2,7 +2,9 @@ import { Injectable } from '@nestjs/common'
 import type { PrismaClient } from '@prisma/client'
 import {
   DEFAULT_HIGHLIGHTS,
+  PAYROLL_BUDGET_KINDS,
   PAYROLL_BUDGET_KIND_LABELS,
+  payrollPlace,
   type DocumentPurpose,
   type HighlightField,
   type PayrollBudgetKind,
@@ -82,6 +84,46 @@ export async function refreshChecks(prisma: PrismaClient, reportId: string): Pro
     }),
   ])
   return findings
+}
+
+/**
+ * The kinds of payroll a month has (staff lines or books' payroll rows, participants' payments) whose budget line is
+ * unclear on its engagement (payroll budget line items, #138): they count on no line until someone chooses.
+ */
+async function payrollUnclearOf(
+  prisma: PrismaClient,
+  report: {
+    engagementId: string
+    engagement: { workspaceId: string; budgetLines: { name: string; reportLine: string }[] }
+    expenses: { payrollKey: string | null; payrollKind: string | null }[]
+    wexPayments: unknown[]
+  }
+): Promise<{ label: string; choices: string[] }[]> {
+  const has = (k: PayrollBudgetKind) =>
+    k.startsWith('participant')
+      ? report.wexPayments.length > 0 || report.expenses.some((e) => e.payrollKind === k)
+      : report.expenses.some((e) => e.payrollKind === k || (k === 'staff-pay' && !!e.payrollKey))
+  const kinds = PAYROLL_BUDGET_KINDS.filter(has)
+  if (!kinds.length) return []
+  const rows = await prisma.lineAlias.findMany({
+    where: {
+      workspaceId: report.engagement.workspaceId,
+      list: 'payroll',
+      OR: [{ engagementId: null }, { engagementId: report.engagementId }],
+    },
+    select: { name: true, engagementId: true, budgetLineName: true, unallowable: true },
+  })
+  const entries = rows.map((r) => ({
+    kind: r.name as PayrollBudgetKind,
+    engagementId: r.engagementId,
+    budgetLineName: r.unallowable ? null : r.budgetLineName,
+  }))
+  return kinds.flatMap((k) => {
+    const p = payrollPlace(k, report.engagementId, entries, report.engagement.budgetLines)
+    return p.by === 'unclear'
+      ? [{ label: PAYROLL_BUDGET_KIND_LABELS[k], choices: p.choices.map((l) => l.name) }]
+      : []
+  })
 }
 
 async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Finding[]> {
@@ -204,6 +246,7 @@ async function findingsOf(prisma: PrismaClient, reportId: string): Promise<Findi
         proofs: w.documents.map(proofOf),
       })),
       highlights: await highlightsNow(prisma),
+      payrollUnclear: await payrollUnclearOf(prisma, report),
       earlierExpenses: earlier.map((e) => ({
         id: e.id,
         vendor: e.vendor,

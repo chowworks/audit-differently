@@ -3,9 +3,10 @@ import {
   PAYROLL_BUDGET_KINDS,
   PAYROLL_BUDGET_KIND_LABELS,
   WRITE_ROLES,
-  aliasKey,
   lineKey,
   payrollHolder,
+  payrollPlace,
+  payrollRowKey,
   type PayrollBudgetKind,
   type PayrollRollupDto,
   type PayrollRollupEntry,
@@ -41,9 +42,11 @@ function reopens(
 }
 
 /**
- * The payroll budget rollup (owner's decisions, 2026-11-27, #138): which budget line holds each kind of payroll from the
- * match, by the line's name, for the workspace, with an engagement's own entry. Kept on the QuickBooks names table as
- * the list 'payroll' (a row's name is the kind; Unallowable is "Not on the budget"). Saving a kind puts every
+ * Payroll budget line items (owner's decisions, 2026-11-27, #138): which budget line holds each kind of payroll from the
+ * match, by the lines' names (several, no order), for the workspace, with an engagement's own entry. Kept on the
+ * QuickBooks names table as the list 'payroll' (a row's name is the kind; Unallowable is "Not on the budget"). An
+ * engagement whose line would be unclear (two listed names, or none fits) has to be given its own entry before Save.
+ * Saving a kind puts every
  * engagement's lines in step at once (`BudgetService.applyRollup`), so an engagement whose line changes has the closed and
  * submitted months whose numbers change put back to draft: the screen lists them first (`preview`). Owners and bookkeepers, as the
  * budget.
@@ -135,9 +138,21 @@ export class PayrollRollupService {
         for (const b of e.budgetLines) if (lineKey(b.name) === lineKey(name)) return b.name
       return undefined
     }
-    const every = lineOf(g.every ?? null, engagements)
-    if (every === undefined)
-      problems.push(`No engagement has a budget line named ${String(g.every)}`)
+    let every: string[] | null = null
+    if (g.every === undefined)
+      problems.push('Choose the budget lines that hold it, or Not on the budget')
+    else if (g.every !== null) {
+      every = []
+      const keys = new Set<string>()
+      for (const name of Array.isArray(g.every) ? g.every : [undefined]) {
+        const line = lineOf(name, engagements)
+        if (!line) problems.push(`No engagement has a budget line named ${String(name)}`)
+        else if (!keys.has(lineKey(line))) {
+          keys.add(lineKey(line))
+          every.push(line)
+        }
+      }
+    }
     const own: PayrollRollupInput['own'] = []
     const seen = new Set<string>()
     for (const o of Array.isArray(g.own) ? g.own : []) {
@@ -153,7 +168,7 @@ export class PayrollRollupService {
       else own.push({ engagementId: e.id, budgetLineName: line })
     }
     if (problems.length) throw new BadRequestException(problems.join('. '))
-    return { kind: kind as PayrollBudgetKind, input: { every: every ?? null, own } }
+    return { kind: kind as PayrollBudgetKind, input: { every, own } }
   }
 
   /** The kind's entries as `input` says, with every other kind's as they are. */
@@ -164,7 +179,9 @@ export class PayrollRollupService {
   ) {
     return [
       ...entries.filter((e) => e.kind !== kind),
-      { kind, engagementId: null, budgetLineName: input.every },
+      ...(input.every === null
+        ? [{ kind, engagementId: null, budgetLineName: null }]
+        : input.every.map((n) => ({ kind, engagementId: null, budgetLineName: n }))),
       ...input.own.map((o) => ({ kind, ...o })),
     ]
   }
@@ -192,6 +209,22 @@ export class PayrollRollupService {
     })
   }
 
+  /** Each engagement with lines and no own entry whose line would be unclear: Save waits for a choice for each. */
+  private unclear(
+    read: Awaited<ReturnType<PayrollRollupService['read']>>,
+    kind: PayrollBudgetKind,
+    input: PayrollRollupInput
+  ): PayrollRollupPreviewDto['unclear'] {
+    const next = this.proposed(read.entries, kind, input)
+    return read.engagements.flatMap((e) => {
+      if (!e.budgetLines.length) return []
+      const p = payrollPlace(kind, e.id, next, e.budgetLines)
+      return p.by === 'unclear'
+        ? [{ engagementId: e.id, name: e.name, choices: p.choices.map((l) => l.name) }]
+        : []
+    })
+  }
+
   /** Before Save: the engagements whose line would change, and the months each would put back to draft. */
   async preview(
     caller: Caller,
@@ -202,7 +235,10 @@ export class PayrollRollupService {
     this.keeper(caller, workspaceId)
     const read = await this.read(workspaceId)
     const c = this.clean(kind, given, read.engagements)
-    return { changes: this.changes(read, c.kind, c.input) }
+    return {
+      changes: this.changes(read, c.kind, c.input),
+      unclear: this.unclear(read, c.kind, c.input),
+    }
   }
 
   /**
@@ -219,6 +255,16 @@ export class PayrollRollupService {
     this.keeper(caller, workspaceId)
     const read = await this.read(workspaceId)
     const { kind: k, input } = this.clean(kind, given, read.engagements)
+    const unclear = this.unclear(read, k, input)
+    if (unclear.length)
+      throw new BadRequestException(
+        unclear
+          .map(
+            (u) =>
+              `Choose which line holds ${PAYROLL_BUDGET_KIND_LABELS[k].toLowerCase()} on ${u.name}`
+          )
+          .join('. ')
+      )
     const changed = this.changes(read, k, input)
     const label = PAYROLL_BUDGET_KIND_LABELS[k]
     const names = new Map(read.engagements.map((e) => [e.id, e.name]))
@@ -234,14 +280,14 @@ export class PayrollRollupService {
           engagementId,
           list: 'payroll',
           name: k,
-          key: aliasKey(k),
+          key: payrollRowKey(k, engagementId ? null : budgetLineName),
           budgetLineName,
           unallowable: budgetLineName === null,
           changedById: caller.userId,
         })
         await tx.lineAlias.createMany({
           data: [
-            row(null, input.every),
+            ...(input.every === null ? [row(null, null)] : input.every.map((n) => row(null, n))),
             ...input.own.map((o) => row(o.engagementId, o.budgetLineName)),
           ],
         })
@@ -261,7 +307,13 @@ export class PayrollRollupService {
         action: 'update',
         description: `Changed where ${label} goes on the budget`,
         changes: [
-          { field: `${label}: every engagement`, after: input.every ?? NOWHERE },
+          {
+            field: `${label}: every engagement`,
+            after:
+              input.every === null
+                ? NOWHERE
+                : input.every.join(', ') || 'The line of its report line',
+          },
           ...input.own.map((o) => ({
             field: `${label}: ${names.get(o.engagementId)}`,
             after: o.budgetLineName ?? NOWHERE,

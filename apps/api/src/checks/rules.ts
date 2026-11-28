@@ -113,6 +113,11 @@ export interface RuleMonth {
   highlights?: Partial<Record<string, HighlightField[]>>
   /** ISO date-time of submission, when submitted. */
   submittedAt?: string | null
+  /**
+   * The kinds of payroll this month has whose budget line is unclear (Map Payroll Budget Line Items: two lines it could
+   * be, or none fits), with the lines it could be.
+   */
+  payrollUnclear?: { label: string; choices: string[] }[]
   /** Expenses from earlier months of the same contract, for duplicate detection. */
   earlierExpenses?: Pick<RuleExpense, 'id' | 'vendor' | 'totalCost' | 'date'>[]
 }
@@ -401,6 +406,17 @@ export function runRules(month: RuleMonth): Finding[] {
         expenseId: e.id,
         message: `${e.itemNumber} (${e.vendor}, ${money(e.allocatedAmount)}): choose the budget line it is spent against.`,
       })
+
+  // A kind of payroll whose line is unclear counts on no line until someone chooses (owner's decision, 2026-11-27), so
+  // the month can't be closed or submitted meanwhile.
+  for (const u of month.payrollUnclear ?? [])
+    findings.push({
+      code: 'payroll-line-unclear',
+      severity: 'blocker',
+      message: u.choices.length
+        ? `${u.label} could go to ${u.choices.join(' or ')}: choose which holds it in Map Payroll Budget Line Items.`
+        : `${u.label} has no budget line it fits: choose one in Map Payroll Budget Line Items.`,
+    })
 
   // Budget overrun per budget line, as the contract approved it.
   for (const line of month.budgetLines ?? []) {

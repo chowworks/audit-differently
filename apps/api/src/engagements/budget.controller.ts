@@ -52,7 +52,7 @@ export class BudgetController {
   }
 }
 
-/** The payroll rollup (#138): which budget line holds each kind of payroll, on the workspace page. */
+/** Map Payroll Budget Line Items (#138): which budget lines hold each kind of payroll, on the workspace page. */
 @Controller('workspaces/:id/payroll-rollup')
 @UseGuards(AuthenticatedGuard)
 export class PayrollRollupController {
