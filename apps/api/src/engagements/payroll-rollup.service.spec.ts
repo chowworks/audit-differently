@@ -34,11 +34,17 @@ const engagements = () => [
   },
 ]
 
-function service() {
-  const rows = [
+function service(
+  rows = [
     { name: 'staff-pay', engagementId: null, budgetLineName: 'Staff Salaries', unallowable: false },
-    { name: 'staff-pay', engagementId: 'e-2', budgetLineName: 'Personnel', unallowable: false },
+    {
+      name: 'staff-pay',
+      engagementId: 'e-2' as string | null,
+      budgetLineName: 'Personnel',
+      unallowable: false,
+    },
   ]
+) {
   const prisma = {
     lineAlias: {
       findMany: jest.fn(async () => rows),
@@ -158,6 +164,26 @@ describe('PayrollRollupService', () => {
     }
     const p = await s.preview(member('owner'), W, 'staff-pay', chosen)
     expect([p.unclear, p.changes]).toEqual([[], []])
+  })
+
+  it('asks only about engagements this change leaves unclear, not one that already was', async () => {
+    // Youth Jobs has both listed names and no row of its own: unclear before anyone edits anything.
+    const { s } = service([
+      {
+        name: 'staff-pay',
+        engagementId: null,
+        budgetLineName: 'Staff Salaries',
+        unallowable: false,
+      },
+      { name: 'staff-pay', engagementId: null, budgetLineName: 'Personnel', unallowable: false },
+    ])
+    // Adult IT gets a row of its own: Youth Jobs is left to its own Choose and the month check.
+    const own = {
+      every: ['Staff Salaries', 'Personnel'],
+      own: [{ engagementId: 'e-1', budgetLineName: 'Staff Salaries' }],
+    }
+    expect((await s.preview(member('owner'), W, 'staff-pay', own)).unclear).toEqual([])
+    await expect(s.save(member('owner'), W, 'staff-pay', own)).resolves.toBeDefined()
   })
 
   it("saves the kind's entries as a whole, puts every engagement in step, and logs it in the screen's words", async () => {

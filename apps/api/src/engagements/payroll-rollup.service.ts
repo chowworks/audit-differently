@@ -209,7 +209,10 @@ export class PayrollRollupService {
     })
   }
 
-  /** Each engagement with lines and no own entry whose line would be unclear: Save waits for a choice for each. */
+  /**
+   * Each engagement with lines whose line this change would leave unclear: Save waits for a choice for each. One already
+   * unclear is left to its own Choose and the month check, not asked about on every row edited.
+   */
   private unclear(
     read: Awaited<ReturnType<PayrollRollupService['read']>>,
     kind: PayrollBudgetKind,
@@ -218,6 +221,7 @@ export class PayrollRollupService {
     const next = this.proposed(read.entries, kind, input)
     return read.engagements.flatMap((e) => {
       if (!e.budgetLines.length) return []
+      if (payrollPlace(kind, e.id, read.entries, e.budgetLines).by === 'unclear') return []
       const p = payrollPlace(kind, e.id, next, e.budgetLines)
       return p.by === 'unclear'
         ? [{ engagementId: e.id, name: e.name, choices: p.choices.map((l) => l.name) }]
