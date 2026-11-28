@@ -106,12 +106,6 @@ export interface BudgetLineInput {
    * engagement's own entries of the payroll rollup (#138), which then moves each kind off the line that held it.
    */
   payroll?: PayrollBudgetKind[]
-  /**
-   * The answers when this change leaves a kind of payroll with two lines it could be, or none (the dialog asks
-   * "Which holds it?"): each kind to one of the engagement's line names (this one's new name included) or null (Not on
-   * the budget), kept as the engagement's own entries.
-   */
-  payrollChoices?: Partial<Record<PayrollBudgetKind, string | null>>
 }
 
 /**

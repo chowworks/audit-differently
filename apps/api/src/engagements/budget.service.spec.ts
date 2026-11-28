@@ -687,7 +687,7 @@ describe('BudgetService', () => {
     expect(months[0]!.status).toBe('submitted')
   })
 
-  it('asks which line holds a kind when a new line gives it two it could be, and keeps the answer', async () => {
+  it('saves a new line that gives a kind two lines it could be, leaving the choice to the month check', async () => {
     const salaries = {
       ...travel(),
       id: 'b-2',
@@ -696,35 +696,10 @@ describe('BudgetService', () => {
       payroll: ['staff-pay', 'staff-taxes'] as string[],
     }
     const list = () => [rollup('staff-pay', 'Salaries'), rollup('staff-pay', 'Personnel')]
-    const personnel = { name: 'Personnel', reportLine: 'program-costs' as const }
-    const first = service([travel(), { ...salaries }], drafts(), 0, [], list())
-    await expect(first.service.add(member('owner'), 'e-1', personnel)).rejects.toThrow(
-      new BadRequestException('Staff pay could go to Salaries or Personnel: choose which holds it')
-    )
     const { service: s, prisma } = service([travel(), { ...salaries }], drafts(), 0, [], list())
-    await s.add(member('owner'), 'e-1', {
-      ...personnel,
-      payrollChoices: { 'staff-pay': 'salaries' },
-    })
-    expect(prisma.lineAlias.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        engagementId: 'e-1',
-        name: 'staff-pay',
-        key: 'staff-pay',
-        budgetLineName: 'Salaries',
-      }),
-    })
-    // Staff pay stays where it was: no line's payroll changes.
-    expect(prisma.budgetLine.update).not.toHaveBeenCalledWith(
-      expect.objectContaining({ data: { payroll: expect.anything() } })
-    )
-    await expect(
-      s.add(member('owner'), 'e-1', {
-        name: 'Rent',
-        reportLine: 'program-costs',
-        payrollChoices: { 'staff-pay': 'Mileage' },
-      })
-    ).rejects.toThrow('Mileage is not a budget line of this engagement')
+    await s.add(member('owner'), 'e-1', { name: 'Personnel', reportLine: 'program-costs' })
+    // Nothing is chosen for the engagement: someone chooses on the list or at the month check.
+    expect(prisma.lineAlias.create).not.toHaveBeenCalled()
   })
 
   it("never moves a line's payroll by changing the line: it stays as the engagement's own entry", async () => {

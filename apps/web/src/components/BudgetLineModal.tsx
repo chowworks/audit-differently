@@ -1,13 +1,8 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
 import {
   aliasKey,
   lineKey,
   type LineAliasesDto,
-  PAYROLL_BUDGET_KINDS,
-  PAYROLL_BUDGET_KIND_LABELS,
-  payrollPlace,
-  type PayrollRollupDto,
   REPORT_LINES,
   REPORT_LINE_LABELS,
   type BudgetChange,
@@ -75,32 +70,8 @@ export function BudgetLineModal({
   )
   const [amount, setAmount] = useState<number | null>(line ? line.amount : null)
   const [narrative, setNarrative] = useState(line?.narrative ?? '')
-  // The payroll on a line comes from Map Payroll Budget Line Items (#138); the payroll page asks for its kind here.
+  // The payroll on a line comes from Map Payroll Budget Line Items (#138); the payroll page asks for its kinds here.
   const asked = (preset?.payroll ?? []).filter((k) => !line?.payroll.includes(k))
-  // A kind of payroll this change would leave with two lines it could be, or none, is asked about before Save
-  // (owner's decision, 2026-11-27): "Which holds it?", kept as this engagement's own choice.
-  const rollup = useLoad<PayrollRollupDto>(`/workspaces/${c.workspaceId}/payroll-rollup`)
-  const [choices, setChoices] = useState<Partial<Record<PayrollBudgetKind, string>>>({})
-  const unclear = (() => {
-    const entries = rollup.data?.entries ?? []
-    if (!rollup.data || !name.trim() || !reportLine) return []
-    const before = c.budgetLines.map((b) => ({ name: b.name, reportLine: b.reportLine }))
-    const after = line
-      ? c.budgetLines.map((b) => (b.id === line.id ? { name: name.trim(), reportLine } : b))
-      : [...before, { name: name.trim(), reportLine }]
-    // As Save keeps it: what the line holds, and what the payroll page asks for, stay on it.
-    const kept = new Set([...(line?.payroll ?? []), ...asked])
-    const own = (k: PayrollBudgetKind) =>
-      kept.has(k) ? [{ kind: k, engagementId: c.id, budgetLineName: name.trim() }] : []
-    return PAYROLL_BUDGET_KINDS.flatMap((k) => {
-      const was = payrollPlace(k, c.id, entries, before)
-      const now = payrollPlace(k, c.id, [...entries, ...own(k)], after)
-      if (now.by !== 'unclear' || was.by === 'unclear') return []
-      return [{ kind: k, choices: (now.choices.length ? now.choices : after).map((l) => l.name) }]
-    })
-  })()
-  const NOWHERE = '__none__'
-  const choicesWait = unclear.some((u) => !choices[u.kind])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // Renaming a line (decision 6 of #132): the QuickBooks names that go to its old name are shown, and follow it on Save.
@@ -144,17 +115,7 @@ export function BudgetLineModal({
     }
   }
   const base = `/engagements/${c.id}/budget-lines`
-  const payrollChoices = Object.fromEntries(
-    unclear.map((u) => [u.kind, choices[u.kind] === NOWHERE ? null : choices[u.kind]])
-  )
-  const body = {
-    name,
-    reportLine,
-    amount,
-    narrative,
-    ...(asked.length ? { payroll: asked } : {}),
-    ...(unclear.length ? { payrollChoices } : {}),
-  }
+  const body = { name, reportLine, amount, narrative, ...(asked.length ? { payroll: asked } : {}) }
   const save = () =>
     run(() =>
       line
@@ -165,14 +126,7 @@ export function BudgetLineModal({
     if (!line || !confirm(`Remove ${line.name} from the approved budget?`)) return
     void run(() => api.del<BudgetChange>(`${base}/${line.id}`))
   }
-  const ready =
-    !busy &&
-    !!name.trim() &&
-    !!reportLine &&
-    !nameTaken &&
-    !renameWaits &&
-    !rollup.loading &&
-    !choicesWait
+  const ready = !busy && !!name.trim() && !!reportLine && !nameTaken && !renameWaits
   return (
     <Modal title={line ? `Edit ${line.name}` : 'Add a budget line'} onClose={onClose}>
       <ErrorNote message={error} />
@@ -246,66 +200,6 @@ export function BudgetLineModal({
             </p>
           </div>
         )}
-        <div className="text-sm">
-          <p className="font-semibold">Payroll Category</p>
-          {renamed && line!.payroll.length > 0 && (
-            <p className="font-semibold">
-              {line!.payroll.length === 1
-                ? 'This payroll category maps'
-                : 'These payroll categories map'}{' '}
-              to {line!.name} and will go to {name.trim()} after Save.
-            </p>
-          )}
-          {[...(line?.payroll ?? []), ...asked].length ? (
-            <ul className="ml-5 list-disc">
-              {[...(line?.payroll ?? []), ...asked].map((k) => (
-                <li key={k}>
-                  {PAYROLL_BUDGET_KIND_LABELS[k]}: Maps to Budget Line Item{' '}
-                  <strong>{name.trim() || line?.name}</strong>
-                  {asked.includes(k) && ' after Save, for this engagement'}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>None maps to this line.</p>
-          )}
-          <small className="text-soft">
-            Set by name under{' '}
-            <Link to={`/workspaces/${c.workspaceId}#payroll-rollup`}>
-              Map Payroll Budget Line Items
-            </Link>{' '}
-            on the workspace page.
-          </small>
-        </div>
-        {unclear.map((u) => (
-          <Field
-            key={u.kind}
-            label={`Which line holds ${PAYROLL_BUDGET_KIND_LABELS[u.kind].toLowerCase()}?`}
-            required
-            hint={
-              u.choices.length > 1
-                ? `After Save it could go to ${u.choices.join(' or ')}`
-                : 'After Save no line fits it'
-            }
-            error={choices[u.kind] ? null : 'Choose one'}
-          >
-            <select
-              className={inputClass}
-              value={choices[u.kind] ?? ''}
-              onChange={(e) => setChoices({ ...choices, [u.kind]: e.target.value })}
-            >
-              <option value="" disabled>
-                Choose a budget line
-              </option>
-              {u.choices.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-              <option value={NOWHERE}>Not linked to a Budget Line Item</option>
-            </select>
-          </Field>
-        ))}
         <Field label="Note">
           <input
             className={inputClass}

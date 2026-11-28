@@ -94,8 +94,8 @@ Decided 2026-10-11 with the owner: one mental model, named from the bookkeeper's
   the old ticks once, so every engagement's pay stayed where it was). Lookup is `payrollPlace` in `packages/types`: own
   line; the one listed name the engagement has; else its one line on the kind's report line; else **unclear** (two
   names, or nothing fits): that pay counts on no line until someone chooses, and someone must: the mapping dialog's
-  Save and the budget line dialog ("Which line holds it?") wait for a choice, kept as the engagement's own line, and a
-  blocking month check (`payroll-line-unclear`) catches the rest. A change to a line never moves its payroll by itself.
+  Save waits for a choice, kept as the engagement's own line, and a blocking month check (`payroll-line-unclear`)
+  catches the rest (a budget line change or upload is saved and never asks; owner's decision, 2026-11-27). A change to a line never moves its payroll by itself.
   `BudgetLine.payroll` (migration `20261020000100`) is written only from it (`BudgetService.applyRollup`) and every
   reader keeps reading it. Saving a category moves it on every engagement whose line changes, and the dialog lists those
   and the months that go back to draft first: only the months whose numbers change (participant pay, from the first
