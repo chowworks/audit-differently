@@ -188,6 +188,8 @@ function service(
       create: jest.fn(async ({ data }: { data: object }) => ({ id: 'ro-1', ...data })),
     },
     document: { findMany: jest.fn(async () => []) },
+    // The per-engagement lock the save takes first (pg_advisory_xact_lock).
+    $queryRaw: jest.fn(async () => [{ locked: 1 }]),
   }
   const storage = {
     upload: jest.fn(async () => undefined),
@@ -380,6 +382,14 @@ describe('BudgetService', () => {
         },
         { row: null, reason: 'Staff Salaries has spending, so it must stay in the file' },
       ],
+      // The check as it stands now, for the screen to show in place of the one the person saw.
+      check: {
+        rows: [],
+        removed: ['Rent'],
+        problems: expect.arrayContaining([
+          { row: null, reason: 'Staff Salaries has spending, so it must stay in the file' },
+        ]),
+      },
     })
     for (const w of writes) expect(w).not.toHaveBeenCalled()
     expect(log.entries).toEqual([])
@@ -473,5 +483,61 @@ describe('BudgetService', () => {
     const staff = await s.applyRollup(prisma as never, member('owner'), c, true)
     expect(staff).toMatchObject({ changed: true, backed: [] })
     expect(months[0]!.status).toBe('submitted')
+  })
+
+  it('takes a lock per engagement and checks again inside it, so a change since the check refuses the file', async () => {
+    // Inside the lock, Rent has an expense (added since the check); the check outside saw it with none.
+    const now = budget()
+    now[2]!._count.expenses = 1
+    const { service: s, prisma, storage, log } = service(now)
+    prisma.budgetLine.findMany.mockImplementationOnce(async () => budget())
+    const refused = await s
+      .upload(
+        member('owner'),
+        'e-1',
+        csv('Travel,Program Costs,1500,Site visits', 'Staff Salaries,Staff Salaries,42000,')
+      )
+      .catch((e: unknown) => e)
+    expect((refused as BadRequestException).getResponse()).toMatchObject({
+      problems: [{ row: null, reason: 'Rent has spending, so it must stay in the file' }],
+      check: { removed: [] },
+    })
+    const [sql, key] = prisma.$queryRaw.mock.calls[0] as unknown as [TemplateStringsArray, string]
+    expect(sql.join('?')).toMatch(/pg_advisory_xact_lock\(hashtext\(\?\)\)/)
+    expect(key).toBe('budget-upload:e-1')
+    // The file stored for the save goes, and nothing is written or logged.
+    expect(storage.delete).toHaveBeenCalledWith((storage.upload.mock.calls[0] as unknown[])[0])
+    expect(prisma.budgetLine.delete).not.toHaveBeenCalled()
+    expect(prisma.budgetFile.create).not.toHaveBeenCalled()
+    expect(log.entries).toEqual([])
+  })
+
+  it('writes nothing when, inside the lock, the budget already matches the file, and dates a saved file after the lock', async () => {
+    const changed = budget()
+    changed[0]!.amount = 2000
+    const { service: s, prisma, storage, writes } = service()
+    // Outside, Travel is still 1,500; inside the lock, another upload already made it 2,000.
+    prisma.budgetLine.findMany.mockImplementationOnce(async () => budget())
+    prisma.budgetLine.findMany.mockImplementationOnce(async () => changed)
+    const file = csv(
+      'Travel,Program Costs,2000,Site visits',
+      'Staff Salaries,Staff Salaries,42000,',
+      'Rent,Program Costs,900,'
+    )
+    expect(await s.upload(member('owner'), 'e-1', file)).toMatchObject({
+      added: 0,
+      changed: 0,
+      removed: 0,
+      backToDraft: [],
+    })
+    expect(storage.delete).toHaveBeenCalled()
+    for (const w of writes.filter((w) => w !== storage.upload)) expect(w).not.toHaveBeenCalled()
+
+    const saving = service()
+    await saving.service.upload(member('owner'), 'e-1', file)
+    expect(
+      (saving.prisma.budgetFile.create.mock.calls[0]![0].data as { uploadedAt?: unknown })
+        .uploadedAt
+    ).toBeInstanceOf(Date)
   })
 })

@@ -10,6 +10,7 @@ import {
 import { HandCard } from '@/components/HandCard'
 import { useApi } from '@/hooks/useApi'
 import { recheckWarning } from '@/lib/budget-recheck'
+import { refusedCheck } from '@/lib/budget-refusal'
 import { money } from '@/lib/format'
 import { Button, Chip, ErrorNote, Field, Modal } from '@/components/ui'
 
@@ -39,6 +40,8 @@ export function BudgetUploadModal({
   const base = `/engagements/${c.id}/budget-lines`
   const [file, setFile] = useState<File | null>(null)
   const [checked, setChecked] = useState<BudgetFileDto | null>(null)
+  // The file that check was made of: Save sends this one, never what the picker holds by then.
+  const [checkedFile, setCheckedFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -52,9 +55,9 @@ export function BudgetUploadModal({
     }
     setBusy(false)
   }
-  const form = () => {
+  const form = (of: File) => {
     const f = new FormData()
-    f.append('file', file!)
+    f.append('file', of)
     return f
   }
   const download = () =>
@@ -62,9 +65,22 @@ export function BudgetUploadModal({
       await api.download(`${base}/file`, `${c.name} - budget.xlsx`)
     })
   const check = () =>
-    run(async () => setChecked(await api.upload<BudgetFileDto>(`${base}/file`, form())))
+    run(async () => {
+      const of = file!
+      setChecked(await api.upload<BudgetFileDto>(`${base}/file`, form(of)))
+      setCheckedFile(of)
+    })
   const save = () =>
-    run(async () => onSaved(await api.upload<BudgetUploadChange>(`${base}/upload`, form())))
+    run(async () => {
+      try {
+        onSaved(await api.upload<BudgetUploadChange>(`${base}/upload`, form(checkedFile!)))
+      } catch (e) {
+        // The budget changed since the check: show the check as it stands now, with every problem and its row.
+        const fresh = refusedCheck(e)
+        if (fresh) setChecked(fresh)
+        throw e
+      }
+    })
 
   if (!checked)
     return (
@@ -102,6 +118,7 @@ export function BudgetUploadModal({
             type="file"
             accept=".xlsx,.csv"
             className="block w-full text-sm"
+            disabled={busy}
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
         </Field>
@@ -187,6 +204,7 @@ export function BudgetUploadModal({
           kind="ghost"
           onClick={() => {
             setChecked(null)
+            setCheckedFile(null)
             setFile(null)
           }}
           disabled={busy}

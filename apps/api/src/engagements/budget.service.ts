@@ -41,6 +41,28 @@ const CONTENT_TYPES = {
   csv: 'text/csv',
 } as const
 
+/** Thrown inside the save's transaction when the budget, as it stands there, already matches the file. */
+class NothingChanged extends Error {}
+
+/** Whether Save would write anything. */
+const changesIn = (plan: { create: unknown[]; update: unknown[]; remove: unknown[] }) =>
+  plan.create.length + plan.update.length + plan.remove.length > 0
+
+/**
+ * Refuses a file with any problem, whole. The answer carries the check as it stands now (`check`: the lines, what Save
+ * does with each, the lines it removes, every problem with its row), so the screen shows it in place of an older one:
+ * the budget may have changed since the person checked the file.
+ */
+function refuseProblems(dto: BudgetFileDto) {
+  const n = dto.problems.length
+  if (n)
+    throw new BadRequestException({
+      message: `The file has ${n} ${n === 1 ? 'problem' : 'problems'}: correct the file and upload it again`,
+      problems: dto.problems,
+      check: dto,
+    })
+}
+
 /** An uploaded file as the controller passes it. */
 export interface BudgetUpload {
   buffer: Buffer
@@ -94,7 +116,7 @@ export class BudgetService {
   /** An uploaded budget file, read and checked against the budget: what Save would do, and every problem. */
   async readFile(caller: Caller, engagementId: string, file: BudgetUpload): Promise<BudgetFileDto> {
     const c = await this.writable(caller, engagementId)
-    return (await this.check(c.id, file)).dto
+    return (await this.check(this.prisma, c.id, await this.read(file))).dto
   }
 
   /**
@@ -112,29 +134,31 @@ export class BudgetService {
     file: BudgetUpload
   ): Promise<BudgetUploadChange> {
     const c = await this.writable(caller, engagementId)
-    const plan = await this.check(c.id, file)
-    const { problems } = plan.dto
-    if (problems.length)
-      throw new BadRequestException({
-        message: `The file has ${problems.length} ${problems.length === 1 ? 'problem' : 'problems'}: correct the file and upload it again`,
-        problems,
-      })
-    const counts = {
-      added: plan.create.length,
-      changed: plan.update.length,
-      removed: plan.remove.length,
-    }
-    if (counts.added + counts.changed + counts.removed === 0)
-      return { ...(await this.engagements.detail(caller, c.id)), backToDraft: [], ...counts }
+    const read = await this.read(file)
+    const first = await this.check(this.prisma, c.id, read)
+    refuseProblems(first.dto)
+    if (!changesIn(first)) return this.unchanged(caller, c.id)
 
     const ext = /\.csv$/i.test(file.originalname) ? 'csv' : 'xlsx'
     const storageKey = `${c.workspaceId}/${c.id}/general/${randomUUID()}.${ext}`
     await this.storage.upload(storageKey, file.buffer, CONTENT_TYPES[ext])
     let backed: Sent = []
+    let counts = { added: 0, changed: 0, removed: 0 }
     try {
       await this.log.change(
         caller,
         async (tx) => {
+          // One upload of this engagement at a time, each checked against the budget as the one before it left it:
+          // two at once would each plan against the same old budget and leave a mix of both files.
+          await tx.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext(${`budget-upload:${c.id}`}))`
+          const plan = await this.check(tx, c.id, read)
+          refuseProblems(plan.dto)
+          if (!changesIn(plan)) throw new NothingChanged()
+          counts = {
+            added: plan.create.length,
+            changed: plan.update.length,
+            removed: plan.remove.length,
+          }
           const lines: LogEntry[] = []
           const entry = (
             action: LogEntry['action'],
@@ -184,6 +208,9 @@ export class BudgetService {
               sha256: createHash('sha256').update(file.buffer).digest('hex'),
               storageKey,
               lineCount: plan.dto.rows.length,
+              // After the lock, not now(): a transaction's now() is when it began, so an upload that waited for the
+              // one before it would sort first, and the history's Current would be the wrong file.
+              uploadedAt: new Date(),
               uploadedById: caller.userId,
               uploadedByEmail: caller.email ?? caller.displayName,
             },
@@ -195,7 +222,8 @@ export class BudgetService {
           await this.log.alsoMany(tx, caller, lines)
           return { workspaceId: c.workspaceId }
         },
-        {
+        // Built after the writes, with what the plan inside the lock did.
+        () => ({
           workspaceId: c.workspaceId,
           resource: 'engagement',
           subjectId: c.id,
@@ -203,15 +231,32 @@ export class BudgetService {
           description:
             `Uploaded a budget file to ${c.name}, replacing its approved budget: ` +
             `${counts.added} added, ${counts.changed} changed, ${counts.removed} removed`,
-        },
+        }),
         { timeout: 30_000 }
       )
     } catch (e) {
       // Nothing was saved: the stored file goes too.
       await this.storage.delete(storageKey).catch(() => undefined)
+      if (e instanceof NothingChanged) return this.unchanged(caller, c.id)
       throw e
     }
     return { ...(await this.done(caller, c.id, backed)), ...counts }
+  }
+
+  /** An uploaded file as read: kept in memory, never stored until Save. */
+  private read(file: BudgetUpload) {
+    return readBudgetFile(file.buffer, file.originalname)
+  }
+
+  /** A file that matches the budget: nothing is written, and no month goes back to draft. */
+  private async unchanged(caller: Caller, engagementId: string): Promise<BudgetUploadChange> {
+    return {
+      ...(await this.engagements.detail(caller, engagementId)),
+      backToDraft: [],
+      added: 0,
+      changed: 0,
+      removed: 0,
+    }
   }
 
   /** The budget history: every budget file saved, newest first; the newest is the current budget's. */
@@ -257,9 +302,12 @@ export class BudgetService {
    * An uploaded file read and checked against the engagement's budget: each line with what Save does with it, the
    * lines Save removes, every problem in the file's order, and the writes Save makes.
    */
-  private async check(engagementId: string, file: BudgetUpload) {
-    const read = await readBudgetFile(file.buffer, file.originalname)
-    const existing = await this.prisma.budgetLine.findMany({
+  private async check(
+    db: Pick<Prisma.TransactionClient, 'budgetLine'>,
+    engagementId: string,
+    read: Awaited<ReturnType<typeof readBudgetFile>>
+  ) {
+    const existing = await db.budgetLine.findMany({
       where: { engagementId },
       include: { _count: { select: { expenses: true } } },
       orderBy: { sortOrder: 'asc' },
