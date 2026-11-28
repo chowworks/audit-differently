@@ -487,7 +487,7 @@ function RowModal({
       ? `${nameOf(id)} has no budget line item named ${orList(names, 'or')}. Pick one it has: ${orList(
           lines.map((l) => l.name),
           'or'
-        )}.`
+        ).replace(/\.?$/, '.')}`
       : `${nameOf(id)} has no budget line items yet.`
   }
   function names2(ids: string[]) {
